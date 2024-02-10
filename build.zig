@@ -15,6 +15,10 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const win32 = b.createModule(.{
+        .source_file = .{ .path = "./src/zigwin32/win32.zig" },
+    });
+
     const lib = b.addStaticLibrary(.{
         .name = "handmade-zig",
         // In this case the main source file is merely a path, however, in more
@@ -29,12 +33,21 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
+    // const exe = b.addExecutable(.{
+    //     .name = "handmade-zig",
+    //     .root_source_file = .{ .path = "src/main.zig" },
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
+
     const exe = b.addExecutable(.{
-        .name = "handmade-zig",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .name = "win32_handmade",
+        .root_source_file = .{ .path = "src/win32_handmade.zig" },
         .target = target,
         .optimize = optimize,
     });
+
+    exe.addModule("win32", win32);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
