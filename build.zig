@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const lib = b.addStaticLibrary(.{
-        .name = "handmade-zig",
+        .name = "zigmade_hero",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
         .root_source_file = .{ .path = "src/root.zig" },
@@ -34,15 +34,15 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(lib);
 
     // const exe = b.addExecutable(.{
-    //     .name = "handmade-zig",
+    //     .name = "zigmade_hero",
     //     .root_source_file = .{ .path = "src/main.zig" },
     //     .target = target,
     //     .optimize = optimize,
     // });
 
     const exe = b.addExecutable(.{
-        .name = "win32_handmade",
-        .root_source_file = .{ .path = "src/win32_handmade.zig" },
+        .name = "win32_zigmade",
+        .root_source_file = .{ .path = "src/win32_zigmade.zig" },
         .target = target,
         .optimize = optimize,
     });
