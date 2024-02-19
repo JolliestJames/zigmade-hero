@@ -7,6 +7,7 @@ const win32 = struct {
     usingnamespace @import("win32").zig;
     usingnamespace @import("win32").foundation;
     usingnamespace @import("win32").system;
+    usingnamespace @import("win32").system.memory;
     usingnamespace @import("win32").graphics.gdi;
     usingnamespace @import("win32").ui.windows_and_messaging;
     usingnamespace @import("win32").system.diagnostics.debug;
@@ -15,62 +16,90 @@ const win32 = struct {
 // TODO: Use a global State struct for now
 const State = struct {
     var running: bool = undefined;
-    var bitmap_info: win32.BITMAPINFO = undefined;
-    var bitmap_memory: ?*anyopaque = undefined;
-    var bitmap_handle: ?win32.HBITMAP = undefined;
-    var device_context: win32.HDC = undefined;
 };
+
+const Bitmap = struct {
+    var info: win32.BITMAPINFO = undefined;
+    var memory: ?*anyopaque = undefined;
+    var width: i32 = undefined;
+    var height: i32 = undefined;
+};
+
+const bytes_per_pixel = 4;
+
+fn renderWeirdGradient(
+    x_offset: u32,
+    y_offset: u32,
+) !void {
+    var pitch: usize = @intCast(Bitmap.width * bytes_per_pixel);
+    var row: [*]u8 = @ptrCast(Bitmap.memory);
+
+    for (0..@intCast(Bitmap.height)) |y| {
+        var pixel: [*]u32 = @ptrCast(@alignCast(row));
+
+        for (0..@intCast(Bitmap.width)) |x| {
+            var blue: u32 = @as(u8, @truncate(x + x_offset));
+            var green: u32 = @as(u8, @truncate(y + y_offset));
+
+            pixel[0] = (green << 8) | blue;
+            pixel += 1;
+        }
+
+        row += pitch;
+    }
+}
 
 fn win32ResizeDIBSection(width: i32, height: i32) !void {
     // TODO: Maybe don't free first, free after, then free first if that fails
-    if (State.bitmap_handle != undefined) {
-        _ = win32.DeleteObject(State.bitmap_handle);
+    if (Bitmap.memory != undefined) {
+        _ = win32.VirtualFree(Bitmap.memory, 0, win32.MEM_RELEASE);
     }
 
-    if (State.device_context == undefined) {
-        // TODO: should we recreate DC under certain special circumstances?
-        State.device_context = win32.CreateCompatibleDC(null);
-    }
+    Bitmap.width = width;
+    Bitmap.height = height;
 
-    State.bitmap_info.bmiHeader.biSize = @sizeOf(@TypeOf(State.bitmap_info.bmiHeader));
-    State.bitmap_info.bmiHeader.biWidth = width;
-    State.bitmap_info.bmiHeader.biHeight = height;
-    State.bitmap_info.bmiHeader.biPlanes = 1;
-    State.bitmap_info.bmiHeader.biBitCount = 32;
-    State.bitmap_info.bmiHeader.biCompression = win32.BI_RGB;
+    Bitmap.info.bmiHeader.biSize = @sizeOf(@TypeOf(Bitmap.info.bmiHeader));
+    Bitmap.info.bmiHeader.biWidth = Bitmap.width;
+    Bitmap.info.bmiHeader.biHeight = -Bitmap.height;
+    Bitmap.info.bmiHeader.biPlanes = 1;
+    Bitmap.info.bmiHeader.biBitCount = 32;
+    Bitmap.info.bmiHeader.biCompression = win32.BI_RGB;
 
-    State.bitmap_handle = win32.CreateDIBSection(
-        State.device_context,
-        &State.bitmap_info,
-        win32.DIB_RGB_COLORS,
-        &State.bitmap_memory,
+    var bitmap_memory_size = bytes_per_pixel * (Bitmap.width * Bitmap.height);
+    Bitmap.memory = win32.VirtualAlloc(
         null,
-        0,
+        @intCast(bitmap_memory_size),
+        win32.MEM_COMMIT,
+        win32.PAGE_READWRITE,
     );
 
-    _ = win32.ReleaseDC(null, State.device_context);
+    // TODO: clear bitmap to black
 }
 
 fn win32UpdateWindow(
     device_context: ?win32.HDC,
-    _: win32.HWND,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
+    client_rect: *win32.RECT,
+    // _: win32.HWND,
+    // x: i32,
+    // y: i32,
+    // width: i32,
+    // height: i32,
 ) !void {
+    var window_width = client_rect.*.right - client_rect.*.left;
+    var window_height = client_rect.*.bottom - client_rect.*.top;
+
     _ = win32.StretchDIBits(
         device_context,
-        x,
-        y,
-        width,
-        height,
-        x,
-        y,
-        width,
-        height,
-        State.bitmap_memory,
-        &State.bitmap_info,
+        0,
+        0,
+        Bitmap.width,
+        Bitmap.height,
+        0,
+        0,
+        window_width,
+        window_height,
+        Bitmap.memory,
+        &Bitmap.info,
         win32.DIB_RGB_COLORS,
         win32.SRCCOPY,
     );
@@ -109,12 +138,15 @@ fn win32MainWindowCallback(
         win32.WM_PAINT => {
             var paint = std.mem.zeroInit(win32.PAINTSTRUCT, .{});
             var device_context = win32.BeginPaint(window, &paint);
-            var x = paint.rcPaint.left;
-            var y = paint.rcPaint.top;
-            var height = paint.rcPaint.bottom - paint.rcPaint.top;
-            var width = paint.rcPaint.right - paint.rcPaint.left;
+            // var x = paint.rcPaint.left;
+            // var y = paint.rcPaint.top;
+            // var height = paint.rcPaint.bottom - paint.rcPaint.top;
+            // var width = paint.rcPaint.right - paint.rcPaint.left;
 
-            try win32UpdateWindow(device_context, window, x, y, width, height);
+            var client_rect = std.mem.zeroInit(win32.RECT, .{});
+            _ = win32.GetClientRect(window, &client_rect);
+
+            try win32UpdateWindow(device_context, &client_rect);
 
             _ = win32.EndPaint(window, &paint);
         },
@@ -158,20 +190,50 @@ pub export fn wWinMain(
             null,
             instance,
             null,
-        )) |_| {
+        )) |window| {
             State.running = true;
 
-            var message = std.mem.zeroInit(win32.MSG, .{});
+            var x_offset: u32 = 0;
+            var y_offset: u32 = 0;
 
             while (State.running) {
-                var result = win32.GetMessageW(&message, null, 0, 0);
+                var message = std.mem.zeroInit(win32.MSG, .{});
 
-                if (result > 0) {
+                while (win32.PeekMessageW(
+                    &message,
+                    null,
+                    0,
+                    0,
+                    win32.PEEK_MESSAGE_REMOVE_TYPE{ .REMOVE = 1 },
+                ) > 0) {
+                    if (message.message == win32.WM_QUIT) {
+                        State.running = false;
+                    }
+
                     _ = win32.TranslateMessage(&message);
                     _ = win32.DispatchMessageW(&message);
-                } else {
-                    break;
                 }
+
+                try renderWeirdGradient(x_offset, y_offset);
+
+                var device_context = win32.GetDC(window);
+                var client_rect = std.mem.zeroInit(win32.RECT, .{});
+                _ = win32.GetClientRect(window, &client_rect);
+                // var window_width = client_rect.right - client_rect.left;
+                // var window_height = client_rect.bottom - client_rect.top;
+
+                try win32UpdateWindow(
+                    device_context,
+                    &client_rect,
+                    // 0,
+                    // 0,
+                    // window_width,
+                    // window_height
+                );
+
+                _ = win32.ReleaseDC(window, device_context);
+                x_offset += 1;
+                // y_offset += 1;
             }
         } else {
             // TODO: logging
