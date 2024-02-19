@@ -119,8 +119,7 @@ fn win32MainWindowCallback(
             _ = win32.EndPaint(window, &paint);
         },
         else => {
-            // win32.OutputDebugStringA("default\n");
-            result = win32.DefWindowProc(window, message, wParam, lParam);
+            result = win32.DefWindowProcW(window, message, wParam, lParam);
         },
     }
 
@@ -136,18 +135,21 @@ pub export fn wWinMain(
     var window_class = std.mem.zeroInit(win32.WNDCLASSW, .{});
 
     // TODO: does HREDRAW/OWNDC/VREDRAW still matter
-    window_class.style = @enumFromInt(@intFromEnum(win32.CS_OWNDC) | @intFromEnum(win32.CS_HREDRAW) | @intFromEnum(win32.CS_VREDRAW));
+    window_class.style = win32.WNDCLASS_STYLES{ .OWNDC = 1, .HREDRAW = 1, .VREDRAW = 1 };
     window_class.lpfnWndProc = @ptrCast(&win32MainWindowCallback);
     window_class.hInstance = instance;
     // window_class.hIcon = ;
     window_class.lpszClassName = win32.L("HandmadeHeroWindowClass");
 
     if (win32.RegisterClassW(&window_class) != 0) {
+        var window_style = win32.WS_OVERLAPPEDWINDOW;
+        window_style.VISIBLE = 1;
+
         if (win32.CreateWindowExW(
-            @as(win32.WINDOW_EX_STYLE, @enumFromInt(0)),
+            win32.WINDOW_EX_STYLE{},
             window_class.lpszClassName,
             win32.L("Handmade Hero"),
-            @enumFromInt(@intFromEnum(win32.WS_OVERLAPPEDWINDOW) | @intFromEnum(win32.WS_VISIBLE)),
+            window_style,
             win32.CW_USEDEFAULT,
             win32.CW_USEDEFAULT,
             win32.CW_USEDEFAULT,
