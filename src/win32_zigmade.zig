@@ -40,7 +40,7 @@ fn win32GetWindowDimension(window: win32.HWND) !WindowDimension {
     result.width = client_rect.right - client_rect.left;
     result.height = client_rect.bottom - client_rect.top;
 
-    return(result);
+    return (result);
 }
 
 fn renderWeirdGradient(
@@ -94,7 +94,7 @@ fn win32ResizeDIBSection(
         win32.PAGE_READWRITE,
     );
 
-    buffer.*.pitch = width*buffer.*.bytes_per_pixel;
+    buffer.*.pitch = width * buffer.*.bytes_per_pixel;
 
     // TODO: clear bitmap to black
 }
@@ -137,8 +137,7 @@ fn win32MainWindowCallback(
     var result: win32.LRESULT = 0;
 
     switch (message) {
-        win32.WM_SIZE => {
-        },
+        win32.WM_SIZE => {},
         win32.WM_CLOSE => {
             // TODO: Handle with a message to the user?
             running = false;
