@@ -1,4 +1,4 @@
-# Handmade Hero (in Zig)
+# Zigmade Hero
 
 Inspired by [MzaxnaV](https://github.com/MzaxnaV)'s Handmade Hero project in Zig and Casey Muratori's [Handmade Hero](https://www.youtube.com/watch?v=Ee3EtYb8d1o) series.
 
