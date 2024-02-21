@@ -48,7 +48,7 @@ const XInputGetState = struct {
 const XInputSetState = struct {
     var call: *const fn (
         user_index: u32,
-        vibration: ?*win32.XINPUT_VIBRATION
+        vibration: ?*win32.XINPUT_VIBRATION,
     ) callconv(WINAPI) isize = undefined;
 
     fn stub(_: u32, _: ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize {
@@ -226,7 +226,12 @@ fn win32MainWindowCallback(
             var paint = std.mem.zeroInit(win32.PAINTSTRUCT, .{});
             var device_context = win32.BeginPaint(window, &paint);
             var dimension = try win32GetWindowDimension(window);
-            try win32DisplayBufferInWindow(&global_back_buffer, device_context, dimension.width, dimension.height);
+            try win32DisplayBufferInWindow(
+                &global_back_buffer,
+                device_context,
+                dimension.width,
+                dimension.height,
+            );
 
             _ = win32.EndPaint(window, &paint);
         },
