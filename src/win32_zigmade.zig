@@ -7,12 +7,15 @@ const win32 = struct {
     usingnamespace @import("win32").zig;
     usingnamespace @import("win32").foundation;
     usingnamespace @import("win32").system;
+    usingnamespace @import("win32").system.com;
     usingnamespace @import("win32").system.memory;
     usingnamespace @import("win32").system.library_loader;
     usingnamespace @import("win32").graphics.gdi;
     usingnamespace @import("win32").ui.input.keyboard_and_mouse;
     usingnamespace @import("win32").ui.input.xbox_controller;
     usingnamespace @import("win32").ui.windows_and_messaging;
+    usingnamespace @import("win32").media.audio;
+    usingnamespace @import("win32").media.audio.direct_sound;
     usingnamespace @import("win32").system.diagnostics.debug;
 };
 
@@ -41,7 +44,7 @@ const XInputGetState = struct {
     ) callconv(WINAPI) isize = undefined;
 
     fn stub(_: u32, _: ?*win32.XINPUT_STATE) callconv(WINAPI) isize {
-        return (0);
+        return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
     }
 };
 
@@ -52,9 +55,15 @@ const XInputSetState = struct {
     ) callconv(WINAPI) isize = undefined;
 
     fn stub(_: u32, _: ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize {
-        return (0);
+        return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
     }
 };
+
+var directSoundCreate: *const fn (
+    guid_device: ?*const win32.Guid,
+    pp_ds: ?*?*win32.IDirectSound,
+    unknown_outer: ?*win32.IUnknown,
+) callconv(WINAPI) win32.HRESULT = undefined;
 
 fn win32LoadXInput() !void {
     if (win32.LoadLibraryA(win32.XINPUT_DLL)) |x_input_library| {
@@ -69,6 +78,89 @@ fn win32LoadXInput() !void {
         } else {
             XInputSetState.call = XInputSetState.stub;
         }
+
+        // TODO: diagnostic
+    } else {
+        // TODO: diagnostic
+    }
+}
+
+fn win32InitDirectSound(
+    window: win32.HWND,
+    samples_per_second: i32,
+    buffer_size: i32,
+) !void {
+    if (win32.LoadLibraryA("dsound.dll")) |direct_sound_library| {
+        if (win32.GetProcAddress(direct_sound_library, "DirectSoundCreate")) |direct_sound_create| {
+            directSoundCreate = @as(@TypeOf(directSoundCreate), @ptrCast(direct_sound_create));
+            var direct_sound: ?*win32.IDirectSound = undefined;
+
+            if (win32.SUCCEEDED(directSoundCreate(null, &direct_sound, null))) {
+                var wave_format = std.mem.zeroInit(win32.WAVEFORMATEX, .{});
+                wave_format.wFormatTag = win32.WAVE_FORMAT_PCM;
+                wave_format.nChannels = 2;
+                wave_format.nSamplesPerSec = @intCast(samples_per_second);
+                wave_format.wBitsPerSample = 16;
+                wave_format.nBlockAlign = (wave_format.nChannels * wave_format.wBitsPerSample) / 8;
+                wave_format.nAvgBytesPerSec = wave_format.nSamplesPerSec * wave_format.nBlockAlign;
+                wave_format.cbSize = 0;
+
+                if (win32.SUCCEEDED(direct_sound.?.vtable.SetCooperativeLevel(
+                    direct_sound.?,
+                    window,
+                    win32.DSSCL_PRIORITY,
+                ))) {
+                    var buffer_description = std.mem.zeroInit(win32.DSBUFFERDESC, .{});
+                    buffer_description.dwSize = @sizeOf(win32.DSBUFFERDESC);
+                    buffer_description.dwFlags = win32.DSBCAPS_PRIMARYBUFFER;
+                    var primary_buffer: ?*win32.IDirectSoundBuffer = undefined;
+
+                    if (win32.SUCCEEDED(direct_sound.?.vtable.CreateSoundBuffer(
+                        direct_sound.?,
+                        &buffer_description,
+                        &primary_buffer,
+                        null,
+                    ))) {
+                        if (win32.SUCCEEDED(primary_buffer.?.vtable.SetFormat(
+                            primary_buffer.?,
+                            &wave_format,
+                        ))) {
+                            // NOTE: we finally have the format!
+                            std.debug.print("Primary buffer format set.\n", .{});
+                        } else {
+                            // TODO: diagnostic
+                        }
+                    } else {
+                        // TODO: diagnostic
+                    }
+                } else {
+                    // TODO: diagnostic
+                }
+
+                var buffer_description = std.mem.zeroInit(win32.DSBUFFERDESC, .{});
+                buffer_description.dwSize = @sizeOf(win32.DSBUFFERDESC);
+                buffer_description.dwFlags = 0;
+                buffer_description.dwBufferBytes = @intCast(buffer_size);
+                buffer_description.lpwfxFormat = &wave_format;
+                var secondary_buffer: ?*win32.IDirectSoundBuffer = undefined;
+
+                if (win32.SUCCEEDED(direct_sound.?.vtable.CreateSoundBuffer(
+                    direct_sound.?,
+                    &buffer_description,
+                    &secondary_buffer,
+                    null,
+                ))) {
+                    // Start playing?
+                    std.debug.print("Secondary buffer format created.\n", .{});
+                } else {
+                    // TODO: diagnostic
+                }
+            } else {
+                // TODO: diagnostic
+            }
+        }
+    } else {
+        // TODO: diagnostic
     }
 }
 
@@ -186,8 +278,8 @@ fn win32MainWindowCallback(
         },
         win32.WM_SYSKEYDOWN, win32.WM_SYSKEYUP, win32.WM_KEYDOWN, win32.WM_KEYUP => {
             var vk_code: win32.VIRTUAL_KEY = @enumFromInt(w_param);
-            var was_down = ((l_param & 1 << 30) != 0);
-            var is_down = ((l_param & 1 << 31) == 0);
+            var was_down = (l_param & (1 << 30)) != 0;
+            var is_down = (l_param & (1 << 31)) == 0;
 
             if (was_down != is_down) {
                 switch (vk_code) {
@@ -220,6 +312,11 @@ fn win32MainWindowCallback(
                     win32.VK_SPACE => win32.OutputDebugStringA("VK_SPACE\n"),
                     else => {},
                 }
+            }
+
+            var alt_key_was_down: bool = (l_param & (1 << 29)) != 0;
+            if (vk_code == win32.VK_F4 and alt_key_was_down) {
+                running = false;
             }
         },
         win32.WM_PAINT => {
@@ -286,6 +383,12 @@ pub export fn wWinMain(
 
                 running = true;
 
+                try win32InitDirectSound(
+                    window,
+                    48_000,
+                    48_000 * @sizeOf(i16) * 2,
+                );
+
                 while (running) {
                     var message: win32.MSG = undefined;
 
@@ -301,6 +404,7 @@ pub export fn wWinMain(
                     // TODO: should we poll this more frequently?
                     for (0..win32.XUSER_MAX_COUNT) |controller_index| {
                         var controller_state: win32.XINPUT_STATE = undefined;
+
                         if (XInputGetState.call(@as(u32, @intCast(controller_index)), &controller_state) == @intFromEnum(win32.ERROR_SUCCESS)) {
                             // NOTE: Controller is plugged in
                             // TODO: See if controller_state.dwPacketNumber increments too quickly
