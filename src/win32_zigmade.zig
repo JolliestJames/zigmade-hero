@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const WINAPI = std.os.windows.WINAPI;
-const DWORD = std.os.windows.DWORD;
 
 const win32 = struct {
     usingnamespace @import("win32").zig;
@@ -31,6 +30,7 @@ const BackBuffer = struct {
 // TODO: Use globals for now
 var running: bool = false;
 var global_back_buffer: BackBuffer = undefined;
+var global_secondary_buffer: *win32.IDirectSoundBuffer = undefined;
 
 const WindowDimension = struct {
     width: i32 = undefined,
@@ -59,13 +59,13 @@ const XInputSetState = struct {
     }
 };
 
-var directSoundCreate: *const fn (
+var direct_sound_create: *const fn (
     guid_device: ?*const win32.Guid,
     pp_ds: ?*?*win32.IDirectSound,
     unknown_outer: ?*win32.IUnknown,
 ) callconv(WINAPI) win32.HRESULT = undefined;
 
-fn win32LoadXInput() !void {
+fn win32_load_x_input() !void {
     if (win32.LoadLibraryA(win32.XINPUT_DLL)) |x_input_library| {
         if (win32.GetProcAddress(x_input_library, "XInputGetState")) |x_input_get_state| {
             XInputGetState.call = @as(@TypeOf(XInputGetState.call), @ptrCast(x_input_get_state));
@@ -85,17 +85,19 @@ fn win32LoadXInput() !void {
     }
 }
 
-fn win32InitDirectSound(
+fn win32_init_direct_sound(
     window: win32.HWND,
     samples_per_second: i32,
     buffer_size: i32,
 ) !void {
     if (win32.LoadLibraryA("dsound.dll")) |direct_sound_library| {
-        if (win32.GetProcAddress(direct_sound_library, "DirectSoundCreate")) |direct_sound_create| {
-            directSoundCreate = @as(@TypeOf(directSoundCreate), @ptrCast(direct_sound_create));
-            var direct_sound: ?*win32.IDirectSound = undefined;
+        if (win32.GetProcAddress(direct_sound_library, "DirectSoundCreate")) |direct_sound_create_address| {
+            direct_sound_create = @as(@TypeOf(direct_sound_create), @ptrCast(direct_sound_create_address));
+            var maybe_direct_sound: ?*win32.IDirectSound = undefined;
 
-            if (win32.SUCCEEDED(directSoundCreate(null, &direct_sound, null))) {
+            if (win32.SUCCEEDED(direct_sound_create(null, &maybe_direct_sound, null))) {
+                var direct_sound = maybe_direct_sound.?;
+
                 var wave_format = std.mem.zeroInit(win32.WAVEFORMATEX, .{});
                 wave_format.wFormatTag = win32.WAVE_FORMAT_PCM;
                 wave_format.nChannels = 2;
@@ -105,24 +107,26 @@ fn win32InitDirectSound(
                 wave_format.nAvgBytesPerSec = wave_format.nSamplesPerSec * wave_format.nBlockAlign;
                 wave_format.cbSize = 0;
 
-                if (win32.SUCCEEDED(direct_sound.?.vtable.SetCooperativeLevel(
-                    direct_sound.?,
+                if (win32.SUCCEEDED(direct_sound.vtable.SetCooperativeLevel(
+                    direct_sound,
                     window,
                     win32.DSSCL_PRIORITY,
                 ))) {
                     var buffer_description = std.mem.zeroInit(win32.DSBUFFERDESC, .{});
                     buffer_description.dwSize = @sizeOf(win32.DSBUFFERDESC);
                     buffer_description.dwFlags = win32.DSBCAPS_PRIMARYBUFFER;
-                    var primary_buffer: ?*win32.IDirectSoundBuffer = undefined;
+                    var maybe_primary_buffer: ?*win32.IDirectSoundBuffer = undefined;
 
-                    if (win32.SUCCEEDED(direct_sound.?.vtable.CreateSoundBuffer(
-                        direct_sound.?,
+                    if (win32.SUCCEEDED(direct_sound.vtable.CreateSoundBuffer(
+                        direct_sound,
                         &buffer_description,
-                        &primary_buffer,
+                        &maybe_primary_buffer,
                         null,
                     ))) {
-                        if (win32.SUCCEEDED(primary_buffer.?.vtable.SetFormat(
-                            primary_buffer.?,
+                        var primary_buffer = maybe_primary_buffer.?;
+
+                        if (win32.SUCCEEDED(primary_buffer.vtable.SetFormat(
+                            primary_buffer,
                             &wave_format,
                         ))) {
                             // NOTE: we finally have the format!
@@ -142,14 +146,15 @@ fn win32InitDirectSound(
                 buffer_description.dwFlags = 0;
                 buffer_description.dwBufferBytes = @intCast(buffer_size);
                 buffer_description.lpwfxFormat = &wave_format;
-                var secondary_buffer: ?*win32.IDirectSoundBuffer = undefined;
+                var maybe_secondary_buffer: ?*win32.IDirectSoundBuffer = undefined;
 
-                if (win32.SUCCEEDED(direct_sound.?.vtable.CreateSoundBuffer(
-                    direct_sound.?,
+                if (win32.SUCCEEDED(direct_sound.vtable.CreateSoundBuffer(
+                    direct_sound,
                     &buffer_description,
-                    &secondary_buffer,
+                    &maybe_secondary_buffer,
                     null,
                 ))) {
+                    global_secondary_buffer = maybe_secondary_buffer.?;
                     // Start playing?
                     std.debug.print("Secondary buffer format created.\n", .{});
                 } else {
@@ -164,7 +169,7 @@ fn win32InitDirectSound(
     }
 }
 
-fn win32GetWindowDimension(window: win32.HWND) !WindowDimension {
+fn win32_get_window_dimension(window: win32.HWND) !WindowDimension {
     var result: WindowDimension = undefined;
 
     var client_rect: win32.RECT = undefined;
@@ -176,7 +181,7 @@ fn win32GetWindowDimension(window: win32.HWND) !WindowDimension {
     return (result);
 }
 
-fn renderWeirdGradient(
+fn render_weird_gradient(
     buffer: *BackBuffer,
     x_offset: u32,
     y_offset: u32,
@@ -198,7 +203,7 @@ fn renderWeirdGradient(
     }
 }
 
-fn win32ResizeDIBSection(
+fn win32_resize_dib_section(
     buffer: *BackBuffer,
     width: i32,
     height: i32,
@@ -232,7 +237,7 @@ fn win32ResizeDIBSection(
     // TODO: clear bitmap to black
 }
 
-fn win32DisplayBufferInWindow(
+fn win32_display_buffer_in_window(
     buffer: *BackBuffer,
     device_context: ?win32.HDC,
     window_width: i32,
@@ -256,7 +261,7 @@ fn win32DisplayBufferInWindow(
     );
 }
 
-fn win32MainWindowCallback(
+fn win32_main_window_callback(
     window: win32.HWND,
     message: u32,
     w_param: win32.WPARAM,
@@ -322,8 +327,8 @@ fn win32MainWindowCallback(
         win32.WM_PAINT => {
             var paint = std.mem.zeroInit(win32.PAINTSTRUCT, .{});
             var device_context = win32.BeginPaint(window, &paint);
-            var dimension = try win32GetWindowDimension(window);
-            try win32DisplayBufferInWindow(
+            var dimension = try win32_get_window_dimension(window);
+            try win32_display_buffer_in_window(
                 &global_back_buffer,
                 device_context,
                 dimension.width,
@@ -346,15 +351,15 @@ pub export fn wWinMain(
     _: [*:0]u16,
     _: u32,
 ) callconv(WINAPI) c_int {
-    try win32LoadXInput();
+    try win32_load_x_input();
 
     var window_class = std.mem.zeroInit(win32.WNDCLASSW, .{});
 
     // TODO: would be nice to properly log when something goes wrong with these error union return types
-    try win32ResizeDIBSection(&global_back_buffer, 1280, 720);
+    try win32_resize_dib_section(&global_back_buffer, 1280, 720);
 
     window_class.style = win32.WNDCLASS_STYLES{ .HREDRAW = 1, .VREDRAW = 1 };
-    window_class.lpfnWndProc = @ptrCast(&win32MainWindowCallback);
+    window_class.lpfnWndProc = @ptrCast(&win32_main_window_callback);
     window_class.hInstance = instance;
     // window_class.hIcon = ;
     window_class.lpszClassName = win32.L("HandmadeHeroWindowClass");
@@ -381,12 +386,28 @@ pub export fn wWinMain(
                 var x_offset: u32 = 0;
                 var y_offset: u32 = 0;
 
+                const samples_per_second = 48_000;
+                const tone_hertz = 256;
+                const tone_volume = 1_000;
+                var running_sample_index: u32 = 0;
+                var square_wave_period: u32 = samples_per_second / tone_hertz;
+                var half_square_wave_period: u32 = square_wave_period / 2;
+                const bytes_per_sample = @sizeOf(i16) * 2;
+                const secondary_buffer_size = samples_per_second * bytes_per_sample;
+
                 running = true;
 
-                try win32InitDirectSound(
+                try win32_init_direct_sound(
                     window,
-                    48_000,
-                    48_000 * @sizeOf(i16) * 2,
+                    samples_per_second,
+                    secondary_buffer_size,
+                );
+
+                _ = global_secondary_buffer.vtable.Play(
+                    global_secondary_buffer,
+                    0,
+                    0,
+                    win32.DSBPLAY_LOOPING,
                 );
 
                 while (running) {
@@ -439,11 +460,82 @@ pub export fn wWinMain(
                     // vibration.wRightMotorSpeed = 60000;
                     // _ = XInputSetState.call(0, &vibration);
 
-                    try renderWeirdGradient(&global_back_buffer, x_offset, y_offset);
+                    try render_weird_gradient(&global_back_buffer, x_offset, y_offset);
 
-                    var dimension = try win32GetWindowDimension(window);
+                    // NOTE: DirectSound output test
+                    var play_cursor: u32 = undefined;
+                    var write_cursor: u32 = undefined;
 
-                    try win32DisplayBufferInWindow(
+                    if (win32.SUCCEEDED(global_secondary_buffer.vtable.GetCurrentPosition(
+                        global_secondary_buffer,
+                        &play_cursor,
+                        &write_cursor,
+                    ))) {
+                        var byte_to_lock: u32 = running_sample_index * bytes_per_sample % secondary_buffer_size;
+                        var bytes_to_write: u32 = undefined;
+
+                        if (byte_to_lock > play_cursor) {
+                            bytes_to_write = secondary_buffer_size - byte_to_lock;
+                            bytes_to_write += play_cursor;
+                        } else {
+                            bytes_to_write = play_cursor - byte_to_lock;
+                        }
+
+                        var maybe_region_1: ?*anyopaque = undefined;
+                        var region_1_size: u32 = undefined;
+                        var maybe_region_2: ?*anyopaque = undefined;
+                        var region_2_size: u32 = undefined;
+
+                        if (win32.SUCCEEDED(global_secondary_buffer.vtable.Lock(
+                            global_secondary_buffer,
+                            byte_to_lock,
+                            bytes_to_write,
+                            &maybe_region_1,
+                            &region_1_size,
+                            &maybe_region_2,
+                            &region_2_size,
+                            0,
+                        ))) {
+                            if (maybe_region_1) |region_1| {
+                                var region_1_sample_count: u32 = region_1_size / bytes_per_sample;
+                                var sample_out = @as([*]i16, @alignCast(@ptrCast(region_1)));
+
+                                for (0..region_1_sample_count) |_| {
+                                    var sample_value: i16 = if (((running_sample_index / half_square_wave_period) % 2) > 0) tone_volume else -tone_volume;
+                                    sample_out[0] = sample_value;
+                                    sample_out += 1;
+                                    sample_out[0] = sample_value;
+                                    sample_out += 1;
+                                    running_sample_index += 1;
+                                }
+                            }
+
+                            if (maybe_region_2) |region_2| {
+                                var region_2_sample_count: u32 = region_2_size / bytes_per_sample;
+                                var sample_out = @as([*]i16, @alignCast(@ptrCast(region_2)));
+                                for (0..region_2_sample_count) |_| {
+                                    var sample_value: i16 = if (((running_sample_index / half_square_wave_period) % 2) > 0) tone_volume else -tone_volume;
+                                    sample_out[0] = sample_value;
+                                    sample_out += 1;
+                                    sample_out[0] = sample_value;
+                                    sample_out += 1;
+                                    running_sample_index += 1;
+                                }
+                            }
+
+                            _ = global_secondary_buffer.vtable.Unlock(
+                                global_secondary_buffer,
+                                maybe_region_1,
+                                region_1_size,
+                                maybe_region_2,
+                                region_2_size,
+                            );
+                        }
+                    }
+
+                    var dimension = try win32_get_window_dimension(window);
+
+                    try win32_display_buffer_in_window(
                         &global_back_buffer,
                         device_context,
                         dimension.width,
