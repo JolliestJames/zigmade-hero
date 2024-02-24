@@ -228,7 +228,7 @@ fn win32_resize_dib_section(
     buffer.*.memory = win32.VirtualAlloc(
         null,
         @intCast(bitmap_memory_size),
-        win32.MEM_COMMIT,
+        win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
         win32.PAGE_READWRITE,
     );
 
@@ -403,12 +403,7 @@ pub export fn wWinMain(
                     secondary_buffer_size,
                 );
 
-                _ = global_secondary_buffer.vtable.Play(
-                    global_secondary_buffer,
-                    0,
-                    0,
-                    win32.DSBPLAY_LOOPING,
-                );
+                var sound_is_playing = false;
 
                 while (running) {
                     var message: win32.MSG = undefined;
@@ -474,7 +469,9 @@ pub export fn wWinMain(
                         var byte_to_lock: u32 = running_sample_index * bytes_per_sample % secondary_buffer_size;
                         var bytes_to_write: u32 = undefined;
 
-                        if (byte_to_lock > play_cursor) {
+                        if (byte_to_lock == play_cursor) {
+                            bytes_to_write = secondary_buffer_size;
+                        } else if (byte_to_lock > play_cursor) {
                             bytes_to_write = secondary_buffer_size - byte_to_lock;
                             bytes_to_write += play_cursor;
                         } else {
@@ -531,6 +528,16 @@ pub export fn wWinMain(
                                 region_2_size,
                             );
                         }
+                    }
+
+                    if (!sound_is_playing) {
+                        _ = global_secondary_buffer.vtable.Play(
+                            global_secondary_buffer,
+                            0,
+                            0,
+                            win32.DSBPLAY_LOOPING,
+                        );
+                        sound_is_playing = true;
                     }
 
                     var dimension = try win32_get_window_dimension(window);
