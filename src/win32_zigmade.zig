@@ -28,7 +28,7 @@ const BackBuffer = struct {
 };
 
 // TODO: Use globals for now
-var running: bool = false;
+var global_running: bool = false;
 var global_back_buffer: BackBuffer = undefined;
 var global_secondary_buffer: *win32.IDirectSoundBuffer = undefined;
 
@@ -272,14 +272,14 @@ fn win32_main_window_callback(
     switch (message) {
         win32.WM_CLOSE => {
             // TODO: Handle with a message to the user?
-            running = false;
+            global_running = false;
         },
         win32.WM_ACTIVATEAPP => {
             win32.OutputDebugStringA("WM_ACTIVATEAPP\n");
         },
         win32.WM_DESTROY => {
             // TODO: Handle as an error--recreate window?
-            running = false;
+            global_running = false;
         },
         win32.WM_SYSKEYDOWN, win32.WM_SYSKEYUP, win32.WM_KEYDOWN, win32.WM_KEYUP => {
             var vk_code: win32.VIRTUAL_KEY = @enumFromInt(w_param);
@@ -321,7 +321,7 @@ fn win32_main_window_callback(
 
             var alt_key_was_down: bool = (l_param & (1 << 29)) != 0;
             if (vk_code == win32.VK_F4 and alt_key_was_down) {
-                running = false;
+                global_running = false;
             }
         },
         win32.WM_PAINT => {
@@ -343,6 +343,90 @@ fn win32_main_window_callback(
     }
 
     return (result);
+}
+
+const Win32SoundOutput = struct {
+    samples_per_second: i32,
+    tone_hertz: i32,
+    tone_volume: i16,
+    running_sample_index: u32,
+    wave_period: i32,
+    bytes_per_sample: i32,
+    secondary_buffer_size: i32,
+};
+
+fn win32_fill_sound_buffer(
+    sound_output: *Win32SoundOutput,
+    byte_to_lock: u32,
+    bytes_to_write: u32,
+) !void {
+    var maybe_region_1: ?*anyopaque = undefined;
+    var region_1_size: u32 = undefined;
+    var maybe_region_2: ?*anyopaque = undefined;
+    var region_2_size: u32 = undefined;
+
+    if (win32.SUCCEEDED(global_secondary_buffer.vtable.Lock(
+        global_secondary_buffer,
+        byte_to_lock,
+        bytes_to_write,
+        &maybe_region_1,
+        &region_1_size,
+        &maybe_region_2,
+        &region_2_size,
+        0,
+    ))) {
+        if (maybe_region_1) |region_1| {
+            var region_1_sample_count: u32 = region_1_size / @as(u32, @intCast(sound_output.bytes_per_sample));
+            var sample_out = @as([*]i16, @alignCast(@ptrCast(region_1)));
+
+            for (0..region_1_sample_count) |_| {
+                var t: f32 =
+                    2.0 *
+                    std.math.pi *
+                    @as(f32, @floatFromInt(sound_output.running_sample_index)) /
+                    @as(f32, @floatFromInt(sound_output.wave_period));
+
+                var sine_value: f32 = std.math.sin(t);
+                var sample_value: i16 = @as(i16, @intFromFloat(sine_value * @as(f32, @floatFromInt(sound_output.tone_volume))));
+
+                sample_out[0] = sample_value;
+                sample_out += 1;
+                sample_out[0] = sample_value;
+                sample_out += 1;
+                sound_output.running_sample_index += 1;
+            }
+        }
+
+        if (maybe_region_2) |region_2| {
+            var region_2_sample_count: u32 = region_2_size / @as(u32, @intCast(sound_output.bytes_per_sample));
+            var sample_out = @as([*]i16, @alignCast(@ptrCast(region_2)));
+
+            for (0..region_2_sample_count) |_| {
+                var t: f32 =
+                    2.0 *
+                    std.math.pi *
+                    @as(f32, @floatFromInt(sound_output.running_sample_index)) /
+                    @as(f32, @floatFromInt(sound_output.wave_period));
+
+                var sine_value: f32 = std.math.sin(t);
+                var sample_value: i16 = @as(i16, @intFromFloat(sine_value * @as(f32, @floatFromInt(sound_output.tone_volume))));
+
+                sample_out[0] = sample_value;
+                sample_out += 1;
+                sample_out[0] = sample_value;
+                sample_out += 1;
+                sound_output.running_sample_index += 1;
+            }
+        }
+
+        _ = global_secondary_buffer.vtable.Unlock(
+            global_secondary_buffer,
+            maybe_region_1,
+            region_1_size,
+            maybe_region_2,
+            region_2_size,
+        );
+    }
 }
 
 pub export fn wWinMain(
@@ -386,31 +470,42 @@ pub export fn wWinMain(
                 var x_offset: u32 = 0;
                 var y_offset: u32 = 0;
 
-                const samples_per_second = 48_000;
-                const tone_hertz = 256;
-                const tone_volume = 1_000;
-                var running_sample_index: u32 = 0;
-                var square_wave_period: u32 = samples_per_second / tone_hertz;
-                var half_square_wave_period: u32 = square_wave_period / 2;
-                const bytes_per_sample = @sizeOf(i16) * 2;
-                const secondary_buffer_size = samples_per_second * bytes_per_sample;
-
-                running = true;
+                var sound_output: Win32SoundOutput = undefined;
+                sound_output.samples_per_second = 48_000;
+                sound_output.tone_hertz = 256;
+                sound_output.tone_volume = 3_000;
+                sound_output.running_sample_index = 0;
+                sound_output.wave_period = @divFloor(sound_output.samples_per_second, sound_output.tone_hertz);
+                sound_output.bytes_per_sample = @sizeOf(i16) * 2;
+                sound_output.secondary_buffer_size = sound_output.samples_per_second * sound_output.bytes_per_sample;
 
                 try win32_init_direct_sound(
                     window,
-                    samples_per_second,
-                    secondary_buffer_size,
+                    sound_output.samples_per_second,
+                    sound_output.secondary_buffer_size,
                 );
 
-                var sound_is_playing = false;
+                try win32_fill_sound_buffer(
+                    &sound_output,
+                    0,
+                    @as(u32, @intCast(sound_output.secondary_buffer_size)),
+                );
 
-                while (running) {
+                _ = global_secondary_buffer.vtable.Play(
+                    global_secondary_buffer,
+                    0,
+                    0,
+                    win32.DSBPLAY_LOOPING,
+                );
+
+                global_running = true;
+
+                while (global_running) {
                     var message: win32.MSG = undefined;
 
                     while (win32.PeekMessageW(&message, null, 0, 0, win32.PM_REMOVE) > 0) {
                         if (message.message == win32.WM_QUIT) {
-                            running = false;
+                            global_running = false;
                         }
 
                         _ = win32.TranslateMessage(&message);
@@ -466,78 +561,28 @@ pub export fn wWinMain(
                         &play_cursor,
                         &write_cursor,
                     ))) {
-                        var byte_to_lock: u32 = running_sample_index * bytes_per_sample % secondary_buffer_size;
+                        var byte_to_lock: u32 =
+                            (sound_output.running_sample_index *
+                            @as(u32, @intCast(sound_output.bytes_per_sample))) %
+                            @as(u32, @intCast(sound_output.secondary_buffer_size));
+
                         var bytes_to_write: u32 = undefined;
 
+                        // TODO: Change to use a lower latency offset from the play cursor when we start adding soundfx
                         if (byte_to_lock == play_cursor) {
-                            bytes_to_write = secondary_buffer_size;
+                            bytes_to_write = 0;
                         } else if (byte_to_lock > play_cursor) {
-                            bytes_to_write = secondary_buffer_size - byte_to_lock;
+                            bytes_to_write = @as(u32, @intCast(sound_output.secondary_buffer_size)) - byte_to_lock;
                             bytes_to_write += play_cursor;
                         } else {
                             bytes_to_write = play_cursor - byte_to_lock;
                         }
 
-                        var maybe_region_1: ?*anyopaque = undefined;
-                        var region_1_size: u32 = undefined;
-                        var maybe_region_2: ?*anyopaque = undefined;
-                        var region_2_size: u32 = undefined;
-
-                        if (win32.SUCCEEDED(global_secondary_buffer.vtable.Lock(
-                            global_secondary_buffer,
+                        try win32_fill_sound_buffer(
+                            &sound_output,
                             byte_to_lock,
                             bytes_to_write,
-                            &maybe_region_1,
-                            &region_1_size,
-                            &maybe_region_2,
-                            &region_2_size,
-                            0,
-                        ))) {
-                            if (maybe_region_1) |region_1| {
-                                var region_1_sample_count: u32 = region_1_size / bytes_per_sample;
-                                var sample_out = @as([*]i16, @alignCast(@ptrCast(region_1)));
-
-                                for (0..region_1_sample_count) |_| {
-                                    var sample_value: i16 = if (((running_sample_index / half_square_wave_period) % 2) > 0) tone_volume else -tone_volume;
-                                    sample_out[0] = sample_value;
-                                    sample_out += 1;
-                                    sample_out[0] = sample_value;
-                                    sample_out += 1;
-                                    running_sample_index += 1;
-                                }
-                            }
-
-                            if (maybe_region_2) |region_2| {
-                                var region_2_sample_count: u32 = region_2_size / bytes_per_sample;
-                                var sample_out = @as([*]i16, @alignCast(@ptrCast(region_2)));
-                                for (0..region_2_sample_count) |_| {
-                                    var sample_value: i16 = if (((running_sample_index / half_square_wave_period) % 2) > 0) tone_volume else -tone_volume;
-                                    sample_out[0] = sample_value;
-                                    sample_out += 1;
-                                    sample_out[0] = sample_value;
-                                    sample_out += 1;
-                                    running_sample_index += 1;
-                                }
-                            }
-
-                            _ = global_secondary_buffer.vtable.Unlock(
-                                global_secondary_buffer,
-                                maybe_region_1,
-                                region_1_size,
-                                maybe_region_2,
-                                region_2_size,
-                            );
-                        }
-                    }
-
-                    if (!sound_is_playing) {
-                        _ = global_secondary_buffer.vtable.Play(
-                            global_secondary_buffer,
-                            0,
-                            0,
-                            win32.DSBPLAY_LOOPING,
                         );
-                        sound_is_playing = true;
                     }
 
                     var dimension = try win32_get_window_dimension(window);
