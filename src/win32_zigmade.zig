@@ -376,7 +376,9 @@ fn win32_fill_sound_buffer(
         0,
     ))) {
         if (maybe_region_1) |region_1| {
-            var region_1_sample_count: u32 = region_1_size / @as(u32, @intCast(sound_output.bytes_per_sample));
+            var region_1_sample_count: u32 =
+                region_1_size /
+                @as(u32, @intCast(sound_output.bytes_per_sample));
             var sample_out = @as([*]i16, @alignCast(@ptrCast(region_1)));
 
             for (0..region_1_sample_count) |_| {
@@ -387,7 +389,15 @@ fn win32_fill_sound_buffer(
                     @as(f32, @floatFromInt(sound_output.wave_period));
 
                 var sine_value: f32 = std.math.sin(t);
-                var sample_value: i16 = @as(i16, @intFromFloat(sine_value * @as(f32, @floatFromInt(sound_output.tone_volume))));
+                var sample_value: i16 = @as(
+                    i16,
+                    @intFromFloat(
+                        sine_value * @as(
+                            f32,
+                            @floatFromInt(sound_output.tone_volume),
+                        ),
+                    ),
+                );
 
                 sample_out[0] = sample_value;
                 sample_out += 1;
@@ -398,7 +408,9 @@ fn win32_fill_sound_buffer(
         }
 
         if (maybe_region_2) |region_2| {
-            var region_2_sample_count: u32 = region_2_size / @as(u32, @intCast(sound_output.bytes_per_sample));
+            var region_2_sample_count: u32 =
+                region_2_size /
+                @as(u32, @intCast(sound_output.bytes_per_sample));
             var sample_out = @as([*]i16, @alignCast(@ptrCast(region_2)));
 
             for (0..region_2_sample_count) |_| {
@@ -409,7 +421,15 @@ fn win32_fill_sound_buffer(
                     @as(f32, @floatFromInt(sound_output.wave_period));
 
                 var sine_value: f32 = std.math.sin(t);
-                var sample_value: i16 = @as(i16, @intFromFloat(sine_value * @as(f32, @floatFromInt(sound_output.tone_volume))));
+                var sample_value: i16 = @as(
+                    i16,
+                    @intFromFloat(
+                        sine_value * @as(
+                            f32,
+                            @floatFromInt(sound_output.tone_volume),
+                        ),
+                    ),
+                );
 
                 sample_out[0] = sample_value;
                 sample_out += 1;
@@ -475,9 +495,14 @@ pub export fn wWinMain(
                 sound_output.tone_hertz = 256;
                 sound_output.tone_volume = 3_000;
                 sound_output.running_sample_index = 0;
-                sound_output.wave_period = @divFloor(sound_output.samples_per_second, sound_output.tone_hertz);
+                sound_output.wave_period = @divFloor(
+                    sound_output.samples_per_second,
+                    sound_output.tone_hertz,
+                );
                 sound_output.bytes_per_sample = @sizeOf(i16) * 2;
-                sound_output.secondary_buffer_size = sound_output.samples_per_second * sound_output.bytes_per_sample;
+                sound_output.secondary_buffer_size =
+                    sound_output.samples_per_second *
+                    sound_output.bytes_per_sample;
 
                 try win32_init_direct_sound(
                     window,
@@ -516,7 +541,10 @@ pub export fn wWinMain(
                     for (0..win32.XUSER_MAX_COUNT) |controller_index| {
                         var controller_state: win32.XINPUT_STATE = undefined;
 
-                        if (XInputGetState.call(@as(u32, @intCast(controller_index)), &controller_state) == @intFromEnum(win32.ERROR_SUCCESS)) {
+                        if (XInputGetState.call(
+                            @as(u32, @intCast(controller_index)),
+                            &controller_state,
+                        ) == @intFromEnum(win32.ERROR_SUCCESS)) {
                             // NOTE: Controller is plugged in
                             // TODO: See if controller_state.dwPacketNumber increments too quickly
                             var pad: *win32.XINPUT_GAMEPAD = &controller_state.Gamepad;
