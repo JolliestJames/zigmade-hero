@@ -183,8 +183,8 @@ fn win32_get_window_dimension(window: win32.HWND) !WindowDimension {
 
 fn render_weird_gradient(
     buffer: *BackBuffer,
-    x_offset: u32,
-    y_offset: u32,
+    blue_offset: i32,
+    green_offset: i32,
 ) !void {
     var row: [*]u8 = @ptrCast(buffer.memory);
 
@@ -192,8 +192,20 @@ fn render_weird_gradient(
         var pixel: [*]u32 = @ptrCast(@alignCast(row));
 
         for (0..@intCast(buffer.width)) |x| {
-            var blue: u32 = @as(u8, @truncate(x + x_offset));
-            var green: u32 = @as(u8, @truncate(y + y_offset));
+            var blue: u32 = @as(
+                u8,
+                @truncate(x + @as(
+                    u32,
+                    @bitCast(blue_offset),
+                )),
+            );
+            var green: u32 = @as(
+                u8,
+                @truncate(y + @as(
+                    u32,
+                    @bitCast(green_offset),
+                )),
+            );
 
             pixel[0] = (green << 8) | blue;
             pixel += 1;
@@ -353,6 +365,8 @@ const Win32SoundOutput = struct {
     wave_period: i32,
     bytes_per_sample: i32,
     secondary_buffer_size: i32,
+    t_sine: f32,
+    latency_sample_count: i32,
 };
 
 fn win32_fill_sound_buffer(
@@ -377,18 +391,11 @@ fn win32_fill_sound_buffer(
     ))) {
         if (maybe_region_1) |region_1| {
             var region_1_sample_count: u32 =
-                region_1_size /
-                @as(u32, @intCast(sound_output.bytes_per_sample));
+                region_1_size / @as(u32, @intCast(sound_output.bytes_per_sample));
             var sample_out = @as([*]i16, @alignCast(@ptrCast(region_1)));
 
             for (0..region_1_sample_count) |_| {
-                var t: f32 =
-                    2.0 *
-                    std.math.pi *
-                    @as(f32, @floatFromInt(sound_output.running_sample_index)) /
-                    @as(f32, @floatFromInt(sound_output.wave_period));
-
-                var sine_value: f32 = std.math.sin(t);
+                var sine_value: f32 = std.math.sin(sound_output.t_sine);
                 var sample_value: i16 = @as(
                     i16,
                     @intFromFloat(
@@ -403,6 +410,13 @@ fn win32_fill_sound_buffer(
                 sample_out += 1;
                 sample_out[0] = sample_value;
                 sample_out += 1;
+
+                sound_output.t_sine +=
+                    2.0 *
+                    std.math.pi *
+                    1.0 /
+                    @as(f32, @floatFromInt(sound_output.wave_period));
+
                 sound_output.running_sample_index += 1;
             }
         }
@@ -414,13 +428,7 @@ fn win32_fill_sound_buffer(
             var sample_out = @as([*]i16, @alignCast(@ptrCast(region_2)));
 
             for (0..region_2_sample_count) |_| {
-                var t: f32 =
-                    2.0 *
-                    std.math.pi *
-                    @as(f32, @floatFromInt(sound_output.running_sample_index)) /
-                    @as(f32, @floatFromInt(sound_output.wave_period));
-
-                var sine_value: f32 = std.math.sin(t);
+                var sine_value: f32 = std.math.sin(sound_output.t_sine);
                 var sample_value: i16 = @as(
                     i16,
                     @intFromFloat(
@@ -435,6 +443,13 @@ fn win32_fill_sound_buffer(
                 sample_out += 1;
                 sample_out[0] = sample_value;
                 sample_out += 1;
+
+                sound_output.t_sine +=
+                    2.0 *
+                    std.math.pi *
+                    1.0 /
+                    @as(f32, @floatFromInt(sound_output.wave_period));
+
                 sound_output.running_sample_index += 1;
             }
         }
@@ -487,8 +502,8 @@ pub export fn wWinMain(
             null,
         )) |window| {
             if (win32.GetDC(window)) |device_context| {
-                var x_offset: u32 = 0;
-                var y_offset: u32 = 0;
+                var x_offset: i32 = 0;
+                var y_offset: i32 = 0;
 
                 var sound_output: Win32SoundOutput = undefined;
                 sound_output.samples_per_second = 48_000;
@@ -503,6 +518,10 @@ pub export fn wWinMain(
                 sound_output.secondary_buffer_size =
                     sound_output.samples_per_second *
                     sound_output.bytes_per_sample;
+                sound_output.latency_sample_count = @divFloor(
+                    sound_output.samples_per_second,
+                    15,
+                );
 
                 try win32_init_direct_sound(
                     window,
@@ -513,7 +532,11 @@ pub export fn wWinMain(
                 try win32_fill_sound_buffer(
                     &sound_output,
                     0,
-                    @as(u32, @intCast(sound_output.secondary_buffer_size)),
+                    @as(
+                        u32,
+                        @intCast(sound_output.latency_sample_count *
+                            sound_output.bytes_per_sample),
+                    ),
                 );
 
                 _ = global_secondary_buffer.vtable.Play(
@@ -528,7 +551,13 @@ pub export fn wWinMain(
                 while (global_running) {
                     var message: win32.MSG = undefined;
 
-                    while (win32.PeekMessageW(&message, null, 0, 0, win32.PM_REMOVE) > 0) {
+                    while (win32.PeekMessageW(
+                        &message,
+                        null,
+                        0,
+                        0,
+                        win32.PM_REMOVE,
+                    ) > 0) {
                         if (message.message == win32.WM_QUIT) {
                             global_running = false;
                         }
@@ -557,17 +586,29 @@ pub export fn wWinMain(
                             // var back = pad.*.wButtons & win32.XINPUT_GAMEPAD_BACK;
                             // var left_shoulder = pad.*.wButtons & win32.XINPUT_GAMEPAD_LEFT_SHOULDER;
                             // var right_shoulder = pad.*.wButtons & win32.XINPUT_GAMEPAD_RIGHT_SHOULDER;
-                            var a_button = pad.*.wButtons & win32.XINPUT_GAMEPAD_A;
+                            // var a_button = pad.*.wButtons & win32.XINPUT_GAMEPAD_A;
                             // var b_button = pad.*.wButtons & win32.XINPUT_GAMEPAD_B;
                             // var x_button = pad.*.wButtons & win32.XINPUT_GAMEPAD_X;
                             // var y_button = pad.*.wButtons & win32.XINPUT_GAMEPAD_Y;
 
-                            // var stick_x = pad.*.sThumbLX;
-                            // var stick_y = pad.*.sThumbLY;
+                            var stick_x = pad.*.sThumbLX;
+                            var stick_y = pad.*.sThumbLY;
 
-                            if (a_button > 0) {
-                                y_offset += 2;
-                            }
+                            // NOTE: we will do deadzone handling later using
+                            x_offset += @divFloor(stick_x, 4096);
+                            y_offset += @divFloor(stick_y, 4096);
+
+                            sound_output.tone_hertz = 512 + @as(
+                                i32,
+                                @intFromFloat(256.0 *
+                                    (@as(f32, @floatFromInt(stick_y)) /
+                                    30_000.0)),
+                            );
+
+                            sound_output.wave_period = @divFloor(
+                                sound_output.samples_per_second,
+                                sound_output.tone_hertz,
+                            );
                         } else {
                             // NOTE: Controller is unavailable
                         }
@@ -594,16 +635,19 @@ pub export fn wWinMain(
                             @as(u32, @intCast(sound_output.bytes_per_sample))) %
                             @as(u32, @intCast(sound_output.secondary_buffer_size));
 
+                        var target_cursor: u32 = (play_cursor +
+                            (@as(u32, @intCast(sound_output.latency_sample_count))) *
+                            @as(u32, @intCast(sound_output.bytes_per_sample))) %
+                            @as(u32, @intCast(sound_output.secondary_buffer_size));
+
                         var bytes_to_write: u32 = undefined;
 
                         // TODO: Change to use a lower latency offset from the play cursor when we start adding soundfx
-                        if (byte_to_lock == play_cursor) {
-                            bytes_to_write = 0;
-                        } else if (byte_to_lock > play_cursor) {
+                        if (byte_to_lock > target_cursor) {
                             bytes_to_write = @as(u32, @intCast(sound_output.secondary_buffer_size)) - byte_to_lock;
-                            bytes_to_write += play_cursor;
+                            bytes_to_write += target_cursor;
                         } else {
-                            bytes_to_write = play_cursor - byte_to_lock;
+                            bytes_to_write = target_cursor - byte_to_lock;
                         }
 
                         try win32_fill_sound_buffer(
