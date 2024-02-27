@@ -8,6 +8,7 @@ const win32 = struct {
     usingnamespace @import("win32").system;
     usingnamespace @import("win32").system.com;
     usingnamespace @import("win32").system.memory;
+    usingnamespace @import("win32").system.performance;
     usingnamespace @import("win32").system.library_loader;
     usingnamespace @import("win32").graphics.gdi;
     usingnamespace @import("win32").ui.input.keyboard_and_mouse;
@@ -464,12 +465,28 @@ fn win32_fill_sound_buffer(
     }
 }
 
+inline fn rdtsc() u64 {
+    var low: u32 = undefined;
+    var high: u32 = undefined;
+
+    asm ("rdtsc"
+        : [low] "={eax}" (low),
+          [high] "={edx}" (high),
+    );
+
+    return (@as(u64, @intCast((high))) << 32) | @as(u64, @intCast(low));
+}
+
 pub export fn wWinMain(
     instance: ?win32.HINSTANCE,
     _: ?win32.HINSTANCE,
     _: [*:0]u16,
     _: u32,
 ) callconv(WINAPI) c_int {
+    var perf_count_frequency_result: win32.LARGE_INTEGER = undefined;
+    _ = win32.QueryPerformanceFrequency(&perf_count_frequency_result);
+    var perf_count_frequency = perf_count_frequency_result.QuadPart;
+
     try win32_load_x_input();
 
     var window_class = std.mem.zeroInit(win32.WNDCLASSW, .{});
@@ -547,6 +564,11 @@ pub export fn wWinMain(
                 );
 
                 global_running = true;
+
+                var last_counter: win32.LARGE_INTEGER = undefined;
+                _ = win32.QueryPerformanceCounter(&last_counter);
+
+                var last_cycle_count = rdtsc();
 
                 while (global_running) {
                     var message: win32.MSG = undefined;
@@ -644,7 +666,10 @@ pub export fn wWinMain(
 
                         // TODO: Change to use a lower latency offset from the play cursor when we start adding soundfx
                         if (byte_to_lock > target_cursor) {
-                            bytes_to_write = @as(u32, @intCast(sound_output.secondary_buffer_size)) - byte_to_lock;
+                            bytes_to_write = @as(
+                                u32,
+                                @intCast(sound_output.secondary_buffer_size),
+                            ) - byte_to_lock;
                             bytes_to_write += target_cursor;
                         } else {
                             bytes_to_write = target_cursor - byte_to_lock;
@@ -666,7 +691,45 @@ pub export fn wWinMain(
                         dimension.height,
                     );
 
-                    x_offset += 1;
+                    var end_cycle_count = rdtsc();
+
+                    var end_counter: win32.LARGE_INTEGER = undefined;
+                    _ = win32.QueryPerformanceCounter(&end_counter);
+
+                    var cycles_elapsed = end_cycle_count - last_cycle_count;
+                    var counter_elapsed = end_counter.QuadPart -
+                        last_counter.QuadPart;
+                    var ms_per_frame = @as(f32, @floatFromInt(1000 * counter_elapsed)) /
+                        @as(f32, @floatFromInt(perf_count_frequency));
+                    var fps = @as(f32, @floatFromInt(perf_count_frequency)) /
+                        @as(f32, (@floatFromInt(counter_elapsed)));
+                    var mega_cycles_per_frame = @as(f32, @floatFromInt(cycles_elapsed)) /
+                        @as(f32, @floatFromInt(1000 * 1000));
+
+                    // Trying to print floats with wsprintf does not appear to cause a problem
+                    // Including sprintf perhaps not worth it since we can only see messages from
+                    // std.debug.print() anyways
+                    // Leaving this code here for posterity
+                    // var buffer = [_]u8{0} ** 255;
+                    // var args = [_]f32{ ms_per_frame, fps, mega_cycles_per_frame };
+                    // _ = win32.wvsprintfA(
+                    //     @as([*:0]u8, @ptrCast(&buffer)),
+                    //     "%fms/f, %ff/s, %fmc/f\n",
+                    //     @as(*i8, @ptrCast(&args)),
+                    // );
+                    // win32.OutputDebugStringA(@as(
+                    //     [*:0]u8,
+                    //     @ptrCast(&buffer),
+                    // ));
+
+                    std.debug.print("{d:6.2}ms/f, {d:6.2}f/s, {d:6.2}mc/f\n", .{
+                        ms_per_frame,
+                        fps,
+                        mega_cycles_per_frame,
+                    });
+
+                    last_counter = end_counter;
+                    last_cycle_count = end_cycle_count;
                 }
             } else {
                 // TODO: logging
