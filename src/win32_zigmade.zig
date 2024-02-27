@@ -222,30 +222,30 @@ fn win32_resize_dib_section(
     height: i32,
 ) !void {
     // TODO: Maybe don't free first, free after, then free first if that fails
-    if (buffer.*.memory != undefined) {
-        _ = win32.VirtualFree(buffer.*.memory, 0, win32.MEM_RELEASE);
+    if (buffer.memory != undefined) {
+        _ = win32.VirtualFree(buffer.memory, 0, win32.MEM_RELEASE);
     }
 
-    buffer.*.width = width;
-    buffer.*.height = height;
-    buffer.*.bytes_per_pixel = 4;
+    buffer.width = width;
+    buffer.height = height;
+    buffer.bytes_per_pixel = 4;
 
-    buffer.*.info.bmiHeader.biSize = @sizeOf(@TypeOf(buffer.*.info.bmiHeader));
-    buffer.*.info.bmiHeader.biWidth = buffer.*.width;
-    buffer.*.info.bmiHeader.biHeight = -buffer.*.height;
-    buffer.*.info.bmiHeader.biPlanes = 1;
-    buffer.*.info.bmiHeader.biBitCount = 32;
-    buffer.*.info.bmiHeader.biCompression = win32.BI_RGB;
+    buffer.info.bmiHeader.biSize = @sizeOf(@TypeOf(buffer.info.bmiHeader));
+    buffer.info.bmiHeader.biWidth = buffer.width;
+    buffer.info.bmiHeader.biHeight = -buffer.height;
+    buffer.info.bmiHeader.biPlanes = 1;
+    buffer.info.bmiHeader.biBitCount = 32;
+    buffer.info.bmiHeader.biCompression = win32.BI_RGB;
 
-    var bitmap_memory_size = buffer.*.bytes_per_pixel * (buffer.*.width * buffer.*.height);
-    buffer.*.memory = win32.VirtualAlloc(
+    var bitmap_memory_size = buffer.bytes_per_pixel * (buffer.width * buffer.height);
+    buffer.memory = win32.VirtualAlloc(
         null,
         @intCast(bitmap_memory_size),
         win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
         win32.PAGE_READWRITE,
     );
 
-    buffer.*.pitch = width * buffer.*.bytes_per_pixel;
+    buffer.pitch = width * buffer.bytes_per_pixel;
 
     // TODO: clear bitmap to black
 }
@@ -600,21 +600,21 @@ pub export fn wWinMain(
                             // TODO: See if controller_state.dwPacketNumber increments too quickly
                             var pad: *win32.XINPUT_GAMEPAD = &controller_state.Gamepad;
 
-                            // var up = pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP;
-                            // var down = pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN;
-                            // var left = pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT;
-                            // var right = pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT;
-                            // var start = pad.*.wButtons & win32.XINPUT_GAMEPAD_START;
-                            // var back = pad.*.wButtons & win32.XINPUT_GAMEPAD_BACK;
-                            // var left_shoulder = pad.*.wButtons & win32.XINPUT_GAMEPAD_LEFT_SHOULDER;
-                            // var right_shoulder = pad.*.wButtons & win32.XINPUT_GAMEPAD_RIGHT_SHOULDER;
-                            // var a_button = pad.*.wButtons & win32.XINPUT_GAMEPAD_A;
-                            // var b_button = pad.*.wButtons & win32.XINPUT_GAMEPAD_B;
-                            // var x_button = pad.*.wButtons & win32.XINPUT_GAMEPAD_X;
-                            // var y_button = pad.*.wButtons & win32.XINPUT_GAMEPAD_Y;
+                            // var up = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP;
+                            // var down = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN;
+                            // var left = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT;
+                            // var right = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT;
+                            // var start = pad.wButtons & win32.XINPUT_GAMEPAD_START;
+                            // var back = pad.wButtons & win32.XINPUT_GAMEPAD_BACK;
+                            // var left_shoulder = pad.wButtons & win32.XINPUT_GAMEPAD_LEFT_SHOULDER;
+                            // var right_shoulder = pad.wButtons & win32.XINPUT_GAMEPAD_RIGHT_SHOULDER;
+                            // var a_button = pad.wButtons & win32.XINPUT_GAMEPAD_A;
+                            // var b_button = pad.wButtons & win32.XINPUT_GAMEPAD_B;
+                            // var x_button = pad.wButtons & win32.XINPUT_GAMEPAD_X;
+                            // var y_button = pad.wButtons & win32.XINPUT_GAMEPAD_Y;
 
-                            var stick_x = pad.*.sThumbLX;
-                            var stick_y = pad.*.sThumbLY;
+                            var stick_x = pad.sThumbLX;
+                            var stick_y = pad.sThumbLY;
 
                             // NOTE: we will do deadzone handling later using
                             x_offset += @divFloor(stick_x, 4096);
