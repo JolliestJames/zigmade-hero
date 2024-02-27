@@ -68,14 +68,26 @@ var direct_sound_create: *const fn (
 
 fn win32_load_x_input() !void {
     if (win32.LoadLibraryA(win32.XINPUT_DLL)) |x_input_library| {
-        if (win32.GetProcAddress(x_input_library, "XInputGetState")) |x_input_get_state| {
-            XInputGetState.call = @as(@TypeOf(XInputGetState.call), @ptrCast(x_input_get_state));
+        if (win32.GetProcAddress(
+            x_input_library,
+            "XInputGetState",
+        )) |x_input_get_state| {
+            XInputGetState.call = @as(
+                @TypeOf(XInputGetState.call),
+                @ptrCast(x_input_get_state),
+            );
         } else {
             XInputGetState.call = XInputGetState.stub;
         }
 
-        if (win32.GetProcAddress(x_input_library, "XInputSetState")) |x_input_set_state| {
-            XInputSetState.call = @as(@TypeOf(XInputSetState.call), @ptrCast(x_input_set_state));
+        if (win32.GetProcAddress(
+            x_input_library,
+            "XInputSetState",
+        )) |x_input_set_state| {
+            XInputSetState.call = @as(
+                @TypeOf(XInputSetState.call),
+                @ptrCast(x_input_set_state),
+            );
         } else {
             XInputSetState.call = XInputSetState.stub;
         }
@@ -92,11 +104,22 @@ fn win32_init_direct_sound(
     buffer_size: i32,
 ) !void {
     if (win32.LoadLibraryA("dsound.dll")) |direct_sound_library| {
-        if (win32.GetProcAddress(direct_sound_library, "DirectSoundCreate")) |direct_sound_create_address| {
-            direct_sound_create = @as(@TypeOf(direct_sound_create), @ptrCast(direct_sound_create_address));
+        if (win32.GetProcAddress(
+            direct_sound_library,
+            "DirectSoundCreate",
+        )) |direct_sound_create_address| {
+            direct_sound_create = @as(
+                @TypeOf(direct_sound_create),
+                @ptrCast(direct_sound_create_address),
+            );
+
             var maybe_direct_sound: ?*win32.IDirectSound = undefined;
 
-            if (win32.SUCCEEDED(direct_sound_create(null, &maybe_direct_sound, null))) {
+            if (win32.SUCCEEDED(direct_sound_create(
+                null,
+                &maybe_direct_sound,
+                null,
+            ))) {
                 var direct_sound = maybe_direct_sound.?;
 
                 var wave_format = std.mem.zeroInit(win32.WAVEFORMATEX, .{});
