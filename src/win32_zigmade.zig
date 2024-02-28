@@ -1,4 +1,23 @@
+//
+// TODO:
+// - Saved game locations
+// - Getting a handle to our own exe
+// - Asset loading path
+// - Threading
+// - Raw input
+// - Sleep/timeBeginPeriod
+// - ClipCursor() for multimonitor support
+// - Fullscreen support
+// - WM_SETCURSOR to control cursor visibilty
+// - QueryCancelAutoplay
+// - WM_ACTIVATEAPP for when we are not the active application
+// - Blit speed improvements with BitBlt
+// - Hardware acceleration (OpenGL/Direct3D/Both)
+// - GetKeyboardLayout for French keyboards/intnl WASD support
+//
+
 const std = @import("std");
+const zigmade = @import("zigmade/zigmade.zig");
 
 const WINAPI = std.os.windows.WINAPI;
 
@@ -153,7 +172,6 @@ fn win32_init_direct_sound(
                             primary_buffer,
                             &wave_format,
                         ))) {
-                            // NOTE: we finally have the format!
                             std.debug.print("Primary buffer format set.\n", .{});
                         } else {
                             // TODO: diagnostic
@@ -179,7 +197,6 @@ fn win32_init_direct_sound(
                     null,
                 ))) {
                     global_secondary_buffer = maybe_secondary_buffer.?;
-                    // Start playing?
                     std.debug.print("Secondary buffer format created.\n", .{});
                 } else {
                     // TODO: diagnostic
@@ -203,40 +220,6 @@ fn win32_get_window_dimension(window: win32.HWND) !WindowDimension {
     result.height = client_rect.bottom - client_rect.top;
 
     return (result);
-}
-
-fn render_weird_gradient(
-    buffer: *BackBuffer,
-    blue_offset: i32,
-    green_offset: i32,
-) !void {
-    var row: [*]u8 = @ptrCast(buffer.memory);
-
-    for (0..@intCast(buffer.height)) |y| {
-        var pixel: [*]u32 = @ptrCast(@alignCast(row));
-
-        for (0..@intCast(buffer.width)) |x| {
-            var blue: u32 = @as(
-                u8,
-                @truncate(x + @as(
-                    u32,
-                    @bitCast(blue_offset),
-                )),
-            );
-            var green: u32 = @as(
-                u8,
-                @truncate(y + @as(
-                    u32,
-                    @bitCast(green_offset),
-                )),
-            );
-
-            pixel[0] = (green << 8) | blue;
-            pixel += 1;
-        }
-
-        row += @as(usize, @intCast(buffer.pitch));
-    }
 }
 
 fn win32_resize_dib_section(
@@ -492,7 +475,7 @@ inline fn rdtsc() u64 {
     var low: u32 = undefined;
     var high: u32 = undefined;
 
-    asm ("rdtsc"
+    asm volatile ("rdtsc"
         : [low] "={eax}" (low),
           [high] "={edx}" (high),
     );
@@ -506,9 +489,9 @@ pub export fn wWinMain(
     _: [*:0]u16,
     _: u32,
 ) callconv(WINAPI) c_int {
-    var perf_count_frequency_result: win32.LARGE_INTEGER = undefined;
-    _ = win32.QueryPerformanceFrequency(&perf_count_frequency_result);
-    var perf_count_frequency = perf_count_frequency_result.QuadPart;
+    //var perf_count_frequency_result: win32.LARGE_INTEGER = undefined;
+    //_ = win32.QueryPerformanceFrequency(&perf_count_frequency_result);
+    //var perf_count_frequency = perf_count_frequency_result.QuadPart;
 
     try win32_load_x_input();
 
@@ -664,7 +647,13 @@ pub export fn wWinMain(
                     // vibration.wRightMotorSpeed = 60000;
                     // _ = XInputSetState.call(0, &vibration);
 
-                    try render_weird_gradient(&global_back_buffer, x_offset, y_offset);
+                    var buffer: zigmade.GameOffscreenBuffer = std.mem.zeroInit(zigmade.GameOffscreenBuffer, .{});
+                    buffer.memory = global_back_buffer.memory;
+                    buffer.width = global_back_buffer.width;
+                    buffer.height = global_back_buffer.height;
+                    buffer.pitch = global_back_buffer.pitch;
+
+                    try zigmade.game_update_and_render(&buffer, x_offset, y_offset);
 
                     // NOTE: DirectSound output test
                     var play_cursor: u32 = undefined;
@@ -687,7 +676,6 @@ pub export fn wWinMain(
 
                         var bytes_to_write: u32 = undefined;
 
-                        // TODO: Change to use a lower latency offset from the play cursor when we start adding soundfx
                         if (byte_to_lock > target_cursor) {
                             bytes_to_write = @as(
                                 u32,
@@ -719,15 +707,15 @@ pub export fn wWinMain(
                     var end_counter: win32.LARGE_INTEGER = undefined;
                     _ = win32.QueryPerformanceCounter(&end_counter);
 
-                    var cycles_elapsed = end_cycle_count - last_cycle_count;
-                    var counter_elapsed = end_counter.QuadPart -
-                        last_counter.QuadPart;
-                    var ms_per_frame = @as(f32, @floatFromInt(1000 * counter_elapsed)) /
-                        @as(f32, @floatFromInt(perf_count_frequency));
-                    var fps = @as(f32, @floatFromInt(perf_count_frequency)) /
-                        @as(f32, (@floatFromInt(counter_elapsed)));
-                    var mega_cycles_per_frame = @as(f32, @floatFromInt(cycles_elapsed)) /
-                        @as(f32, @floatFromInt(1000 * 1000));
+                    //var cycles_elapsed = end_cycle_count - last_cycle_count;
+                    //var counter_elapsed = end_counter.QuadPart -
+                    //    last_counter.QuadPart;
+                    //var ms_per_frame = @as(f32, @floatFromInt(1000 * counter_elapsed)) /
+                    //    @as(f32, @floatFromInt(perf_count_frequency));
+                    //var fps = @as(f32, @floatFromInt(perf_count_frequency)) /
+                    //    @as(f32, (@floatFromInt(counter_elapsed)));
+                    //var mega_cycles_per_frame = @as(f32, @floatFromInt(cycles_elapsed)) /
+                    //    @as(f32, @floatFromInt(1000 * 1000));
 
                     // Trying to print floats with wsprintf does not appear to cause a problem
                     // Including sprintf perhaps not worth it since we can only see messages from
@@ -745,11 +733,11 @@ pub export fn wWinMain(
                     //     @ptrCast(&buffer),
                     // ));
 
-                    std.debug.print("{d:6.2}ms/f, {d:6.2}f/s, {d:6.2}mc/f\n", .{
-                        ms_per_frame,
-                        fps,
-                        mega_cycles_per_frame,
-                    });
+                    //std.debug.print("{d:6.2}ms/f, {d:6.2}f/s, {d:6.2}mc/f\n", .{
+                    //    ms_per_frame,
+                    //    fps,
+                    //    mega_cycles_per_frame,
+                    //});
 
                     last_counter = end_counter;
                     last_cycle_count = end_cycle_count;
