@@ -597,8 +597,6 @@ pub export fn wWinMain(
                     win32.DSBPLAY_LOOPING,
                 );
 
-                var sound_is_playing = false;
-                _ = sound_is_playing;
                 global_running = true;
 
                 // TODO: pool with bitmap VirtualAlloc
