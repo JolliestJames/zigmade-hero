@@ -20,6 +20,7 @@ const std = @import("std");
 const zigmade = @import("zigmade/zigmade.zig");
 
 const WINAPI = std.os.windows.WINAPI;
+const DEBUG = false;
 
 const win32 = struct {
     usingnamespace @import("win32").zig;
@@ -156,7 +157,7 @@ fn win32_init_direct_sound(
                     win32.DSSCL_PRIORITY,
                 ))) {
                     var buffer_description = std.mem.zeroInit(win32.DSBUFFERDESC, .{});
-                    buffer_description.dwSize = @sizeOf(win32.DSBUFFERDESC);
+                    buffer_description.dwSize = @sizeOf(@TypeOf(buffer_description));
                     buffer_description.dwFlags = win32.DSBCAPS_PRIMARYBUFFER;
                     var maybe_primary_buffer: ?*win32.IDirectSoundBuffer = undefined;
 
@@ -376,86 +377,120 @@ const Win32SoundOutput = struct {
     latency_sample_count: i32,
 };
 
+fn win32_clear_buffer(sound_output: *Win32SoundOutput) !void {
+    var region_1: ?*anyopaque = undefined;
+    var region_1_size: u32 = undefined;
+    var region_2: ?*anyopaque = undefined;
+    var region_2_size: u32 = undefined;
+
+    if (win32.SUCCEEDED(global_secondary_buffer.vtable.Lock(
+        global_secondary_buffer,
+        0,
+        @as(u32, @intCast(sound_output.secondary_buffer_size)),
+        &region_1,
+        &region_1_size,
+        &region_2,
+        &region_2_size,
+        0,
+    ))) {
+        if (region_1) |region| {
+            var dest_sample = @as([*]i8, @alignCast(@ptrCast(region)));
+
+            for (0..region_1_size) |i| {
+                dest_sample[i] = 0;
+            }
+        }
+
+        if (region_2) |region| {
+            var dest_sample = @as([*]i8, @alignCast(@ptrCast(region)));
+
+            for (0..region_2_size) |i| {
+                dest_sample[i] = 0;
+            }
+        }
+
+        _ = global_secondary_buffer.vtable.Unlock(
+            global_secondary_buffer,
+            region_1,
+            region_1_size,
+            region_2,
+            region_2_size,
+        );
+    }
+}
+
 fn win32_fill_sound_buffer(
     sound_output: *Win32SoundOutput,
     byte_to_lock: u32,
     bytes_to_write: u32,
+    source_buffer: *zigmade.SoundBuffer,
 ) !void {
-    var maybe_region_1: ?*anyopaque = undefined;
+    var region_1: ?*anyopaque = undefined;
     var region_1_size: u32 = undefined;
-    var maybe_region_2: ?*anyopaque = undefined;
+    var region_2: ?*anyopaque = undefined;
     var region_2_size: u32 = undefined;
 
     if (win32.SUCCEEDED(global_secondary_buffer.vtable.Lock(
         global_secondary_buffer,
         byte_to_lock,
         bytes_to_write,
-        &maybe_region_1,
+        &region_1,
         &region_1_size,
-        &maybe_region_2,
+        &region_2,
         &region_2_size,
         0,
     ))) {
-        if (maybe_region_1) |region_1| {
-            var region_1_sample_count: u32 =
-                region_1_size / @as(u32, @intCast(sound_output.bytes_per_sample));
-            var sample_out = @as([*]i16, @alignCast(@ptrCast(region_1)));
+        //if (region_1) |region| {
+        //    var region_1_sample_count: u32 =
+        //        region_1_size / @as(u32, @intCast(sound_output.bytes_per_sample));
+        //    var sample_out = @as([*]i16, @alignCast(@ptrCast(region)));
 
-            for (0..region_1_sample_count) |_| {
-                var sine_value: f32 = std.math.sin(sound_output.t_sine);
-                var sample_value: i16 = @as(
-                    i16,
-                    @intFromFloat(
-                        sine_value * @as(
-                            f32,
-                            @floatFromInt(sound_output.tone_volume),
-                        ),
-                    ),
-                );
+        //    for (0..region_1_sample_count) |i| {
+        //        var sine_value: f32 = std.math.sin(sound_output.t_sine);
+        //        var sample_value: i16 = @as(i16, @intFromFloat(
+        //            sine_value * @as(
+        //                f32,
+        //                @floatFromInt(sound_output.tone_volume),
+        //            ),
+        //        ));
 
-                sample_out[0] = sample_value;
-                sample_out += 1;
-                sample_out[0] = sample_value;
-                sample_out += 1;
+        //        sample_out[i * 2] = sample_value;
+        //        sample_out[i * 2 + 1] = sample_value;
 
-                sound_output.t_sine +=
-                    2.0 *
-                    std.math.pi *
-                    1.0 /
-                    @as(f32, @floatFromInt(sound_output.wave_period));
+        //        sound_output.t_sine +=
+        //            2.0 *
+        //            std.math.pi *
+        //            1.0 /
+        //            @as(f32, @floatFromInt(sound_output.wave_period));
+
+        //        sound_output.running_sample_index += 1;
+        //    }
+        //}
+
+        // TODO: assert that region size is valid
+        if (region_1) |region| {
+            var region_1_sample_count: u32 = region_1_size /
+                @as(u32, @intCast(sound_output.bytes_per_sample));
+            var dest_sample = @as([*]i16, @alignCast(@ptrCast(region)));
+            var source_sample = source_buffer.samples;
+
+            for (0..region_1_sample_count) |i| {
+                dest_sample[i * 2] = source_sample[i * 2];
+                dest_sample[i * 2 + 1] = source_sample[i * 2 + 1];
 
                 sound_output.running_sample_index += 1;
             }
         }
 
-        if (maybe_region_2) |region_2| {
-            var region_2_sample_count: u32 =
-                region_2_size /
+        if (region_2) |region| {
+            var region_2_sample_count: u32 = region_2_size /
                 @as(u32, @intCast(sound_output.bytes_per_sample));
-            var sample_out = @as([*]i16, @alignCast(@ptrCast(region_2)));
+            var dest_sample = @as([*]i16, @alignCast(@ptrCast(region)));
+            var source_sample = source_buffer.samples;
 
-            for (0..region_2_sample_count) |_| {
-                var sine_value: f32 = std.math.sin(sound_output.t_sine);
-                var sample_value: i16 = @as(
-                    i16,
-                    @intFromFloat(
-                        sine_value * @as(
-                            f32,
-                            @floatFromInt(sound_output.tone_volume),
-                        ),
-                    ),
-                );
-
-                sample_out[0] = sample_value;
-                sample_out += 1;
-                sample_out[0] = sample_value;
-                sample_out += 1;
-
-                sound_output.t_sine +=
-                    2.0 *
-                    std.math.pi *
-                    1.0 /
-                    @as(f32, @floatFromInt(sound_output.wave_period));
+            for (0..region_2_sample_count) |i| {
+                dest_sample[i * 2] = source_sample[i * 2];
+                dest_sample[i * 2 + 1] = source_sample[i * 2 + 1];
 
                 sound_output.running_sample_index += 1;
             }
@@ -463,9 +498,9 @@ fn win32_fill_sound_buffer(
 
         _ = global_secondary_buffer.vtable.Unlock(
             global_secondary_buffer,
-            maybe_region_1,
+            region_1,
             region_1_size,
-            maybe_region_2,
+            region_2,
             region_2_size,
         );
     }
@@ -489,9 +524,9 @@ pub export fn wWinMain(
     _: [*:0]u16,
     _: u32,
 ) callconv(WINAPI) c_int {
-    //var perf_count_frequency_result: win32.LARGE_INTEGER = undefined;
-    //_ = win32.QueryPerformanceFrequency(&perf_count_frequency_result);
-    //var perf_count_frequency = perf_count_frequency_result.QuadPart;
+    var perf_count_frequency_result: win32.LARGE_INTEGER = undefined;
+    _ = win32.QueryPerformanceFrequency(&perf_count_frequency_result);
+    var perf_count_frequency = perf_count_frequency_result.QuadPart;
 
     try win32_load_x_input();
 
@@ -528,12 +563,13 @@ pub export fn wWinMain(
                 var x_offset: i32 = 0;
                 var y_offset: i32 = 0;
 
-                var sound_output: Win32SoundOutput = undefined;
+                var sound_output: Win32SoundOutput =
+                    std.mem.zeroInit(Win32SoundOutput, .{});
+
                 sound_output.samples_per_second = 48_000;
                 sound_output.tone_hertz = 256;
                 sound_output.tone_volume = 3_000;
-                sound_output.running_sample_index = 0;
-                sound_output.wave_period = @divFloor(
+                sound_output.wave_period = @divTrunc(
                     sound_output.samples_per_second,
                     sound_output.tone_hertz,
                 );
@@ -541,7 +577,7 @@ pub export fn wWinMain(
                 sound_output.secondary_buffer_size =
                     sound_output.samples_per_second *
                     sound_output.bytes_per_sample;
-                sound_output.latency_sample_count = @divFloor(
+                sound_output.latency_sample_count = @divTrunc(
                     sound_output.samples_per_second,
                     15,
                 );
@@ -552,15 +588,7 @@ pub export fn wWinMain(
                     sound_output.secondary_buffer_size,
                 );
 
-                try win32_fill_sound_buffer(
-                    &sound_output,
-                    0,
-                    @as(
-                        u32,
-                        @intCast(sound_output.latency_sample_count *
-                            sound_output.bytes_per_sample),
-                    ),
-                );
+                try win32_clear_buffer(&sound_output);
 
                 _ = global_secondary_buffer.vtable.Play(
                     global_secondary_buffer,
@@ -569,7 +597,17 @@ pub export fn wWinMain(
                     win32.DSBPLAY_LOOPING,
                 );
 
+                var sound_is_playing = false;
+                _ = sound_is_playing;
                 global_running = true;
+
+                // TODO: pool with bitmap VirtualAlloc
+                var samples = @as([*]i16, @alignCast(@ptrCast(win32.VirtualAlloc(
+                    null,
+                    @as(usize, @intCast(sound_output.secondary_buffer_size)),
+                    win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
+                    win32.PAGE_READWRITE,
+                ))));
 
                 var last_counter: win32.LARGE_INTEGER = undefined;
                 _ = win32.QueryPerformanceCounter(&last_counter);
@@ -623,8 +661,8 @@ pub export fn wWinMain(
                             var stick_y = pad.sThumbLY;
 
                             // NOTE: we will do deadzone handling later using
-                            x_offset += @divFloor(stick_x, 4096);
-                            y_offset += @divFloor(stick_y, 4096);
+                            x_offset += @divTrunc(stick_x, 4096);
+                            y_offset += @divTrunc(stick_y, 4096);
 
                             sound_output.tone_hertz = 512 + @as(
                                 i32,
@@ -633,7 +671,7 @@ pub export fn wWinMain(
                                     30_000.0)),
                             );
 
-                            sound_output.wave_period = @divFloor(
+                            sound_output.wave_period = @divTrunc(
                                 sound_output.samples_per_second,
                                 sound_output.tone_hertz,
                             );
@@ -647,34 +685,30 @@ pub export fn wWinMain(
                     // vibration.wRightMotorSpeed = 60000;
                     // _ = XInputSetState.call(0, &vibration);
 
-                    var buffer: zigmade.GameOffscreenBuffer = std.mem.zeroInit(zigmade.GameOffscreenBuffer, .{});
-                    buffer.memory = global_back_buffer.memory;
-                    buffer.width = global_back_buffer.width;
-                    buffer.height = global_back_buffer.height;
-                    buffer.pitch = global_back_buffer.pitch;
-
-                    try zigmade.game_update_and_render(&buffer, x_offset, y_offset);
-
-                    // NOTE: DirectSound output test
+                    var byte_to_lock: u32 = undefined;
+                    var target_cursor: u32 = undefined;
+                    var bytes_to_write: u32 = undefined;
                     var play_cursor: u32 = undefined;
                     var write_cursor: u32 = undefined;
+                    var sound_is_valid = false;
 
+                    // TODO: tighten up sound logic so that we know wheree we should be writing
+                    // to and can anticipate time spent in game update
                     if (win32.SUCCEEDED(global_secondary_buffer.vtable.GetCurrentPosition(
                         global_secondary_buffer,
                         &play_cursor,
                         &write_cursor,
                     ))) {
-                        var byte_to_lock: u32 =
+                        byte_to_lock =
                             (sound_output.running_sample_index *
                             @as(u32, @intCast(sound_output.bytes_per_sample))) %
                             @as(u32, @intCast(sound_output.secondary_buffer_size));
 
-                        var target_cursor: u32 = (play_cursor +
-                            (@as(u32, @intCast(sound_output.latency_sample_count))) *
-                            @as(u32, @intCast(sound_output.bytes_per_sample))) %
+                        target_cursor =
+                            (play_cursor +
+                            (@as(u32, @intCast(sound_output.latency_sample_count)) *
+                            @as(u32, @intCast(sound_output.bytes_per_sample)))) %
                             @as(u32, @intCast(sound_output.secondary_buffer_size));
-
-                        var bytes_to_write: u32 = undefined;
 
                         if (byte_to_lock > target_cursor) {
                             bytes_to_write = @as(
@@ -686,10 +720,40 @@ pub export fn wWinMain(
                             bytes_to_write = target_cursor - byte_to_lock;
                         }
 
+                        sound_is_valid = true;
+                    }
+
+                    var sound_buffer: zigmade.SoundBuffer =
+                        std.mem.zeroInit(zigmade.SoundBuffer, .{});
+                    sound_buffer.samples_per_second = sound_output.samples_per_second;
+                    sound_buffer.sample_count = @divTrunc(
+                        @as(i32, @intCast(bytes_to_write)),
+                        sound_output.bytes_per_sample,
+                    );
+                    sound_buffer.samples = samples;
+
+                    var offscreen_buffer: zigmade.GameOffscreenBuffer =
+                        std.mem.zeroInit(zigmade.GameOffscreenBuffer, .{});
+                    offscreen_buffer.memory = global_back_buffer.memory;
+                    offscreen_buffer.width = global_back_buffer.width;
+                    offscreen_buffer.height = global_back_buffer.height;
+                    offscreen_buffer.pitch = global_back_buffer.pitch;
+
+                    try zigmade.game_update_and_render(
+                        &offscreen_buffer,
+                        x_offset,
+                        y_offset,
+                        &sound_buffer,
+                        sound_output.tone_hertz,
+                    );
+
+                    // NOTE: DirectSound output test
+                    if (sound_is_valid) {
                         try win32_fill_sound_buffer(
                             &sound_output,
                             byte_to_lock,
                             bytes_to_write,
+                            &sound_buffer,
                         );
                     }
 
@@ -707,37 +771,39 @@ pub export fn wWinMain(
                     var end_counter: win32.LARGE_INTEGER = undefined;
                     _ = win32.QueryPerformanceCounter(&end_counter);
 
-                    //var cycles_elapsed = end_cycle_count - last_cycle_count;
-                    //var counter_elapsed = end_counter.QuadPart -
-                    //    last_counter.QuadPart;
-                    //var ms_per_frame = @as(f32, @floatFromInt(1000 * counter_elapsed)) /
-                    //    @as(f32, @floatFromInt(perf_count_frequency));
-                    //var fps = @as(f32, @floatFromInt(perf_count_frequency)) /
-                    //    @as(f32, (@floatFromInt(counter_elapsed)));
-                    //var mega_cycles_per_frame = @as(f32, @floatFromInt(cycles_elapsed)) /
-                    //    @as(f32, @floatFromInt(1000 * 1000));
+                    if (DEBUG) {
+                        var cycles_elapsed = end_cycle_count - last_cycle_count;
+                        var counter_elapsed = end_counter.QuadPart -
+                            last_counter.QuadPart;
+                        var ms_per_frame = @as(f32, @floatFromInt(1000 * counter_elapsed)) /
+                            @as(f32, @floatFromInt(perf_count_frequency));
+                        var fps = @as(f32, @floatFromInt(perf_count_frequency)) /
+                            @as(f32, (@floatFromInt(counter_elapsed)));
+                        var mega_cycles_per_frame = @as(f32, @floatFromInt(cycles_elapsed)) /
+                            @as(f32, @floatFromInt(1000 * 1000));
 
-                    // Trying to print floats with wsprintf does not appear to cause a problem
-                    // Including sprintf perhaps not worth it since we can only see messages from
-                    // std.debug.print() anyways
-                    // Leaving this code here for posterity
-                    // var buffer = [_]u8{0} ** 255;
-                    // var args = [_]f32{ ms_per_frame, fps, mega_cycles_per_frame };
-                    // _ = win32.wvsprintfA(
-                    //     @as([*:0]u8, @ptrCast(&buffer)),
-                    //     "%fms/f, %ff/s, %fmc/f\n",
-                    //     @as(*i8, @ptrCast(&args)),
-                    // );
-                    // win32.OutputDebugStringA(@as(
-                    //     [*:0]u8,
-                    //     @ptrCast(&buffer),
-                    // ));
+                        // Trying to print floats with wsprintf does not appear to cause a problem
+                        // Including sprintf perhaps not worth it since we can only see messages from
+                        // std.debug.print() anyways
+                        // Leaving this code here for posterity
+                        // var buffer = [_]u8{0} ** 255;
+                        // var args = [_]f32{ ms_per_frame, fps, mega_cycles_per_frame };
+                        // _ = win32.wvsprintfA(
+                        //     @as([*:0]u8, @ptrCast(&buffer)),
+                        //     ",%fms/f, %ff/s, %fmc/f\n",
+                        //     @as(*i8, @ptrCast(&args)),
+                        // );
+                        // win32.OutputDebugStringA(@as(
+                        //     [*:0]u8,
+                        //     @ptrCast(&buffer),
+                        // ));
 
-                    //std.debug.print("{d:6.2}ms/f, {d:6.2}f/s, {d:6.2}mc/f\n", .{
-                    //    ms_per_frame,
-                    //    fps,
-                    //    mega_cycles_per_frame,
-                    //});
+                        std.debug.print("{d:6.2}ms/f, {d:6.2}f/s, {d:6.2}mc/f\n", .{
+                            ms_per_frame,
+                            fps,
+                            mega_cycles_per_frame,
+                        });
+                    }
 
                     last_counter = end_counter;
                     last_cycle_count = end_cycle_count;
