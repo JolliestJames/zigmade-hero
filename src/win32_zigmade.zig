@@ -654,7 +654,7 @@ pub export fn wWinMain(
                             new_controller.end_x = x;
 
                             var y = if (pad.sThumbLY < 0)
-                                @as(f32, @floatFromInt(pad.sThumbLY)) / -32768.0
+                                @as(f32, @floatFromInt(pad.sThumbLY)) / 32768.0
                             else
                                 @as(f32, @floatFromInt(pad.sThumbLY)) / 32767.0;
 
