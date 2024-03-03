@@ -40,11 +40,11 @@ const win32 = struct {
 };
 
 const BackBuffer = struct {
-    info: win32.BITMAPINFO = undefined,
     memory: ?*anyopaque = undefined,
-    width: i32 = undefined,
-    height: i32 = undefined,
-    pitch: i32 = undefined,
+    info: win32.BITMAPINFO,
+    width: i32,
+    height: i32,
+    pitch: i32,
     bytes_per_pixel: i32 = 4,
 };
 
@@ -54,8 +54,8 @@ var global_back_buffer: BackBuffer = undefined;
 var global_secondary_buffer: *win32.IDirectSoundBuffer = undefined;
 
 const WindowDimension = struct {
-    width: i32 = undefined,
-    height: i32 = undefined,
+    width: i32,
+    height: i32,
 };
 
 const XInputGetState = struct {
@@ -367,13 +367,9 @@ fn win32_main_window_callback(
 
 const Win32SoundOutput = struct {
     samples_per_second: i32,
-    tone_hertz: i32,
-    tone_volume: i16,
     running_sample_index: u32,
-    wave_period: i32,
     bytes_per_sample: i32,
     secondary_buffer_size: i32,
-    t_sine: f32,
     latency_sample_count: i32,
 };
 
@@ -394,7 +390,7 @@ fn win32_clear_buffer(sound_output: *Win32SoundOutput) !void {
         0,
     ))) {
         if (region_1) |region| {
-            var dest_sample = @as([*]i8, @alignCast(@ptrCast(region)));
+            var dest_sample: [*]i8 = @alignCast(@ptrCast(region));
 
             for (0..region_1_size) |i| {
                 dest_sample[i] = 0;
@@ -402,7 +398,7 @@ fn win32_clear_buffer(sound_output: *Win32SoundOutput) !void {
         }
 
         if (region_2) |region| {
-            var dest_sample = @as([*]i8, @alignCast(@ptrCast(region)));
+            var dest_sample: [*]i8 = @alignCast(@ptrCast(region));
 
             for (0..region_2_size) |i| {
                 dest_sample[i] = 0;
@@ -423,7 +419,7 @@ fn win32_fill_sound_buffer(
     sound_output: *Win32SoundOutput,
     byte_to_lock: u32,
     bytes_to_write: u32,
-    source_buffer: *zigmade.SoundBuffer,
+    source_buffer: *zigmade.GameSoundBuffer,
 ) !void {
     var region_1: ?*anyopaque = undefined;
     var region_1_size: u32 = undefined;
@@ -440,38 +436,11 @@ fn win32_fill_sound_buffer(
         &region_2_size,
         0,
     ))) {
-        //if (region_1) |region| {
-        //    var region_1_sample_count: u32 =
-        //        region_1_size / @as(u32, @intCast(sound_output.bytes_per_sample));
-        //    var sample_out = @as([*]i16, @alignCast(@ptrCast(region)));
-
-        //    for (0..region_1_sample_count) |i| {
-        //        var sine_value: f32 = std.math.sin(sound_output.t_sine);
-        //        var sample_value: i16 = @as(i16, @intFromFloat(
-        //            sine_value * @as(
-        //                f32,
-        //                @floatFromInt(sound_output.tone_volume),
-        //            ),
-        //        ));
-
-        //        sample_out[i * 2] = sample_value;
-        //        sample_out[i * 2 + 1] = sample_value;
-
-        //        sound_output.t_sine +=
-        //            2.0 *
-        //            std.math.pi *
-        //            1.0 /
-        //            @as(f32, @floatFromInt(sound_output.wave_period));
-
-        //        sound_output.running_sample_index += 1;
-        //    }
-        //}
-
         // TODO: assert that region size is valid
         if (region_1) |region| {
             var region_1_sample_count: u32 = region_1_size /
                 @as(u32, @intCast(sound_output.bytes_per_sample));
-            var dest_sample = @as([*]i16, @alignCast(@ptrCast(region)));
+            var dest_sample: [*]i16 = @alignCast(@ptrCast(region));
             var source_sample = source_buffer.samples;
 
             for (0..region_1_sample_count) |i| {
@@ -485,7 +454,7 @@ fn win32_fill_sound_buffer(
         if (region_2) |region| {
             var region_2_sample_count: u32 = region_2_size /
                 @as(u32, @intCast(sound_output.bytes_per_sample));
-            var dest_sample = @as([*]i16, @alignCast(@ptrCast(region)));
+            var dest_sample: [*]i16 = @alignCast(@ptrCast(region));
             var source_sample = source_buffer.samples;
 
             for (0..region_2_sample_count) |i| {
@@ -504,6 +473,17 @@ fn win32_fill_sound_buffer(
             region_2_size,
         );
     }
+}
+
+fn win32_process_x_input_digital_button(
+    button_state: u32,
+    new_state: *zigmade.GameButtonState,
+    old_state: *zigmade.GameButtonState,
+    button_bit: u32,
+) !void {
+    new_state.ended_down = ((button_state & button_bit) == button_bit);
+    new_state.half_transition_count =
+        if (old_state.ended_down != new_state.ended_down) 1 else 0;
 }
 
 inline fn rdtsc() u64 {
@@ -561,18 +541,14 @@ pub export fn wWinMain(
         )) |window| {
             if (win32.GetDC(window)) |device_context| {
                 var x_offset: i32 = 0;
+                _ = x_offset;
                 var y_offset: i32 = 0;
+                _ = y_offset;
 
                 var sound_output: Win32SoundOutput =
                     std.mem.zeroInit(Win32SoundOutput, .{});
 
                 sound_output.samples_per_second = 48_000;
-                sound_output.tone_hertz = 256;
-                sound_output.tone_volume = 3_000;
-                sound_output.wave_period = @divTrunc(
-                    sound_output.samples_per_second,
-                    sound_output.tone_hertz,
-                );
                 sound_output.bytes_per_sample = @sizeOf(i16) * 2;
                 sound_output.secondary_buffer_size =
                     sound_output.samples_per_second *
@@ -600,12 +576,16 @@ pub export fn wWinMain(
                 global_running = true;
 
                 // TODO: pool with bitmap VirtualAlloc
-                var samples = @as([*]i16, @alignCast(@ptrCast(win32.VirtualAlloc(
+                var samples = win32.VirtualAlloc(
                     null,
                     @as(usize, @intCast(sound_output.secondary_buffer_size)),
                     win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
                     win32.PAGE_READWRITE,
-                ))));
+                );
+
+                var inputs: [2]zigmade.GameInput = undefined;
+                var new_input = &inputs[0];
+                var old_input = &inputs[1];
 
                 var last_counter: win32.LARGE_INTEGER = undefined;
                 _ = win32.QueryPerformanceCounter(&last_counter);
@@ -631,7 +611,14 @@ pub export fn wWinMain(
                     }
 
                     // TODO: should we poll this more frequently?
+                    var max_controller_count = win32.XUSER_MAX_COUNT;
+                    if (max_controller_count > new_input.controllers.len) {
+                        max_controller_count = new_input.controllers.len;
+                    }
+
                     for (0..win32.XUSER_MAX_COUNT) |controller_index| {
+                        var old_controller: *zigmade.GameControllerInput = &old_input.controllers[controller_index];
+                        var new_controller: *zigmade.GameControllerInput = &new_input.controllers[controller_index];
                         var controller_state: win32.XINPUT_STATE = undefined;
 
                         if (XInputGetState.call(
@@ -642,37 +629,78 @@ pub export fn wWinMain(
                             // TODO: See if controller_state.dwPacketNumber increments too quickly
                             var pad: *win32.XINPUT_GAMEPAD = &controller_state.Gamepad;
 
+                            // TODO: Dpad
                             // var up = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP;
                             // var down = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN;
                             // var left = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT;
                             // var right = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT;
+
+                            new_controller.is_analog = true;
+                            new_controller.start_x = old_controller.end_x;
+                            new_controller.start_y = old_controller.end_y;
+
+                            // TODO: dead zone processing
+                            //win32.XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+                            //win32.XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
+
+                            // TODO: Min/max "macros" in Zig with comptime?
+                            var x = if (pad.sThumbLX < 0)
+                                @as(f32, @floatFromInt(pad.sThumbLX)) / 32768.0
+                            else
+                                @as(f32, @floatFromInt(pad.sThumbLX)) / 32767.0;
+
+                            new_controller.min_x = x;
+                            new_controller.max_x = x;
+                            new_controller.end_x = x;
+
+                            var y = if (pad.sThumbLY < 0)
+                                @as(f32, @floatFromInt(pad.sThumbLY)) / -32768.0
+                            else
+                                @as(f32, @floatFromInt(pad.sThumbLY)) / 32767.0;
+
+                            new_controller.min_y = y;
+                            new_controller.max_y = y;
+                            new_controller.end_y = y;
+
+                            try win32_process_x_input_digital_button(
+                                pad.wButtons,
+                                &old_controller.buttons.map.down,
+                                &new_controller.buttons.map.down,
+                                win32.XINPUT_GAMEPAD_A,
+                            );
+                            try win32_process_x_input_digital_button(
+                                pad.wButtons,
+                                &old_controller.buttons.map.right,
+                                &new_controller.buttons.map.right,
+                                win32.XINPUT_GAMEPAD_B,
+                            );
+                            try win32_process_x_input_digital_button(
+                                pad.wButtons,
+                                &old_controller.buttons.map.left,
+                                &new_controller.buttons.map.left,
+                                win32.XINPUT_GAMEPAD_X,
+                            );
+                            try win32_process_x_input_digital_button(
+                                pad.wButtons,
+                                &old_controller.buttons.map.up,
+                                &new_controller.buttons.map.up,
+                                win32.XINPUT_GAMEPAD_Y,
+                            );
+                            try win32_process_x_input_digital_button(
+                                pad.wButtons,
+                                &old_controller.buttons.map.left_shoulder,
+                                &new_controller.buttons.map.left_shoulder,
+                                win32.XINPUT_GAMEPAD_LEFT_SHOULDER,
+                            );
+                            try win32_process_x_input_digital_button(
+                                pad.wButtons,
+                                &old_controller.buttons.map.right_shoulder,
+                                &new_controller.buttons.map.right_shoulder,
+                                win32.XINPUT_GAMEPAD_RIGHT_SHOULDER,
+                            );
+
                             // var start = pad.wButtons & win32.XINPUT_GAMEPAD_START;
                             // var back = pad.wButtons & win32.XINPUT_GAMEPAD_BACK;
-                            // var left_shoulder = pad.wButtons & win32.XINPUT_GAMEPAD_LEFT_SHOULDER;
-                            // var right_shoulder = pad.wButtons & win32.XINPUT_GAMEPAD_RIGHT_SHOULDER;
-                            // var a_button = pad.wButtons & win32.XINPUT_GAMEPAD_A;
-                            // var b_button = pad.wButtons & win32.XINPUT_GAMEPAD_B;
-                            // var x_button = pad.wButtons & win32.XINPUT_GAMEPAD_X;
-                            // var y_button = pad.wButtons & win32.XINPUT_GAMEPAD_Y;
-
-                            var stick_x = pad.sThumbLX;
-                            var stick_y = pad.sThumbLY;
-
-                            // NOTE: we will do deadzone handling later using
-                            x_offset += @divTrunc(stick_x, 4096);
-                            y_offset += @divTrunc(stick_y, 4096);
-
-                            sound_output.tone_hertz = 512 + @as(
-                                i32,
-                                @intFromFloat(256.0 *
-                                    (@as(f32, @floatFromInt(stick_y)) /
-                                    30_000.0)),
-                            );
-
-                            sound_output.wave_period = @divTrunc(
-                                sound_output.samples_per_second,
-                                sound_output.tone_hertz,
-                            );
                         } else {
                             // NOTE: Controller is unavailable
                         }
@@ -683,25 +711,34 @@ pub export fn wWinMain(
                     // vibration.wRightMotorSpeed = 60000;
                     // _ = XInputSetState.call(0, &vibration);
 
-                    var byte_to_lock: u32 = undefined;
-                    var target_cursor: u32 = undefined;
-                    var bytes_to_write: u32 = undefined;
-                    var play_cursor: u32 = undefined;
-                    var write_cursor: u32 = undefined;
+                    // TODO: Make sure this is guarded entirely
+                    var byte_to_lock: u32 = 0;
+                    var target_cursor: u32 = 0;
+                    var bytes_to_write: u32 = 0;
+                    var play_cursor: u32 = 0;
+                    var write_cursor: u32 = 0;
                     var sound_is_valid = false;
 
-                    // TODO: tighten up sound logic so that we know wheree we should be writing
+                    // TODO: tighten up sound logic so that we know where we should be writing
                     // to and can anticipate time spent in game update
+                    // NOTE: Sounds skips on every new loop of the buffer (1 second), so the sine
+                    // wave is not properly lining up on either side of the buffer similar to
+                    // the bug Casey observed in episode 9
                     if (win32.SUCCEEDED(global_secondary_buffer.vtable.GetCurrentPosition(
                         global_secondary_buffer,
                         &play_cursor,
                         &write_cursor,
                     ))) {
+                        // The remainder of the division of the # of bytes per sample
+                        // divided by the entire buffer size tells us which byte to lock
+                        // for continuing to write
                         byte_to_lock =
                             (sound_output.running_sample_index *
                             @as(u32, @intCast(sound_output.bytes_per_sample))) %
                             @as(u32, @intCast(sound_output.secondary_buffer_size));
 
+                        // The target cursor is the remainder of the distance from the
+                        // play cursor + total bytes divided by the entire buffer size
                         target_cursor =
                             (play_cursor +
                             (@as(u32, @intCast(sound_output.latency_sample_count)) *
@@ -721,14 +758,14 @@ pub export fn wWinMain(
                         sound_is_valid = true;
                     }
 
-                    var sound_buffer: zigmade.SoundBuffer =
-                        std.mem.zeroInit(zigmade.SoundBuffer, .{});
+                    var sound_buffer: zigmade.GameSoundBuffer =
+                        std.mem.zeroInit(zigmade.GameSoundBuffer, .{});
                     sound_buffer.samples_per_second = sound_output.samples_per_second;
                     sound_buffer.sample_count = @divTrunc(
                         @as(i32, @intCast(bytes_to_write)),
                         sound_output.bytes_per_sample,
                     );
-                    sound_buffer.samples = samples;
+                    sound_buffer.samples = @alignCast(@ptrCast(samples));
 
                     var offscreen_buffer: zigmade.GameOffscreenBuffer =
                         std.mem.zeroInit(zigmade.GameOffscreenBuffer, .{});
@@ -738,11 +775,9 @@ pub export fn wWinMain(
                     offscreen_buffer.pitch = global_back_buffer.pitch;
 
                     try zigmade.game_update_and_render(
+                        new_input,
                         &offscreen_buffer,
-                        x_offset,
-                        y_offset,
                         &sound_buffer,
-                        sound_output.tone_hertz,
                     );
 
                     // NOTE: DirectSound output test
@@ -805,6 +840,11 @@ pub export fn wWinMain(
 
                     last_counter = end_counter;
                     last_cycle_count = end_cycle_count;
+
+                    var temp = new_input;
+                    new_input = old_input;
+                    old_input = temp;
+                    // TODO: should we clear these here?
                 }
             } else {
                 // TODO: logging
