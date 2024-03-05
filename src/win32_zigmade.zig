@@ -134,7 +134,6 @@ fn debug_platform_read_entire_file(file_name: [*:0]const u8) zigmade.DebugReadFi
 
         _ = win32.CloseHandle(handle);
     } else {
-        std.debug.print("what happened?", .{});
         // TODO: Logging
     }
 
