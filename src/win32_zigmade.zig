@@ -26,6 +26,7 @@ const INTERNAL = @import("options").INTERNAL;
 const win32 = struct {
     usingnamespace @import("win32").zig;
     usingnamespace @import("win32").foundation;
+    usingnamespace @import("win32").storage.file_system;
     usingnamespace @import("win32").system;
     usingnamespace @import("win32").system.com;
     usingnamespace @import("win32").system.memory;
@@ -79,6 +80,120 @@ const XInputSetState = struct {
     fn stub(_: u32, _: ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize {
         return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
     }
+};
+
+fn debug_platform_read_entire_file(file_name: [*:0]const u8) zigmade.DebugReadFileResult {
+    var result: zigmade.DebugReadFileResult = undefined;
+
+    var handle = win32.CreateFileA(
+        file_name,
+        win32.FILE_GENERIC_READ,
+        win32.FILE_SHARE_READ,
+        null,
+        win32.OPEN_EXISTING,
+        win32.FILE_FLAGS_AND_ATTRIBUTES{},
+        null,
+    );
+
+    if (handle != win32.INVALID_HANDLE_VALUE) {
+        var file_size: win32.LARGE_INTEGER = undefined;
+
+        if (win32.GetFileSizeEx(handle, &file_size) > 0) {
+            var file_size32 = zigmade.safe_truncate_u64(@as(u64, @intCast(file_size.QuadPart)));
+
+            result.contents = win32.VirtualAlloc(
+                null,
+                file_size32,
+                win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
+                win32.PAGE_READWRITE,
+            );
+
+            if (result.contents) |contents| {
+                var bytes_read: u32 = undefined;
+
+                if (win32.ReadFile(
+                    handle,
+                    contents,
+                    file_size32,
+                    &bytes_read,
+                    null,
+                ) > 0 and file_size32 == bytes_read) {
+                    // NOTE: File read successfully
+                    result.size = file_size32;
+                } else {
+                    // TODO: Logging
+                    debug_platform_free_file_memory(result.contents);
+                    result.contents = null;
+                }
+            } else {
+                // TODO: Logging
+            }
+        } else {
+            // TODO: Logging
+        }
+
+        _ = win32.CloseHandle(handle);
+    } else {
+        std.debug.print("what happened?", .{});
+        // TODO: Logging
+    }
+
+    return result;
+}
+
+fn debug_platform_free_file_memory(maybe_memory: ?*anyopaque) void {
+    if (maybe_memory) |memory| {
+        _ = win32.VirtualFree(memory, 0, win32.MEM_RELEASE);
+    }
+}
+
+fn debug_platform_write_entire_file(
+    file_name: [*:0]const u8,
+    memory_size: u32,
+    memory: ?*anyopaque,
+) bool {
+    var result = false;
+
+    var handle = win32.CreateFileA(
+        file_name,
+        win32.FILE_GENERIC_WRITE,
+        win32.FILE_SHARE_NONE,
+        null,
+        win32.CREATE_ALWAYS,
+        win32.FILE_FLAGS_AND_ATTRIBUTES{},
+        null,
+    );
+
+    std.debug.print("good {s}\n", .{handle});
+
+    if (handle != win32.INVALID_HANDLE_VALUE) {
+        var bytes_written: u32 = undefined;
+
+        if (win32.WriteFile(
+            handle,
+            memory,
+            memory_size,
+            &bytes_written,
+            null,
+        ) > 0) {
+            // NOTE: File written successfully
+            result = (bytes_written == memory_size);
+        } else {
+            // TODO: Logging
+        }
+
+        _ = win32.CloseHandle(handle);
+    } else {
+        // TODO: Logging
+    }
+
+    return result;
+}
+
+const win32_platform = zigmade.Platform{
+    .debug_platform_read_entire_file = debug_platform_read_entire_file,
+    .debug_platform_free_file_memory = debug_platform_free_file_memory,
+    .debug_platform_write_entire_file = debug_platform_write_entire_file,
 };
 
 var direct_sound_create: *const fn (
@@ -597,6 +712,7 @@ pub export fn wWinMain(
                 game_memory.permanent_storage_size = zigmade.Megabytes(64);
                 game_memory.transient_storage_size = zigmade.Gigabytes(4);
 
+                // TODO: Handle various memory footprints using system metrics
                 var total_size = game_memory.permanent_storage_size +
                     game_memory.transient_storage_size;
 
@@ -810,6 +926,7 @@ pub export fn wWinMain(
                         );
 
                         try zigmade.game_update_and_render(
+                            &win32_platform,
                             &game_memory,
                             new_input,
                             &offscreen_buffer,

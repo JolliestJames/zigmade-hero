@@ -23,16 +23,9 @@ pub inline fn safe_truncate_u64(value: u64) u32 {
     return @as(u32, @truncate(value));
 }
 
-// NOTE: Services that the platform layer provides to the game
+// TODO: Services that the platform layer provides to the game
 
-// IMORTANT: These are not for doing anything in the shipped game
-// they are blocking and the write will not protect against
-// lost data!
-pub const DebugReadFileResult = struct {
-    size: u32,
-    contents: ?*anyopaque = undefined,
-};
-
+// NOTE: Platform layer must define
 pub const Platform = struct {
     debug_platform_read_entire_file: *const fn ([*:0]const u8) DebugReadFileResult,
     debug_platform_free_file_memory: *const fn (?*anyopaque) void,
@@ -41,6 +34,11 @@ pub const Platform = struct {
         u32,
         ?*anyopaque,
     ) bool,
+};
+
+pub const DebugReadFileResult = struct {
+    size: u32,
+    contents: ?*anyopaque = undefined,
 };
 
 // NOTE: Services that the game provides to the platform layer
