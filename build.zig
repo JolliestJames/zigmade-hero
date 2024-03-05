@@ -15,12 +15,10 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const internal = b.option(bool, "internal", "Build for internal use only") orelse true;
-    const debug = b.option(bool, "debug", "Debug platform layer concerns, such as wall clock time") orelse false;
+    const debug = b.option(bool, "debug_wall_clock", "Debug platform layer concerns, such as wall clock time") orelse false;
 
     const options = b.addOptions();
-    options.addOption(bool, "INTERNAL", internal);
-    options.addOption(bool, "DEBUG", debug);
+    options.addOption(bool, "DEBUG_WALL_CLOCK", debug);
 
     const win32 = b.createModule(.{
         .source_file = .{ .path = "./src/zigwin32/win32.zig" },

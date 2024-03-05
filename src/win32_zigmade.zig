@@ -20,8 +20,8 @@ const std = @import("std");
 const zigmade = @import("zigmade/zigmade.zig");
 
 const WINAPI = std.os.windows.WINAPI;
-const DEBUG = @import("options").DEBUG;
-const INTERNAL = @import("options").INTERNAL;
+const DEBUG_WALL_CLOCK = @import("options").DEBUG_WALL_CLOCK;
+const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
 const win32 = struct {
     usingnamespace @import("win32").zig;
@@ -760,7 +760,7 @@ pub export fn wWinMain(
                             max_controller_count = new_input.controllers.len;
                         }
 
-                        for (0..win32.XUSER_MAX_COUNT) |controller_index| {
+                        for (0..max_controller_count) |controller_index| {
                             var old_controller: *zigmade.GameControllerInput =
                                 &old_input.controllers[controller_index];
                             var new_controller: *zigmade.GameControllerInput =
@@ -955,7 +955,7 @@ pub export fn wWinMain(
                         var end_counter: win32.LARGE_INTEGER = undefined;
                         _ = win32.QueryPerformanceCounter(&end_counter);
 
-                        if (DEBUG) {
+                        if (DEBUG_WALL_CLOCK) {
                             var cycles_elapsed = end_cycle_count - last_cycle_count;
                             var counter_elapsed = end_counter.QuadPart -
                                 last_counter.QuadPart;
