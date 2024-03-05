@@ -164,8 +164,6 @@ fn debug_platform_write_entire_file(
         null,
     );
 
-    std.debug.print("good {s}\n", .{handle});
-
     if (handle != win32.INVALID_HANDLE_VALUE) {
         var bytes_written: u32 = undefined;
 
@@ -997,6 +995,7 @@ pub export fn wWinMain(
                         var temp = new_input;
                         new_input = old_input;
                         old_input = temp;
+
                         // TODO: should we clear these here?
                     }
                 } else {
