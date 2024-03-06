@@ -572,6 +572,78 @@ fn win32_process_x_input_digital_button(
         if (old_state.ended_down != new_state.ended_down) 1 else 0;
 }
 
+fn win32_process_pending_messages(keyboard_controller: *zigmade.GameControllerInput) !void {
+    var message: win32.MSG = undefined;
+
+    while (win32.PeekMessageW(
+        &message,
+        null,
+        0,
+        0,
+        win32.PM_REMOVE,
+    ) > 0) {
+        switch (message.message) {
+            win32.WM_QUIT => global_running = false,
+            win32.WM_SYSKEYDOWN,
+            win32.WM_SYSKEYUP,
+            win32.WM_KEYDOWN,
+            win32.WM_KEYUP,
+            => {
+                var vk_code: win32.VIRTUAL_KEY = @enumFromInt(message.wParam);
+                var was_down = (message.lParam & (1 << 30)) != 0;
+                var is_down = (message.lParam & (1 << 31)) == 0;
+
+                if (was_down != is_down) {
+                    switch (vk_code) {
+                        win32.VK_W => win32.OutputDebugStringA("W\n"),
+                        win32.VK_A => win32.OutputDebugStringA("A\n"),
+                        win32.VK_S => win32.OutputDebugStringA("S\n"),
+                        win32.VK_D => win32.OutputDebugStringA("D\n"),
+                        win32.VK_Q => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.left_shoulder,
+                            is_down,
+                        ),
+                        win32.VK_E => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.right_shoulder,
+                            is_down,
+                        ),
+                        win32.VK_UP => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.up,
+                            is_down,
+                        ),
+                        win32.VK_DOWN => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.down,
+                            is_down,
+                        ),
+                        win32.VK_LEFT => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.left,
+                            is_down,
+                        ),
+                        win32.VK_RIGHT => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.right,
+                            is_down,
+                        ),
+                        win32.VK_ESCAPE => {
+                            global_running = false;
+                        },
+                        win32.VK_SPACE => win32.OutputDebugStringA("VK_SPACE\n"),
+                        else => {},
+                    }
+                }
+
+                var alt_key_was_down: bool = (message.lParam & (1 << 29)) != 0;
+                if (vk_code == win32.VK_F4 and alt_key_was_down) {
+                    global_running = false;
+                }
+            },
+            else => {
+                _ = win32.TranslateMessage(&message);
+                _ = win32.DispatchMessageW(&message);
+            },
+        }
+    }
+}
+
 inline fn rdtsc() u64 {
     var low: u32 = undefined;
     var high: u32 = undefined;
@@ -705,86 +777,15 @@ pub export fn wWinMain(
                     var last_cycle_count = rdtsc();
 
                     while (global_running) {
-                        var message: win32.MSG = undefined;
-
-                        var keyboard_controller: *zigmade.GameControllerInput =
-                            &new_input.controllers[0];
                         // TODO: Zeroing "macro" with comptime
                         // TODO: We can't zero everything because the up/down state will be wrong
+                        var keyboard_controller: *zigmade.GameControllerInput =
+                            &new_input.controllers[0];
                         var zeroed: zigmade.GameControllerInput =
                             std.mem.zeroInit(zigmade.GameControllerInput, .{});
                         keyboard_controller.* = zeroed;
 
-                        while (win32.PeekMessageW(
-                            &message,
-                            null,
-                            0,
-                            0,
-                            win32.PM_REMOVE,
-                        ) > 0) {
-                            if (message.message == win32.WM_QUIT) {
-                                global_running = false;
-                            }
-
-                            switch (message.message) {
-                                win32.WM_SYSKEYDOWN,
-                                win32.WM_SYSKEYUP,
-                                win32.WM_KEYDOWN,
-                                win32.WM_KEYUP,
-                                => {
-                                    var vk_code: win32.VIRTUAL_KEY = @enumFromInt(message.wParam);
-                                    var was_down = (message.lParam & (1 << 30)) != 0;
-                                    var is_down = (message.lParam & (1 << 31)) == 0;
-
-                                    if (was_down != is_down) {
-                                        switch (vk_code) {
-                                            win32.VK_W => win32.OutputDebugStringA("W\n"),
-                                            win32.VK_A => win32.OutputDebugStringA("A\n"),
-                                            win32.VK_S => win32.OutputDebugStringA("S\n"),
-                                            win32.VK_D => win32.OutputDebugStringA("D\n"),
-                                            win32.VK_Q => try win32_process_keyboard_message(
-                                                &keyboard_controller.buttons.map.left_shoulder,
-                                                is_down,
-                                            ),
-                                            win32.VK_E => try win32_process_keyboard_message(
-                                                &keyboard_controller.buttons.map.right_shoulder,
-                                                is_down,
-                                            ),
-                                            win32.VK_UP => try win32_process_keyboard_message(
-                                                &keyboard_controller.buttons.map.up,
-                                                is_down,
-                                            ),
-                                            win32.VK_DOWN => try win32_process_keyboard_message(
-                                                &keyboard_controller.buttons.map.down,
-                                                is_down,
-                                            ),
-                                            win32.VK_LEFT => try win32_process_keyboard_message(
-                                                &keyboard_controller.buttons.map.left,
-                                                is_down,
-                                            ),
-                                            win32.VK_RIGHT => try win32_process_keyboard_message(
-                                                &keyboard_controller.buttons.map.right,
-                                                is_down,
-                                            ),
-                                            win32.VK_ESCAPE => {
-                                                global_running = false;
-                                            },
-                                            win32.VK_SPACE => win32.OutputDebugStringA("VK_SPACE\n"),
-                                            else => {},
-                                        }
-                                    }
-
-                                    var alt_key_was_down: bool = (message.lParam & (1 << 29)) != 0;
-                                    if (vk_code == win32.VK_F4 and alt_key_was_down) {
-                                        global_running = false;
-                                    }
-                                },
-                                else => {
-                                    _ = win32.TranslateMessage(&message);
-                                    _ = win32.DispatchMessageW(&message);
-                                },
-                            }
-                        }
+                        try win32_process_pending_messages(keyboard_controller);
 
                         // TODO: should we poll this more frequently?
                         var max_controller_count = win32.XUSER_MAX_COUNT;
