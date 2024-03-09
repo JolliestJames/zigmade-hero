@@ -557,6 +557,7 @@ fn win32_process_keyboard_message(
     new_state: *zigmade.GameButtonState,
     is_down: bool,
 ) !void {
+    std.debug.assert(new_state.ended_down != is_down);
     new_state.ended_down = is_down;
     new_state.half_transition_count += 1;
 }
@@ -570,6 +571,21 @@ fn win32_process_x_input_digital_button(
     new_state.ended_down = ((button_state & button_bit) == button_bit);
     new_state.half_transition_count =
         if (old_state.ended_down != new_state.ended_down) 1 else 0;
+}
+
+fn win32_process_x_input_stick_value(
+    value: i16,
+    deadzone_threshold: i16,
+) !f32 {
+    var result: f32 = 0;
+
+    if (value < -deadzone_threshold) {
+        result = @as(f32, @floatFromInt(value)) / 32768.0;
+    } else if (value > deadzone_threshold) {
+        result = @as(f32, @floatFromInt(value)) / 32767.0;
+    }
+
+    return result;
 }
 
 fn win32_process_pending_messages(keyboard_controller: *zigmade.GameControllerInput) !void {
@@ -595,10 +611,24 @@ fn win32_process_pending_messages(keyboard_controller: *zigmade.GameControllerIn
 
                 if (was_down != is_down) {
                     switch (vk_code) {
-                        win32.VK_W => win32.OutputDebugStringA("W\n"),
-                        win32.VK_A => win32.OutputDebugStringA("A\n"),
-                        win32.VK_S => win32.OutputDebugStringA("S\n"),
-                        win32.VK_D => win32.OutputDebugStringA("D\n"),
+                        win32.VK_W => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.move_up,
+                            is_down,
+                        ),
+
+                        win32.VK_A => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.move_left,
+                            is_down,
+                        ),
+
+                        win32.VK_S => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.move_down,
+                            is_down,
+                        ),
+                        win32.VK_D => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.move_right,
+                            is_down,
+                        ),
                         win32.VK_Q => try win32_process_keyboard_message(
                             &keyboard_controller.buttons.map.left_shoulder,
                             is_down,
@@ -608,25 +638,29 @@ fn win32_process_pending_messages(keyboard_controller: *zigmade.GameControllerIn
                             is_down,
                         ),
                         win32.VK_UP => try win32_process_keyboard_message(
-                            &keyboard_controller.buttons.map.up,
+                            &keyboard_controller.buttons.map.action_up,
                             is_down,
                         ),
                         win32.VK_DOWN => try win32_process_keyboard_message(
-                            &keyboard_controller.buttons.map.down,
+                            &keyboard_controller.buttons.map.action_down,
                             is_down,
                         ),
                         win32.VK_LEFT => try win32_process_keyboard_message(
-                            &keyboard_controller.buttons.map.left,
+                            &keyboard_controller.buttons.map.action_left,
                             is_down,
                         ),
                         win32.VK_RIGHT => try win32_process_keyboard_message(
-                            &keyboard_controller.buttons.map.right,
+                            &keyboard_controller.buttons.map.action_right,
                             is_down,
                         ),
-                        win32.VK_ESCAPE => {
-                            global_running = false;
-                        },
-                        win32.VK_SPACE => win32.OutputDebugStringA("VK_SPACE\n"),
+                        win32.VK_ESCAPE => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.start,
+                            is_down,
+                        ),
+                        win32.VK_SPACE => try win32_process_keyboard_message(
+                            &keyboard_controller.buttons.map.back,
+                            is_down,
+                        ),
                         else => {},
                     }
                 }
@@ -741,7 +775,8 @@ pub export fn wWinMain(
                     win32.PAGE_READWRITE,
                 );
 
-                var base_address: ?*anyopaque = if (INTERNAL)
+                var base_address: ?*anyopaque =
+                    if (INTERNAL)
                     @ptrFromInt(zigmade.Terabytes(2))
                 else
                     null;
@@ -779,90 +814,133 @@ pub export fn wWinMain(
                     while (global_running) {
                         // TODO: Zeroing "macro" with comptime
                         // TODO: We can't zero everything because the up/down state will be wrong
-                        var keyboard_controller: *zigmade.GameControllerInput =
-                            &new_input.controllers[0];
+                        // NOTE: Index 0 belongs to keyboard
+                        var old_keyboard_controller: *zigmade.GameControllerInput =
+                            try zigmade.get_controller(old_input, 0);
+                        var new_keyboard_controller: *zigmade.GameControllerInput =
+                            try zigmade.get_controller(new_input, 0);
                         var zeroed: zigmade.GameControllerInput =
                             std.mem.zeroInit(zigmade.GameControllerInput, .{});
-                        keyboard_controller.* = zeroed;
+                        new_keyboard_controller.* = zeroed;
+                        new_keyboard_controller.is_connected = true;
 
-                        try win32_process_pending_messages(keyboard_controller);
-
-                        // TODO: should we poll this more frequently?
-                        var max_controller_count = win32.XUSER_MAX_COUNT;
-                        if (max_controller_count > new_input.controllers.len) {
-                            max_controller_count = new_input.controllers.len;
+                        for (0..new_keyboard_controller.buttons.array.len) |button_index| {
+                            new_keyboard_controller.buttons.array[button_index].ended_down =
+                                old_keyboard_controller.buttons.array[button_index].ended_down;
                         }
 
+                        try win32_process_pending_messages(new_keyboard_controller);
+
+                        // TODO: Need to not poll disconnected controllers
+                        // to avoid xinput frame ratre hit on older libraries
+                        // TODO: should we poll this more frequently?
+                        var max_controller_count = win32.XUSER_MAX_COUNT;
+                        if (max_controller_count > new_input.controllers.len - 1) {
+                            max_controller_count = new_input.controllers.len - 1;
+                        }
+
+                        // NOTE: Indices 1..4 belong to gamepad
                         for (0..max_controller_count) |controller_index| {
+                            var our_index = controller_index + 1;
                             var old_controller: *zigmade.GameControllerInput =
-                                &old_input.controllers[controller_index];
+                                try zigmade.get_controller(old_input, our_index);
                             var new_controller: *zigmade.GameControllerInput =
-                                &new_input.controllers[controller_index];
+                                try zigmade.get_controller(new_input, our_index);
                             var controller_state: win32.XINPUT_STATE = undefined;
 
                             if (XInputGetState.call(
                                 @as(u32, @intCast(controller_index)),
                                 &controller_state,
                             ) == @intFromEnum(win32.ERROR_SUCCESS)) {
+                                new_controller.is_connected = true;
+
                                 // NOTE: Controller is plugged in
                                 // TODO: See if controller_state.dwPacketNumber increments too quickly
                                 var pad: *win32.XINPUT_GAMEPAD = &controller_state.Gamepad;
 
-                                // TODO: Dpad
-                                // var up = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP;
-                                // var down = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN;
-                                // var left = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT;
-                                // var right = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT;
-
                                 new_controller.is_analog = true;
-                                new_controller.start_x = old_controller.end_x;
-                                new_controller.start_y = old_controller.end_y;
+                                new_controller.stick_average_x = try win32_process_x_input_stick_value(
+                                    pad.sThumbLX,
+                                    win32.XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
+                                );
+                                new_controller.stick_average_y = try win32_process_x_input_stick_value(
+                                    pad.sThumbLY,
+                                    win32.XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
+                                );
 
-                                // TODO: dead zone processing
-                                //win32.XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
-                                //win32.XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
+                                if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) > 0) {
+                                    new_controller.stick_average_y = 1.0;
+                                }
+                                if (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN > 0) {
+                                    new_controller.stick_average_y = -1.0;
+                                }
+                                if (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT > 0) {
+                                    new_controller.stick_average_x = -1.0;
+                                }
+                                if (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT > 0) {
+                                    new_controller.stick_average_x = 1.0;
+                                }
 
-                                // TODO: Min/max "macros" in Zig with comptime?
-                                var x = if (pad.sThumbLX < 0)
-                                    @as(f32, @floatFromInt(pad.sThumbLX)) / 32768.0
-                                else
-                                    @as(f32, @floatFromInt(pad.sThumbLX)) / 32767.0;
-
-                                new_controller.min_x = x;
-                                new_controller.max_x = x;
-                                new_controller.end_x = x;
-
-                                var y = if (pad.sThumbLY < 0)
-                                    @as(f32, @floatFromInt(pad.sThumbLY)) / 32768.0
-                                else
-                                    @as(f32, @floatFromInt(pad.sThumbLY)) / 32767.0;
-
-                                new_controller.min_y = y;
-                                new_controller.max_y = y;
-                                new_controller.end_y = y;
+                                var threshold: f32 = 0.5;
+                                try win32_process_x_input_digital_button(
+                                    if (new_controller.stick_average_x < -threshold)
+                                        1
+                                    else
+                                        0,
+                                    &old_controller.buttons.map.move_left,
+                                    &new_controller.buttons.map.move_left,
+                                    1,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    if (new_controller.stick_average_x > threshold)
+                                        1
+                                    else
+                                        0,
+                                    &old_controller.buttons.map.move_left,
+                                    &new_controller.buttons.map.move_left,
+                                    1,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    if (new_controller.stick_average_y < -threshold)
+                                        1
+                                    else
+                                        0,
+                                    &old_controller.buttons.map.move_left,
+                                    &new_controller.buttons.map.move_left,
+                                    1,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    if (new_controller.stick_average_y > threshold)
+                                        1
+                                    else
+                                        0,
+                                    &old_controller.buttons.map.move_left,
+                                    &new_controller.buttons.map.move_left,
+                                    1,
+                                );
 
                                 try win32_process_x_input_digital_button(
                                     pad.wButtons,
-                                    &old_controller.buttons.map.down,
-                                    &new_controller.buttons.map.down,
+                                    &old_controller.buttons.map.action_down,
+                                    &new_controller.buttons.map.action_down,
                                     win32.XINPUT_GAMEPAD_A,
                                 );
                                 try win32_process_x_input_digital_button(
                                     pad.wButtons,
-                                    &old_controller.buttons.map.right,
-                                    &new_controller.buttons.map.right,
+                                    &old_controller.buttons.map.action_right,
+                                    &new_controller.buttons.map.action_right,
                                     win32.XINPUT_GAMEPAD_B,
                                 );
                                 try win32_process_x_input_digital_button(
                                     pad.wButtons,
-                                    &old_controller.buttons.map.left,
-                                    &new_controller.buttons.map.left,
+                                    &old_controller.buttons.map.action_left,
+                                    &new_controller.buttons.map.action_left,
                                     win32.XINPUT_GAMEPAD_X,
                                 );
                                 try win32_process_x_input_digital_button(
                                     pad.wButtons,
-                                    &old_controller.buttons.map.up,
-                                    &new_controller.buttons.map.up,
+                                    &old_controller.buttons.map.action_up,
+                                    &new_controller.buttons.map.action_up,
                                     win32.XINPUT_GAMEPAD_Y,
                                 );
                                 try win32_process_x_input_digital_button(
@@ -877,11 +955,24 @@ pub export fn wWinMain(
                                     &new_controller.buttons.map.right_shoulder,
                                     win32.XINPUT_GAMEPAD_RIGHT_SHOULDER,
                                 );
+                                try win32_process_x_input_digital_button(
+                                    pad.wButtons,
+                                    &old_controller.buttons.map.start,
+                                    &new_controller.buttons.map.start,
+                                    win32.XINPUT_GAMEPAD_START,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    pad.wButtons,
+                                    &old_controller.buttons.map.back,
+                                    &new_controller.buttons.map.back,
+                                    win32.XINPUT_GAMEPAD_BACK,
+                                );
 
                                 // var start = pad.wButtons & win32.XINPUT_GAMEPAD_START;
                                 // var back = pad.wButtons & win32.XINPUT_GAMEPAD_BACK;
                             } else {
                                 // NOTE: Controller is unavailable
+                                new_controller.is_connected = false;
                             }
                         }
 

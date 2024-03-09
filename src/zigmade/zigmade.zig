@@ -68,32 +68,40 @@ pub const GameButtonState = extern struct {
 // TODO: maybe there's a better way to represent button state
 // in the controller since fields may not be nameless in Zig
 pub const GameControllerInput = struct {
+    is_connected: bool,
     is_analog: bool,
-    start_x: f32,
-    start_y: f32,
-    min_x: f32,
-    min_y: f32,
-    max_x: f32,
-    max_y: f32,
-    end_x: f32,
-    end_y: f32,
+    stick_average_x: f32,
+    stick_average_y: f32,
+
     buttons: extern union {
-        array: [6]GameButtonState,
+        array: [12]GameButtonState,
         map: extern struct {
-            up: GameButtonState,
-            down: GameButtonState,
-            left: GameButtonState,
-            right: GameButtonState,
+            move_up: GameButtonState,
+            move_down: GameButtonState,
+            move_left: GameButtonState,
+            move_right: GameButtonState,
+            action_up: GameButtonState,
+            action_down: GameButtonState,
+            action_left: GameButtonState,
+            action_right: GameButtonState,
             left_shoulder: GameButtonState,
             right_shoulder: GameButtonState,
+            start: GameButtonState,
+            back: GameButtonState,
         },
     },
 };
 
 pub const GameInput = struct {
     // TODO: Insert clock value here
-    controllers: [4]GameControllerInput,
+    controllers: [5]GameControllerInput,
 };
+
+pub fn get_controller(input: *GameInput, index: usize) !*GameControllerInput {
+    std.debug.assert(index < input.controllers.len);
+    var result = &input.controllers[index];
+    return (result);
+}
 
 pub const GameMemory = struct {
     is_initialized: bool = false,
@@ -208,22 +216,32 @@ pub fn game_update_and_render(
         memory.is_initialized = true;
     }
 
-    var input_0: *GameControllerInput = &input.controllers[0];
+    for (0..input.controllers.len) |controller_index| {
+        var controller: *GameControllerInput =
+            try get_controller(input, controller_index);
 
-    if (input_0.is_analog) {
-        // NOTE: Use analog movement tuning
-        game_state.blue_offset += @as(i32, @intFromFloat(
-            4.0 * (input_0.end_x),
-        ));
-        game_state.tone_hertz = 256 +
-            @as(i32, @intFromFloat(128.0 *
-            (input_0.end_y)));
-    } else {
-        // NOTE: Use digital movement tuning
-    }
+        if (controller.is_analog) {
+            // NOTE: Use analog movement tuning
+            game_state.blue_offset += @as(i32, @intFromFloat(
+                4.0 * (controller.stick_average_x),
+            ));
+            game_state.tone_hertz = 256 +
+                @as(i32, @intFromFloat(128.0 *
+                (controller.stick_average_y)));
+        } else {
+            // NOTE: Use digital movement tuning
+            if (controller.buttons.map.move_left.ended_down) {
+                game_state.blue_offset -= 1;
+            }
 
-    if (input_0.buttons.map.down.ended_down) {
-        game_state.green_offset += 1;
+            if (controller.buttons.map.move_right.ended_down) {
+                game_state.blue_offset += 1;
+            }
+        }
+
+        if (controller.buttons.map.action_down.ended_down) {
+            game_state.green_offset += 1;
+        }
     }
 
     // TODO: Allow sample offsets here for more robust platform options
