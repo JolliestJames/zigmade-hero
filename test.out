@@ -65,8 +65,21 @@ pub const GameButtonState = extern struct {
     ended_down: bool,
 };
 
-// TODO: maybe there's a better way to represent button state
-// in the controller since fields may not be nameless in Zig
+pub const GameButtonMap = extern struct {
+    move_up: GameButtonState,
+    move_down: GameButtonState,
+    move_left: GameButtonState,
+    move_right: GameButtonState,
+    action_up: GameButtonState,
+    action_down: GameButtonState,
+    action_left: GameButtonState,
+    action_right: GameButtonState,
+    left_shoulder: GameButtonState,
+    right_shoulder: GameButtonState,
+    start: GameButtonState,
+    back: GameButtonState,
+};
+
 pub const GameControllerInput = struct {
     is_connected: bool,
     is_analog: bool,
@@ -75,20 +88,7 @@ pub const GameControllerInput = struct {
 
     buttons: extern union {
         array: [12]GameButtonState,
-        map: extern struct {
-            move_up: GameButtonState,
-            move_down: GameButtonState,
-            move_left: GameButtonState,
-            move_right: GameButtonState,
-            action_up: GameButtonState,
-            action_down: GameButtonState,
-            action_left: GameButtonState,
-            action_right: GameButtonState,
-            left_shoulder: GameButtonState,
-            right_shoulder: GameButtonState,
-            start: GameButtonState,
-            back: GameButtonState,
-        },
+        map: GameButtonMap,
     },
 };
 
@@ -189,7 +189,9 @@ pub fn game_update_and_render(
     offscreen_buffer: *GameOffscreenBuffer,
     sound_buffer: *GameSoundBuffer,
 ) !void {
-    assert(@sizeOf(GameMemory) <= memory.permanent_storage_size);
+    assert(@sizeOf(@TypeOf(input.controllers[0].buttons.map)) ==
+        @sizeOf(GameButtonState) * input.controllers[0].buttons.array.len);
+    assert(@sizeOf(GameState) <= memory.permanent_storage_size);
 
     var game_state: *GameState = @as(
         *GameState,

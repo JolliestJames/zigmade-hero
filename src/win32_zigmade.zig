@@ -564,8 +564,8 @@ fn win32_process_keyboard_message(
 
 fn win32_process_x_input_digital_button(
     button_state: u32,
-    new_state: *zigmade.GameButtonState,
     old_state: *zigmade.GameButtonState,
+    new_state: *zigmade.GameButtonState,
     button_bit: u32,
 ) !void {
     new_state.ended_down = ((button_state & button_bit) == button_bit);
@@ -580,9 +580,11 @@ fn win32_process_x_input_stick_value(
     var result: f32 = 0;
 
     if (value < -deadzone_threshold) {
-        result = @as(f32, @floatFromInt(value)) / 32768.0;
+        result = @as(f32, @floatFromInt(value + deadzone_threshold)) /
+            (32768.0 - @as(f32, @floatFromInt(deadzone_threshold)));
     } else if (value > deadzone_threshold) {
-        result = @as(f32, @floatFromInt(value)) / 32767.0;
+        result = @as(f32, @floatFromInt(value - deadzone_threshold)) /
+            (32767.0 - @as(f32, @floatFromInt(deadzone_threshold)));
     }
 
     return result;
@@ -819,9 +821,8 @@ pub export fn wWinMain(
                             try zigmade.get_controller(old_input, 0);
                         var new_keyboard_controller: *zigmade.GameControllerInput =
                             try zigmade.get_controller(new_input, 0);
-                        var zeroed: zigmade.GameControllerInput =
+                        new_keyboard_controller.* =
                             std.mem.zeroInit(zigmade.GameControllerInput, .{});
-                        new_keyboard_controller.* = zeroed;
                         new_keyboard_controller.is_connected = true;
 
                         for (0..new_keyboard_controller.buttons.array.len) |button_index| {
@@ -858,7 +859,9 @@ pub export fn wWinMain(
                                 // TODO: See if controller_state.dwPacketNumber increments too quickly
                                 var pad: *win32.XINPUT_GAMEPAD = &controller_state.Gamepad;
 
-                                new_controller.is_analog = true;
+                                // TODO: This is a square deadzone, check XInput to
+                                // verify that the deadzone is round and show how to do
+                                // round deadzone processing
                                 new_controller.stick_average_x = try win32_process_x_input_stick_value(
                                     pad.sThumbLX,
                                     win32.XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
@@ -868,17 +871,30 @@ pub export fn wWinMain(
                                     win32.XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
                                 );
 
+                                if ((new_controller.stick_average_x != 0.0) or
+                                    (new_controller.stick_average_y != 0.0))
+                                {
+                                    new_controller.is_analog = true;
+                                }
+
                                 if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) > 0) {
                                     new_controller.stick_average_y = 1.0;
+                                    new_controller.is_analog = false;
                                 }
-                                if (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN > 0) {
+
+                                if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN) > 0) {
                                     new_controller.stick_average_y = -1.0;
+                                    new_controller.is_analog = false;
                                 }
-                                if (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT > 0) {
+
+                                if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT) > 0) {
                                     new_controller.stick_average_x = -1.0;
+                                    new_controller.is_analog = false;
                                 }
-                                if (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT > 0) {
+
+                                if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT) > 0) {
                                     new_controller.stick_average_x = 1.0;
+                                    new_controller.is_analog = false;
                                 }
 
                                 var threshold: f32 = 0.5;
@@ -896,8 +912,8 @@ pub export fn wWinMain(
                                         1
                                     else
                                         0,
-                                    &old_controller.buttons.map.move_left,
-                                    &new_controller.buttons.map.move_left,
+                                    &old_controller.buttons.map.move_right,
+                                    &new_controller.buttons.map.move_right,
                                     1,
                                 );
                                 try win32_process_x_input_digital_button(
@@ -905,8 +921,8 @@ pub export fn wWinMain(
                                         1
                                     else
                                         0,
-                                    &old_controller.buttons.map.move_left,
-                                    &new_controller.buttons.map.move_left,
+                                    &old_controller.buttons.map.move_down,
+                                    &new_controller.buttons.map.move_down,
                                     1,
                                 );
                                 try win32_process_x_input_digital_button(
@@ -914,8 +930,8 @@ pub export fn wWinMain(
                                         1
                                     else
                                         0,
-                                    &old_controller.buttons.map.move_left,
-                                    &new_controller.buttons.map.move_left,
+                                    &old_controller.buttons.map.move_up,
+                                    &new_controller.buttons.map.move_up,
                                     1,
                                 );
 
