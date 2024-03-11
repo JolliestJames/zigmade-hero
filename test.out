@@ -56,8 +56,8 @@ pub const GameOffscreenBuffer = struct {
 
 pub const GameSoundBuffer = struct {
     samples: [*]i16 = undefined,
-    samples_per_second: i32,
-    sample_count: i32,
+    samples_per_second: u32,
+    sample_count: u32,
 };
 
 pub const GameButtonState = extern struct {
@@ -127,7 +127,10 @@ fn game_output_sound(
     };
 
     const tone_volume: i16 = 3_000;
-    var wave_period = @divTrunc(sound_buffer.samples_per_second, tone_hertz);
+    var wave_period = @divTrunc(
+        @as(i32, @intCast(sound_buffer.samples_per_second)),
+        tone_hertz,
+    );
     var sample_out: [*]i16 = sound_buffer.samples;
 
     for (0..@as(usize, @intCast(sound_buffer.sample_count))) |i| {

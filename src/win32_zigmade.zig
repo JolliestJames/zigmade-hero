@@ -44,12 +44,17 @@ const win32 = struct {
 };
 
 const BackBuffer = struct {
-    memory: ?*anyopaque = undefined,
+    memory: ?*void = undefined,
     info: win32.BITMAPINFO,
     width: i32,
     height: i32,
     pitch: i32,
     bytes_per_pixel: i32 = 4,
+};
+
+const Win32DebugTimeMarker = struct {
+    play_cursor: u32,
+    write_cursor: u32,
 };
 
 // TODO: Use globals for now
@@ -236,8 +241,8 @@ fn win32_load_x_input() !void {
 
 fn win32_init_direct_sound(
     window: win32.HWND,
-    samples_per_second: i32,
-    buffer_size: i32,
+    samples_per_second: u32,
+    buffer_size: u32,
 ) !void {
     if (win32.LoadLibraryA("dsound.dll")) |direct_sound_library| {
         if (win32.GetProcAddress(
@@ -302,7 +307,7 @@ fn win32_init_direct_sound(
 
                 var buffer_description = std.mem.zeroInit(win32.DSBUFFERDESC, .{});
                 buffer_description.dwSize = @sizeOf(win32.DSBUFFERDESC);
-                buffer_description.dwFlags = 0;
+                buffer_description.dwFlags = win32.DSBCAPS_GETCURRENTPOSITION2;
                 buffer_description.dwBufferBytes = @intCast(buffer_size);
                 buffer_description.lpwfxFormat = &wave_format;
                 var maybe_secondary_buffer: ?*win32.IDirectSoundBuffer = undefined;
@@ -361,12 +366,12 @@ fn win32_resize_dib_section(
     buffer.info.bmiHeader.biCompression = win32.BI_RGB;
 
     var bitmap_memory_size = buffer.bytes_per_pixel * (buffer.width * buffer.height);
-    buffer.memory = win32.VirtualAlloc(
+    buffer.memory = @ptrCast(win32.VirtualAlloc(
         null,
         @intCast(bitmap_memory_size),
         win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
         win32.PAGE_READWRITE,
-    );
+    ));
 
     buffer.pitch = width * buffer.bytes_per_pixel;
 
@@ -447,11 +452,11 @@ fn win32_main_window_callback(
 }
 
 const Win32SoundOutput = struct {
-    samples_per_second: i32,
+    samples_per_second: u32,
     running_sample_index: u32,
-    bytes_per_sample: i32,
-    secondary_buffer_size: i32,
-    latency_sample_count: i32,
+    bytes_per_sample: u32,
+    secondary_buffer_size: u32,
+    latency_sample_count: u32,
 };
 
 fn win32_clear_buffer(sound_output: *Win32SoundOutput) !void {
@@ -463,7 +468,7 @@ fn win32_clear_buffer(sound_output: *Win32SoundOutput) !void {
     if (win32.SUCCEEDED(global_secondary_buffer.vtable.Lock(
         global_secondary_buffer,
         0,
-        @as(u32, @intCast(sound_output.secondary_buffer_size)),
+        sound_output.secondary_buffer_size,
         &region_1,
         &region_1_size,
         &region_2,
@@ -709,6 +714,102 @@ inline fn win32_get_seconds_elapsed(
         @as(f32, @floatFromInt(global_perf_count_frequency)));
 }
 
+inline fn win32_debug_sync_display(
+    back_buffer: *BackBuffer,
+    markers: []Win32DebugTimeMarker,
+    sound_output: *Win32SoundOutput,
+    target_seconds_per_frame: f32,
+) !void {
+    _ = target_seconds_per_frame;
+    // TODO: Draw where we're writing out sound
+
+    const pad_x = 16;
+    const pad_y = 16;
+
+    const top = pad_y;
+    var bottom = back_buffer.height - pad_y;
+
+    var coefficient = @as(
+        f32,
+        @floatFromInt(back_buffer.width - 2 * pad_x),
+    ) / @as(
+        f32,
+        @floatFromInt(sound_output.secondary_buffer_size),
+    );
+
+    for (markers) |marker| {
+        try win32_draw_sound_buffer_marker(
+            back_buffer,
+            sound_output,
+            coefficient,
+            pad_x,
+            top,
+            bottom,
+            marker.play_cursor,
+            0xFFFFFFFF,
+        );
+
+        try win32_draw_sound_buffer_marker(
+            back_buffer,
+            sound_output,
+            coefficient,
+            pad_x,
+            top,
+            bottom,
+            marker.write_cursor,
+            0xFFFF0000,
+        );
+    }
+}
+
+inline fn win32_draw_sound_buffer_marker(
+    back_buffer: *BackBuffer,
+    sound_output: *Win32SoundOutput,
+    coefficient: f32,
+    pad_x: i32,
+    top: i32,
+    bottom: i32,
+    value: u32,
+    color: u32,
+) !void {
+    std.debug.assert(value < sound_output.secondary_buffer_size);
+
+    var x: i32 = pad_x +
+        @as(i32, @intFromFloat(coefficient *
+        @as(f32, @floatFromInt(value))));
+
+    try win32_debug_draw_vertical(
+        back_buffer,
+        x,
+        top,
+        bottom,
+        color,
+    );
+}
+
+inline fn win32_debug_draw_vertical(
+    back_buffer: *BackBuffer,
+    x: i32,
+    top: i32,
+    bottom: i32,
+    color: u32,
+) !void {
+    var offset = @as(usize, @intCast(x *
+        back_buffer.bytes_per_pixel +
+        top *
+        back_buffer.pitch));
+
+    var pixel: [*]u8 = @as(
+        [*]u8,
+        @alignCast(@ptrCast(back_buffer.memory)),
+    ) + offset;
+
+    for (@intCast(top)..@intCast(bottom)) |_| {
+        @as([*]u32, @alignCast(@ptrCast(pixel)))[0] = color;
+        pixel += @as(usize, @intCast(back_buffer.pitch));
+    }
+}
+
 pub export fn wWinMain(
     instance: ?win32.HINSTANCE,
     _: ?win32.HINSTANCE,
@@ -728,7 +829,8 @@ pub export fn wWinMain(
 
     var window_class = std.mem.zeroInit(win32.WNDCLASSW, .{});
 
-    // TODO: would be nice to properly log when something goes wrong with these error union return types
+    // TODO: would be nice to properly log when something goes wrong
+    // with these error union return types
     try win32_resize_dib_section(&global_back_buffer, 1280, 720);
 
     window_class.style = win32.WNDCLASS_STYLES{ .HREDRAW = 1, .VREDRAW = 1 };
@@ -738,6 +840,11 @@ pub export fn wWinMain(
     window_class.lpszClassName = win32.L("HandmadeHeroWindowClass");
 
     // TODO: How do we reliably query this on Windows?
+    // TODO: Consider running non-frame-quantized for
+    // audio latency
+    // TODO: Use the write cursor delta from the play cursor
+    // to adjust the target audio latency
+    const frames_of_audio_latency = 3;
     comptime var monitor_refresh_hertz = 60;
     comptime var game_update_hertz = monitor_refresh_hertz / 2;
     var target_seconds_per_frame = 1.0 /
@@ -768,11 +875,12 @@ pub export fn wWinMain(
                 sound_output.samples_per_second = 48_000;
                 sound_output.bytes_per_sample = @sizeOf(i16) * 2;
                 sound_output.secondary_buffer_size =
-                    sound_output.samples_per_second *
-                    sound_output.bytes_per_sample;
-                sound_output.latency_sample_count = @divTrunc(
+                    @as(u32, @intCast(sound_output.samples_per_second)) *
+                    @as(u32, @intCast(sound_output.bytes_per_sample));
+                sound_output.latency_sample_count = frames_of_audio_latency *
+                    @divTrunc(
                     sound_output.samples_per_second,
-                    15,
+                    game_update_hertz,
                 );
 
                 try win32_init_direct_sound(
@@ -795,7 +903,7 @@ pub export fn wWinMain(
                 // TODO: pool with bitmap VirtualAlloc
                 var samples = win32.VirtualAlloc(
                     null,
-                    @as(usize, @intCast(sound_output.secondary_buffer_size)),
+                    sound_output.secondary_buffer_size,
                     win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
                     win32.PAGE_READWRITE,
                 );
@@ -816,7 +924,7 @@ pub export fn wWinMain(
 
                 game_memory.permanent_storage = @as([*]u8, @ptrCast(win32.VirtualAlloc(
                     base_address,
-                    @as(usize, @intCast(total_size)),
+                    @intCast(total_size),
                     win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
                     win32.PAGE_READWRITE,
                 )));
@@ -832,8 +940,14 @@ pub export fn wWinMain(
                     var old_input = &inputs[1];
 
                     var last_counter = try win32_get_wall_clock();
-                    var last_cycle_count = rdtsc();
+                    var debug_time_marker_index: usize = 0;
+                    var debug_time_markers: [game_update_hertz / 2]Win32DebugTimeMarker =
+                        std.mem.zeroes([game_update_hertz / 2]Win32DebugTimeMarker);
 
+                    var last_play_cursor: u32 = 0;
+                    var sound_is_valid = false;
+
+                    var last_cycle_count = rdtsc();
                     while (global_running) {
                         // TODO: Zeroing "macro" with comptime
                         // TODO: We can't zero everything because the up/down state will be wrong
@@ -871,7 +985,7 @@ pub export fn wWinMain(
                             var controller_state: win32.XINPUT_STATE = undefined;
 
                             if (XInputGetState.call(
-                                @as(u32, @intCast(controller_index)),
+                                @intCast(controller_index),
                                 &controller_state,
                             ) == @intFromEnum(win32.ERROR_SUCCESS)) {
                                 new_controller.is_connected = true;
@@ -1018,36 +1132,24 @@ pub export fn wWinMain(
                         // vibration.wRightMotorSpeed = 60000;
                         // _ = XInputSetState.call(0, &vibration);
 
-                        // TODO: Make sure this is guarded entirely
+                        // NOTE: Compute how much sound to write and where
                         var byte_to_lock: u32 = 0;
                         var target_cursor: u32 = 0;
                         var bytes_to_write: u32 = 0;
-                        var play_cursor: u32 = 0;
-                        var write_cursor: u32 = 0;
-                        var sound_is_valid = false;
 
                         // TODO: tighten up sound logic so that we know where we should be writing
                         // to and can anticipate time spent in game update
                         // NOTE: Sounds skips on every new loop of the buffer (1 second), so the sine
                         // wave is not properly lining up on either side of the buffer similar to
                         // the bug Casey observed in episode 9
-                        if (win32.SUCCEEDED(global_secondary_buffer.vtable.GetCurrentPosition(
-                            global_secondary_buffer,
-                            &play_cursor,
-                            &write_cursor,
-                        ))) {
-                            // The remainder of the division of the # of bytes per sample
-                            // divided by the entire buffer size tells us which byte to lock
-                            // for continuing to write
+                        if (sound_is_valid) {
                             byte_to_lock =
                                 (sound_output.running_sample_index *
                                 @as(u32, @intCast(sound_output.bytes_per_sample))) %
                                 @as(u32, @intCast(sound_output.secondary_buffer_size));
 
-                            // The target cursor is the remainder of the distance from the
-                            // play cursor + total bytes divided by the entire buffer size
                             target_cursor =
-                                (play_cursor +
+                                (last_play_cursor +
                                 (@as(u32, @intCast(sound_output.latency_sample_count)) *
                                 @as(u32, @intCast(sound_output.bytes_per_sample)))) %
                                 @as(u32, @intCast(sound_output.secondary_buffer_size));
@@ -1061,17 +1163,13 @@ pub export fn wWinMain(
                             } else {
                                 bytes_to_write = target_cursor - byte_to_lock;
                             }
-
-                            sound_is_valid = true;
                         }
 
-                        // TODO: Sound is wrong now, because we haven't updated it
-                        // to go with the new frame loop
                         var sound_buffer: zigmade.GameSoundBuffer =
                             std.mem.zeroInit(zigmade.GameSoundBuffer, .{});
                         sound_buffer.samples_per_second = sound_output.samples_per_second;
                         sound_buffer.sample_count = @divTrunc(
-                            @as(i32, @intCast(bytes_to_write)),
+                            bytes_to_write,
                             sound_output.bytes_per_sample,
                         );
                         sound_buffer.samples = @alignCast(@ptrCast(samples));
@@ -1081,10 +1179,8 @@ pub export fn wWinMain(
                         offscreen_buffer.width = global_back_buffer.width;
                         offscreen_buffer.height = global_back_buffer.height;
                         offscreen_buffer.pitch = global_back_buffer.pitch;
-                        offscreen_buffer.memory = @as(
-                            ?*void,
-                            @alignCast(@ptrCast(global_back_buffer.memory)),
-                        );
+                        offscreen_buffer.memory =
+                            @alignCast(@ptrCast(global_back_buffer.memory));
 
                         try zigmade.game_update_and_render(
                             &win32_platform,
@@ -1095,6 +1191,26 @@ pub export fn wWinMain(
                         );
 
                         if (sound_is_valid) {
+                            if (INTERNAL) {
+                                var play_cursor: u32 = 0;
+                                var write_cursor: u32 = 0;
+
+                                _ = global_secondary_buffer.vtable.GetCurrentPosition(
+                                    global_secondary_buffer,
+                                    &play_cursor,
+                                    &write_cursor,
+                                );
+
+                                std.debug.print("LPC: {}, BTL: {}, TC {}, BTW: {} - PC: {}, WC: {}\n", .{
+                                    last_play_cursor,
+                                    byte_to_lock,
+                                    target_cursor,
+                                    bytes_to_write,
+                                    play_cursor,
+                                    write_cursor,
+                                });
+                            }
+
                             try win32_fill_sound_buffer(
                                 &sound_output,
                                 byte_to_lock,
@@ -1124,12 +1240,14 @@ pub export fn wWinMain(
                                 }
                             }
 
-                            var test_seconds_elapsed_for_frame = try win32_get_seconds_elapsed(
-                                last_counter,
-                                try win32_get_wall_clock(),
-                            );
+                            //var test_seconds_elapsed_for_frame = try win32_get_seconds_elapsed(
+                            //    last_counter,
+                            //    try win32_get_wall_clock(),
+                            //);
 
-                            std.debug.assert(test_seconds_elapsed_for_frame < target_seconds_per_frame);
+                            // NOTE: this assert is possibly useless since windows will never let us
+                            // properly hit the framerate in debug mode
+                            //std.debug.assert(test_seconds_elapsed_for_frame < target_seconds_per_frame);
 
                             while (seconds_elapsed_for_frame < target_seconds_per_frame) {
                                 seconds_elapsed_for_frame = try win32_get_seconds_elapsed(
@@ -1142,7 +1260,23 @@ pub export fn wWinMain(
                             // TODO: logging
                         }
 
+                        var end_counter = try win32_get_wall_clock();
+                        var ms_per_frame = 1000.0 * try win32_get_seconds_elapsed(
+                            last_counter,
+                            end_counter,
+                        );
+                        last_counter = end_counter;
+
                         var dimension = try win32_get_window_dimension(window);
+
+                        if (INTERNAL) {
+                            try win32_debug_sync_display(
+                                &global_back_buffer,
+                                &debug_time_markers,
+                                &sound_output,
+                                target_seconds_per_frame,
+                            );
+                        }
 
                         try win32_display_buffer_in_window(
                             &global_back_buffer,
@@ -1151,18 +1285,43 @@ pub export fn wWinMain(
                             dimension.height,
                         );
 
+                        var play_cursor: u32 = 0;
+                        var write_cursor: u32 = 0;
+                        if (win32.SUCCEEDED(global_secondary_buffer.vtable.GetCurrentPosition(
+                            global_secondary_buffer,
+                            &play_cursor,
+                            &write_cursor,
+                        ))) {
+                            last_play_cursor = play_cursor;
+
+                            if (!sound_is_valid) {
+                                sound_output.running_sample_index =
+                                    write_cursor /
+                                    sound_output.bytes_per_sample;
+
+                                sound_is_valid = true;
+                            }
+                        } else {
+                            sound_is_valid = false;
+                        }
+
+                        // NOTE: This is debug code
+                        if (INTERNAL) {
+                            var marker = &debug_time_markers[debug_time_marker_index];
+
+                            debug_time_marker_index += 1;
+                            if (debug_time_marker_index >= debug_time_markers.len) {
+                                debug_time_marker_index = 0;
+                            }
+
+                            marker.play_cursor = play_cursor;
+                            marker.write_cursor = write_cursor;
+                        }
+
                         var temp = new_input;
                         new_input = old_input;
                         old_input = temp;
                         // TODO: should we clear these here?
-
-                        var end_counter = try win32_get_wall_clock();
-                        var ms_per_frame = 1000.0 * try win32_get_seconds_elapsed(
-                            last_counter,
-                            end_counter,
-                        );
-
-                        last_counter = end_counter;
 
                         var end_cycle_count = rdtsc();
                         var cycles_elapsed = end_cycle_count - last_cycle_count;
@@ -1172,7 +1331,8 @@ pub export fn wWinMain(
                             var fps: f32 = 0.0;
                             //var fps = @as(f32, @floatFromInt(global_perf_count_frequency)) /
                             //    @as(f64, (@floatFromInt(counter_elapsed)));
-                            var mega_cycles_per_frame = @as(f64, @floatFromInt(cycles_elapsed)) /
+                            var mega_cycles_per_frame =
+                                @as(f64, @floatFromInt(cycles_elapsed)) /
                                 @as(f64, @floatFromInt(1000 * 1000));
 
                             // Trying to print floats with wsprintf does not appear to cause a problem
@@ -1182,14 +1342,11 @@ pub export fn wWinMain(
                             var fps_buffer = [_]u8{0} ** 255;
                             var args = [_]f64{ ms_per_frame, fps, mega_cycles_per_frame };
                             _ = win32.wvsprintfA(
-                                @as([*:0]u8, @ptrCast(&fps_buffer)),
-                                ",%fms/f, %ff/s, %fmc/f\n",
-                                @as(*i8, @ptrCast(&args)),
-                            );
-                            win32.OutputDebugStringA(@as(
-                                [*:0]u8,
                                 @ptrCast(&fps_buffer),
-                            ));
+                                ",%fms/f, %ff/s, %fmc/f\n",
+                                @ptrCast(&args),
+                            );
+                            win32.OutputDebugStringA(@ptrCast(&fps_buffer));
 
                             std.debug.print("{d:6.2}ms/f, {d:6.2}f/s, {d:6.2}mc/f\n", .{
                                 ms_per_frame,
