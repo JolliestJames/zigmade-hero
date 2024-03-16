@@ -150,6 +150,10 @@ fn game_output_sound(
             std.math.pi *
             1.0 /
             @as(f32, @floatFromInt(wave_period));
+
+        if (t_sine.value > 2.0 * std.math.pi) {
+            t_sine.value -= 2.0 * std.math.pi;
+        }
     }
 }
 
@@ -190,7 +194,6 @@ pub fn game_update_and_render(
     memory: *GameMemory,
     input: *GameInput,
     offscreen_buffer: *GameOffscreenBuffer,
-    sound_buffer: *GameSoundBuffer,
 ) !void {
     assert(@sizeOf(@TypeOf(input.controllers[0].buttons.map)) ==
         @sizeOf(GameButtonState) * input.controllers[0].buttons.array.len);
@@ -215,7 +218,7 @@ pub fn game_update_and_render(
             platform.debug_platform_free_file_memory(file.contents);
         }
 
-        game_state.tone_hertz = 256;
+        game_state.tone_hertz = 512;
 
         // TODO: This may be more appropriate to do in the platform layer
         memory.is_initialized = true;
@@ -230,7 +233,7 @@ pub fn game_update_and_render(
             game_state.blue_offset += @as(i32, @intFromFloat(
                 4.0 * (controller.stick_average_x),
             ));
-            game_state.tone_hertz = 256 +
+            game_state.tone_hertz = 512 +
                 @as(i32, @intFromFloat(128.0 *
                 (controller.stick_average_y)));
         } else {
@@ -249,14 +252,28 @@ pub fn game_update_and_render(
         }
     }
 
-    // TODO: Allow sample offsets here for more robust platform options
-    try game_output_sound(
-        sound_buffer,
-        game_state.tone_hertz,
-    );
     try render_weird_gradient(
         offscreen_buffer,
         game_state.blue_offset,
         game_state.green_offset,
+    );
+}
+
+// NOTE: At the moment, this must be a very fast function
+// It cannot be greater than ~1ms
+// TODO: Reduce the pressure on this function's performance
+// by measuring it or asking about it, etc.
+pub fn game_get_sound_samples(
+    memory: *GameMemory,
+    sound_buffer: *GameSoundBuffer,
+) !void {
+    var game_state: *GameState = @as(
+        *GameState,
+        @alignCast(@ptrCast(memory.permanent_storage)),
+    );
+
+    try game_output_sound(
+        sound_buffer,
+        game_state.tone_hertz,
     );
 }
