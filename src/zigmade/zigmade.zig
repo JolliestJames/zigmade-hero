@@ -123,7 +123,7 @@ fn game_output_sound(
     tone_hertz: i32,
 ) !void {
     const t_sine = struct {
-        var value: f32 = undefined;
+        var value: f32 = 0;
     };
 
     const tone_volume: i16 = 3_000;
@@ -131,11 +131,11 @@ fn game_output_sound(
         @as(i32, @intCast(sound_buffer.samples_per_second)),
         tone_hertz,
     );
-    var sample_out: [*]i16 = sound_buffer.samples;
+    var sample_out = sound_buffer.samples;
 
-    for (0..@as(usize, @intCast(sound_buffer.sample_count))) |i| {
-        var sine_value: f32 = std.math.sin(t_sine.value);
-        var sample_value: i16 = @as(i16, @intFromFloat(
+    for (0..@intCast(sound_buffer.sample_count)) |i| {
+        var sine_value = std.math.sin(t_sine.value);
+        var sample_value = @as(i16, @intFromFloat(
             sine_value * @as(
                 f32,
                 @floatFromInt(tone_volume),

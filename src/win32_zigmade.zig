@@ -77,22 +77,22 @@ const WindowDimension = struct {
 
 const XInputGetState = struct {
     var call: *const fn (
-        user_index: u32,
+        user_index: DWORD,
         state: ?*win32.XINPUT_STATE,
     ) callconv(WINAPI) isize = undefined;
 
-    fn stub(_: u32, _: ?*win32.XINPUT_STATE) callconv(WINAPI) isize {
+    fn stub(_: DWORD, _: ?*win32.XINPUT_STATE) callconv(WINAPI) isize {
         return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
     }
 };
 
 const XInputSetState = struct {
     var call: *const fn (
-        user_index: u32,
+        user_index: DWORD,
         vibration: ?*win32.XINPUT_VIBRATION,
     ) callconv(WINAPI) isize = undefined;
 
-    fn stub(_: u32, _: ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize {
+    fn stub(_: DWORD, _: ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize {
         return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
     }
 };
@@ -124,7 +124,7 @@ fn debug_platform_read_entire_file(file_name: [*:0]const u8) zigmade.DebugReadFi
             );
 
             if (result.contents) |contents| {
-                var bytes_read: u32 = undefined;
+                var bytes_read: DWORD = undefined;
 
                 if (win32.ReadFile(
                     handle,
@@ -179,7 +179,7 @@ fn debug_platform_write_entire_file(
     );
 
     if (handle != win32.INVALID_HANDLE_VALUE) {
-        var bytes_written: u32 = undefined;
+        var bytes_written: DWORD = undefined;
 
         if (win32.WriteFile(
             handle,
@@ -471,9 +471,9 @@ const Win32SoundOutput = struct {
 
 fn win32_clear_buffer(sound_output: *Win32SoundOutput) !void {
     var region_1: ?*anyopaque = undefined;
-    var region_1_size: u32 = undefined;
+    var region_1_size: DWORD = undefined;
     var region_2: ?*anyopaque = undefined;
-    var region_2_size: u32 = undefined;
+    var region_2_size: DWORD = undefined;
 
     if (win32.SUCCEEDED(global_secondary_buffer.vtable.Lock(
         global_secondary_buffer,
@@ -513,14 +513,14 @@ fn win32_clear_buffer(sound_output: *Win32SoundOutput) !void {
 
 fn win32_fill_sound_buffer(
     sound_output: *Win32SoundOutput,
-    byte_to_lock: u32,
-    bytes_to_write: u32,
+    byte_to_lock: DWORD,
+    bytes_to_write: DWORD,
     source_buffer: *zigmade.GameSoundBuffer,
 ) !void {
     var region_1: ?*anyopaque = undefined;
-    var region_1_size: u32 = undefined;
+    var region_1_size: DWORD = undefined;
     var region_2: ?*anyopaque = undefined;
-    var region_2_size: u32 = undefined;
+    var region_2_size: DWORD = undefined;
 
     if (win32.SUCCEEDED(global_secondary_buffer.vtable.Lock(
         global_secondary_buffer,
@@ -534,8 +534,8 @@ fn win32_fill_sound_buffer(
     ))) {
         // TODO: assert that region size is valid
         if (region_1) |region| {
-            var region_1_sample_count: u32 = region_1_size /
-                @as(u32, @intCast(sound_output.bytes_per_sample));
+            var region_1_sample_count: DWORD = region_1_size /
+                @as(DWORD, @intCast(sound_output.bytes_per_sample));
             var dest_sample: [*]i16 = @alignCast(@ptrCast(region));
             var source_sample = source_buffer.samples;
 
@@ -548,8 +548,8 @@ fn win32_fill_sound_buffer(
         }
 
         if (region_2) |region| {
-            var region_2_sample_count: u32 = region_2_size /
-                @as(u32, @intCast(sound_output.bytes_per_sample));
+            var region_2_sample_count: DWORD = region_2_size /
+                @as(DWORD, @intCast(sound_output.bytes_per_sample));
             var dest_sample: [*]i16 = @alignCast(@ptrCast(region));
             var source_sample = source_buffer.samples;
 
@@ -581,10 +581,10 @@ fn win32_process_keyboard_message(
 }
 
 fn win32_process_x_input_digital_button(
-    button_state: u32,
+    button_state: DWORD,
     old_state: *zigmade.GameButtonState,
     new_state: *zigmade.GameButtonState,
-    button_bit: u32,
+    button_bit: DWORD,
 ) !void {
     new_state.ended_down = ((button_state & button_bit) == button_bit);
     new_state.half_transition_count =
@@ -800,7 +800,7 @@ inline fn win32_draw_sound_buffer_marker(
     pad_x: i32,
     top: i32,
     bottom: i32,
-    value: u32,
+    value: DWORD,
     color: u32,
 ) !void {
     _ = sound_output;
@@ -909,8 +909,8 @@ pub export fn wWinMain(
                 sound_output.samples_per_second = 48_000;
                 sound_output.bytes_per_sample = @sizeOf(i16) * 2;
                 sound_output.secondary_buffer_size =
-                    @as(u32, @intCast(sound_output.samples_per_second)) *
-                    @as(u32, @intCast(sound_output.bytes_per_sample));
+                    @as(DWORD, @intCast(sound_output.samples_per_second)) *
+                    @as(DWORD, @intCast(sound_output.bytes_per_sample));
                 // TODO: get rid of latency_sample_count
                 sound_output.latency_sample_count = 3 *
                     @divTrunc(
@@ -986,7 +986,7 @@ pub export fn wWinMain(
                     var debug_time_markers: [game_update_hertz / 2]Win32DebugTimeMarker =
                         std.mem.zeroes([game_update_hertz / 2]Win32DebugTimeMarker);
 
-                    var audio_latency_bytes: u32 = 0;
+                    var audio_latency_bytes: DWORD = 0;
                     var audio_latency_seconds: f32 = 0.0;
                     var sound_is_valid = false;
                     var last_cycle_count = rdtsc();
@@ -1197,8 +1197,8 @@ pub export fn wWinMain(
                                 audio_wall_clock,
                             );
 
-                            var play_cursor: u32 = 0;
-                            var write_cursor: u32 = 0;
+                            var play_cursor: DWORD = 0;
+                            var write_cursor: DWORD = 0;
 
                             // NOTE: Sounds skips on every new loop of the buffer (1 second), so the sine
                             // wave is not properly lining up on either side of the buffer similar to
@@ -1236,8 +1236,8 @@ pub export fn wWinMain(
 
                                 var byte_to_lock =
                                     (sound_output.running_sample_index *
-                                    @as(u32, @intCast(sound_output.bytes_per_sample))) %
-                                    @as(u32, @intCast(sound_output.secondary_buffer_size));
+                                    @as(DWORD, @intCast(sound_output.bytes_per_sample))) %
+                                    @as(DWORD, @intCast(sound_output.secondary_buffer_size));
 
                                 var expected_sound_bytes_per_frame =
                                     (sound_output.samples_per_second *
@@ -1273,7 +1273,7 @@ pub export fn wWinMain(
 
                                 safe_write_cursor += sound_output.safety_bytes;
                                 var audio_card_is_low_latency = safe_write_cursor < expected_frame_boundary_byte;
-                                var target_cursor: u32 = 0;
+                                var target_cursor: DWORD = 0;
 
                                 if (audio_card_is_low_latency) {
                                     target_cursor = expected_frame_boundary_byte +
@@ -1281,16 +1281,16 @@ pub export fn wWinMain(
                                 } else {
                                     target_cursor = write_cursor +
                                         expected_sound_bytes_per_frame +
-                                        (@as(u32, @intCast(sound_output.safety_bytes)));
+                                        (@as(DWORD, @intCast(sound_output.safety_bytes)));
                                 }
 
                                 target_cursor = target_cursor %
-                                    @as(u32, @intCast(sound_output.secondary_buffer_size));
+                                    @as(DWORD, @intCast(sound_output.secondary_buffer_size));
 
-                                var bytes_to_write: u32 = 0;
+                                var bytes_to_write: DWORD = 0;
                                 if (byte_to_lock > target_cursor) {
                                     bytes_to_write = @as(
-                                        u32,
+                                        DWORD,
                                         @intCast(sound_output.secondary_buffer_size),
                                     ) - byte_to_lock;
                                     bytes_to_write += target_cursor;
@@ -1353,9 +1353,6 @@ pub export fn wWinMain(
                                 sound_is_valid = false;
                             }
 
-                            //if (sound_is_valid) {
-                            //}
-
                             var work_counter = try win32_get_wall_clock();
                             var work_seconds_elapsed = try win32_get_seconds_elapsed(
                                 last_counter,
@@ -1367,7 +1364,7 @@ pub export fn wWinMain(
                             // TODO: Not tested yet, probably buggy
                             if (seconds_elapsed_for_frame < target_seconds_per_frame) {
                                 if (sleep_is_granular) {
-                                    var sleep_ms = @as(u32, @intFromFloat(1000.0 *
+                                    var sleep_ms = @as(DWORD, @intFromFloat(1000.0 *
                                         (target_seconds_per_frame -
                                         seconds_elapsed_for_frame) -
                                         1.0));
