@@ -17,7 +17,7 @@
 //
 
 const std = @import("std");
-const zigmade = @import("zigmade/zigmade.zig");
+const platform = @import("zigmade_platform");
 
 const DWORD = std.os.windows.DWORD;
 const WINAPI = std.os.windows.WINAPI;
@@ -75,30 +75,8 @@ const WindowDimension = struct {
     height: i32,
 };
 
-const XInputGetState = struct {
-    var call: *const fn (
-        user_index: DWORD,
-        state: ?*win32.XINPUT_STATE,
-    ) callconv(WINAPI) isize = undefined;
-
-    fn stub(_: DWORD, _: ?*win32.XINPUT_STATE) callconv(WINAPI) isize {
-        return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
-    }
-};
-
-const XInputSetState = struct {
-    var call: *const fn (
-        user_index: DWORD,
-        vibration: ?*win32.XINPUT_VIBRATION,
-    ) callconv(WINAPI) isize = undefined;
-
-    fn stub(_: DWORD, _: ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize {
-        return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
-    }
-};
-
-fn debug_platform_read_entire_file(file_name: [*:0]const u8) zigmade.DebugReadFileResult {
-    var result: zigmade.DebugReadFileResult = undefined;
+fn debug_platform_read_entire_file(file_name: [*:0]const u8) platform.DebugReadFileResult {
+    var result: platform.DebugReadFileResult = undefined;
 
     var handle = win32.CreateFileA(
         file_name,
@@ -114,7 +92,7 @@ fn debug_platform_read_entire_file(file_name: [*:0]const u8) zigmade.DebugReadFi
         var file_size: win32.LARGE_INTEGER = undefined;
 
         if (win32.GetFileSizeEx(handle, &file_size) > 0) {
-            var file_size32 = zigmade.safe_truncate_u64(@as(u64, @intCast(file_size.QuadPart)));
+            var file_size32 = platform.safe_truncate_u64(@as(u64, @intCast(file_size.QuadPart)));
 
             result.contents = win32.VirtualAlloc(
                 null,
@@ -153,12 +131,6 @@ fn debug_platform_read_entire_file(file_name: [*:0]const u8) zigmade.DebugReadFi
     }
 
     return result;
-}
-
-fn debug_platform_free_file_memory(maybe_memory: ?*anyopaque) void {
-    if (maybe_memory) |memory| {
-        _ = win32.VirtualFree(memory, 0, win32.MEM_RELEASE);
-    }
 }
 
 fn debug_platform_write_entire_file(
@@ -202,17 +174,79 @@ fn debug_platform_write_entire_file(
     return result;
 }
 
-const win32_platform = zigmade.Platform{
-    .debug_platform_read_entire_file = debug_platform_read_entire_file,
-    .debug_platform_free_file_memory = debug_platform_free_file_memory,
-    .debug_platform_write_entire_file = debug_platform_write_entire_file,
+fn debug_platform_free_file_memory(maybe_memory: ?*anyopaque) void {
+    if (maybe_memory) |memory| {
+        _ = win32.VirtualFree(memory, 0, win32.MEM_RELEASE);
+    }
+}
+
+const Win32GameCode = struct {
+    dll: ?win32.HINSTANCE = null,
+    update_and_render: ?platform.update_and_render_type = null,
+    get_sound_samples: ?platform.get_sound_samples_type = null,
+    is_valid: bool = false,
 };
 
-var direct_sound_create: *const fn (
-    guid_device: ?*const win32.Guid,
-    pp_ds: ?*?*win32.IDirectSound,
-    unknown_outer: ?*win32.IUnknown,
-) callconv(WINAPI) win32.HRESULT = undefined;
+fn win32_load_game_code() !Win32GameCode {
+    var result = Win32GameCode{};
+
+    // TODO: Need to get the proper path here!
+    // TODO: Automatic determination of when updated are necessary.
+    _ = win32.CopyFileA("build/zigmade.dll", "build/zigmade_temp.dll", win32.FALSE);
+    result.dll = win32.LoadLibraryA("build/zigmade_temp.dll");
+
+    if (result.dll != null) {
+        result.update_and_render =
+            @ptrCast(win32.GetProcAddress(result.dll, "update_and_render"));
+
+        result.get_sound_samples =
+            @ptrCast(win32.GetProcAddress(result.dll, "get_sound_samples"));
+
+        if (result.update_and_render != null and result.get_sound_samples != null) {
+            result.is_valid = true;
+        }
+    }
+
+    if (!result.is_valid) {
+        result.update_and_render = null;
+        result.get_sound_samples = null;
+    }
+
+    return result;
+}
+
+fn win32_unload_game_code(game: *Win32GameCode) !void {
+    if (game.dll) |dll| {
+        _ = win32.FreeLibrary(dll);
+        game.dll = null;
+    }
+
+    game.is_valid = false;
+    game.update_and_render = null;
+    game.get_sound_samples = null;
+}
+
+const XInputGetState = struct {
+    var call: *const fn (
+        user_index: DWORD,
+        state: ?*win32.XINPUT_STATE,
+    ) callconv(WINAPI) isize = undefined;
+
+    fn stub(_: DWORD, _: ?*win32.XINPUT_STATE) callconv(WINAPI) isize {
+        return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
+    }
+};
+
+const XInputSetState = struct {
+    var call: *const fn (
+        user_index: DWORD,
+        vibration: ?*win32.XINPUT_VIBRATION,
+    ) callconv(WINAPI) isize = undefined;
+
+    fn stub(_: DWORD, _: ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize {
+        return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
+    }
+};
 
 fn win32_load_x_input() !void {
     if (win32.LoadLibraryA(win32.XINPUT_DLL)) |x_input_library| {
@@ -245,6 +279,12 @@ fn win32_load_x_input() !void {
         // TODO: diagnostic
     }
 }
+
+var direct_sound_create: *const fn (
+    guid_device: ?*const win32.Guid,
+    pp_ds: ?*?*win32.IDirectSound,
+    unknown_outer: ?*win32.IUnknown,
+) callconv(WINAPI) win32.HRESULT = undefined;
 
 fn win32_init_direct_sound(
     window: win32.HWND,
@@ -515,7 +555,7 @@ fn win32_fill_sound_buffer(
     sound_output: *Win32SoundOutput,
     byte_to_lock: DWORD,
     bytes_to_write: DWORD,
-    source_buffer: *zigmade.GameSoundBuffer,
+    source_buffer: *platform.GameSoundBuffer,
 ) !void {
     var region_1: ?*anyopaque = undefined;
     var region_1_size: DWORD = undefined;
@@ -572,7 +612,7 @@ fn win32_fill_sound_buffer(
 }
 
 fn win32_process_keyboard_message(
-    new_state: *zigmade.GameButtonState,
+    new_state: *platform.GameButtonState,
     is_down: bool,
 ) !void {
     std.debug.assert(new_state.ended_down != is_down);
@@ -582,8 +622,8 @@ fn win32_process_keyboard_message(
 
 fn win32_process_x_input_digital_button(
     button_state: DWORD,
-    old_state: *zigmade.GameButtonState,
-    new_state: *zigmade.GameButtonState,
+    old_state: *platform.GameButtonState,
+    new_state: *platform.GameButtonState,
     button_bit: DWORD,
 ) !void {
     new_state.ended_down = ((button_state & button_bit) == button_bit);
@@ -608,7 +648,7 @@ fn win32_process_x_input_stick_value(
     return result;
 }
 
-fn win32_process_pending_messages(keyboard_controller: *zigmade.GameControllerInput) !void {
+fn win32_process_pending_messages(keyboard_controller: *platform.GameControllerInput) !void {
     var message: win32.MSG = undefined;
 
     while (win32.PeekMessageW(
@@ -951,13 +991,17 @@ pub export fn wWinMain(
 
                 var base_address: ?*anyopaque =
                     if (INTERNAL)
-                    @ptrFromInt(zigmade.Terabytes(2))
+                    @ptrFromInt(platform.Terabytes(2))
                 else
                     null;
 
-                var game_memory: zigmade.GameMemory = undefined;
-                game_memory.permanent_storage_size = zigmade.Megabytes(64);
-                game_memory.transient_storage_size = zigmade.Gigabytes(4);
+                var game_memory = platform.GameMemory{
+                    .permanent_storage_size = platform.Megabytes(64),
+                    .transient_storage_size = platform.Gigabytes(4),
+                    .debug_platform_read_entire_file = debug_platform_read_entire_file,
+                    .debug_platform_write_entire_file = debug_platform_write_entire_file,
+                    .debug_platform_free_file_memory = debug_platform_free_file_memory,
+                };
 
                 // TODO: Handle various memory footprints using system metrics
                 var total_size = game_memory.permanent_storage_size +
@@ -976,7 +1020,7 @@ pub export fn wWinMain(
                     game_memory.permanent_storage != undefined and
                     game_memory.transient_storage != undefined)
                 {
-                    var inputs: [2]zigmade.GameInput = undefined;
+                    var inputs: [2]platform.GameInput = undefined;
                     var new_input = &inputs[0];
                     var old_input = &inputs[1];
 
@@ -989,18 +1033,30 @@ pub export fn wWinMain(
                     var audio_latency_bytes: DWORD = 0;
                     var audio_latency_seconds: f32 = 0.0;
                     var sound_is_valid = false;
+
+                    var game = try win32_load_game_code();
+                    var load_counter: u32 = 0;
+
                     var last_cycle_count = rdtsc();
 
                     while (global_running) {
+                        if (load_counter > 120) {
+                            try win32_unload_game_code(&game);
+                            game = try win32_load_game_code();
+                            load_counter = 0;
+                        } else {
+                            load_counter += 1;
+                        }
+
                         // TODO: Zeroing "macro" with comptime
                         // TODO: We can't zero everything because the up/down state will be wrong
                         // NOTE: Index 0 belongs to keyboard
-                        var old_keyboard_controller: *zigmade.GameControllerInput =
-                            try zigmade.get_controller(old_input, 0);
-                        var new_keyboard_controller: *zigmade.GameControllerInput =
-                            try zigmade.get_controller(new_input, 0);
+                        var old_keyboard_controller: *platform.GameControllerInput =
+                            try platform.get_controller(old_input, 0);
+                        var new_keyboard_controller: *platform.GameControllerInput =
+                            try platform.get_controller(new_input, 0);
                         new_keyboard_controller.* =
-                            std.mem.zeroInit(zigmade.GameControllerInput, .{});
+                            std.mem.zeroInit(platform.GameControllerInput, .{});
                         new_keyboard_controller.is_connected = true;
 
                         for (0..new_keyboard_controller.buttons.array.len) |button_index| {
@@ -1022,10 +1078,10 @@ pub export fn wWinMain(
                             // NOTE: Indices 1..4 belong to gamepad
                             for (0..max_controller_count) |controller_index| {
                                 var our_index = controller_index + 1;
-                                var old_controller: *zigmade.GameControllerInput =
-                                    try zigmade.get_controller(old_input, our_index);
-                                var new_controller: *zigmade.GameControllerInput =
-                                    try zigmade.get_controller(new_input, our_index);
+                                var old_controller: *platform.GameControllerInput =
+                                    try platform.get_controller(old_input, our_index);
+                                var new_controller: *platform.GameControllerInput =
+                                    try platform.get_controller(new_input, our_index);
                                 var controller_state: win32.XINPUT_STATE = undefined;
 
                                 if (XInputGetState.call(
@@ -1176,20 +1232,23 @@ pub export fn wWinMain(
                             // vibration.wRightMotorSpeed = 60000;
                             // _ = XInputSetState.call(0, &vibration);
 
-                            var offscreen_buffer: zigmade.GameOffscreenBuffer =
-                                std.mem.zeroInit(zigmade.GameOffscreenBuffer, .{});
+                            var offscreen_buffer: platform.GameOffscreenBuffer =
+                                std.mem.zeroInit(platform.GameOffscreenBuffer, .{});
                             offscreen_buffer.width = global_back_buffer.width;
                             offscreen_buffer.height = global_back_buffer.height;
                             offscreen_buffer.pitch = global_back_buffer.pitch;
                             offscreen_buffer.memory =
                                 @alignCast(@ptrCast(global_back_buffer.memory));
 
-                            try zigmade.game_update_and_render(
-                                &win32_platform,
-                                &game_memory,
-                                new_input,
-                                &offscreen_buffer,
-                            );
+                            if (game.update_and_render) |update_and_render| {
+                                update_and_render(
+                                    //try platform.game_update_and_render(
+                                    //&win32_platform,
+                                    &game_memory,
+                                    new_input,
+                                    &offscreen_buffer,
+                                );
+                            }
 
                             var audio_wall_clock = try win32_get_wall_clock();
                             var from_begin_to_audio_seconds = try win32_get_seconds_elapsed(
@@ -1236,8 +1295,8 @@ pub export fn wWinMain(
 
                                 var byte_to_lock =
                                     (sound_output.running_sample_index *
-                                    @as(DWORD, @intCast(sound_output.bytes_per_sample))) %
-                                    @as(DWORD, @intCast(sound_output.secondary_buffer_size));
+                                    sound_output.bytes_per_sample) %
+                                    sound_output.secondary_buffer_size;
 
                                 var expected_sound_bytes_per_frame =
                                     (sound_output.samples_per_second *
@@ -1276,37 +1335,36 @@ pub export fn wWinMain(
                                 var target_cursor: DWORD = 0;
 
                                 if (audio_card_is_low_latency) {
-                                    target_cursor = expected_frame_boundary_byte +
-                                        expected_sound_bytes_per_frame;
+                                    target_cursor = expected_frame_boundary_byte + expected_sound_bytes_per_frame;
                                 } else {
                                     target_cursor = write_cursor +
                                         expected_sound_bytes_per_frame +
-                                        (@as(DWORD, @intCast(sound_output.safety_bytes)));
+                                        sound_output.safety_bytes;
                                 }
 
-                                target_cursor = target_cursor %
-                                    @as(DWORD, @intCast(sound_output.secondary_buffer_size));
+                                target_cursor = target_cursor % sound_output.secondary_buffer_size;
 
                                 var bytes_to_write: DWORD = 0;
                                 if (byte_to_lock > target_cursor) {
-                                    bytes_to_write = @as(
-                                        DWORD,
-                                        @intCast(sound_output.secondary_buffer_size),
-                                    ) - byte_to_lock;
+                                    bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
                                     bytes_to_write += target_cursor;
                                 } else {
                                     bytes_to_write = target_cursor - byte_to_lock;
                                 }
 
-                                var sound_buffer: zigmade.GameSoundBuffer =
-                                    std.mem.zeroInit(zigmade.GameSoundBuffer, .{});
+                                var sound_buffer: platform.GameSoundBuffer =
+                                    std.mem.zeroInit(platform.GameSoundBuffer, .{});
                                 sound_buffer.samples_per_second = sound_output.samples_per_second;
                                 sound_buffer.sample_count = @divTrunc(
                                     bytes_to_write,
                                     sound_output.bytes_per_sample,
                                 );
-                                sound_buffer.samples = @alignCast(@ptrCast(samples));
-                                try zigmade.game_get_sound_samples(&game_memory, &sound_buffer);
+                                sound_buffer.samples = @alignCast(@ptrCast(samples.?));
+                                if (game.get_sound_samples) |get_sound_samples| {
+                                    get_sound_samples(&game_memory, &sound_buffer);
+                                }
+
+                                //try platform.game_get_sound_samples(&game_memory, &sound_buffer);
 
                                 if (INTERNAL) {
                                     var marker = &debug_time_markers[debug_time_marker_index];

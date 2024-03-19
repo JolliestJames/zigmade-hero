@@ -24,34 +24,24 @@ pub fn build(b: *std.Build) void {
         .source_file = .{ .path = "./src/zigwin32/win32.zig" },
     });
 
-    //const lib = b.addSharedLibrary(.{
-    //    .name = "zigmade",
-    //    .root_source_file = .{ .path = "./src/zigmade/zigmade.zig" },
-    //    .version = .{ .major = 0, .minor = 1, .patch = 0 },
-    //    .target = target,
-    //    .optimize = optimize,
-    //});
+    const platform = b.createModule(.{
+        .source_file = .{ .path = "./src/zigmade_platform.zig" },
+    });
 
-    //const lib = b.addStaticLibrary(.{
-    //    .name = "zigmade_hero",
-    //    // In this case the main source file is merely a path, however, in more
-    //    // complicated build scripts, this could be a generated file.
-    //    .root_source_file = .{ .path = "src/root.zig" },
-    //    .target = target,
-    //    .optimize = optimize,
-    //});
+    const zigmade = b.addSharedLibrary(.{
+        .name = "zigmade",
+        .root_source_file = .{ .path = "./src/zigmade/zigmade.zig" },
+        .version = .{ .major = 0, .minor = 1, .patch = 0 },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    zigmade.addModule("zigmade_platform", platform);
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
     //b.installArtifact(lib);
-
-    // const exe = b.addExecutable(.{
-    //     .name = "zigmade_hero",
-    //     .root_source_file = .{ .path = "src/main.zig" },
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
 
     const exe = b.addExecutable(.{
         .name = "win32_zigmade",
@@ -61,12 +51,27 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.addModule("win32", win32);
+    exe.addModule("zigmade_platform", platform);
     exe.addOptions("options", options);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
-    b.installArtifact(exe);
+    const build_step = b.step("zigmade", "Build the zigmade lib");
+    build_step.dependOn(&zigmade.step);
+
+    const exe_install_step = b.addInstallArtifact(exe, .{
+        .dest_dir = .{ .override = .{ .custom = "../build" } },
+        .pdb_dir = .{ .override = .{ .custom = "../build" } },
+    });
+
+    const zigmade_install_step = b.addInstallArtifact(zigmade, .{
+        .dest_dir = .{ .override = .{ .custom = "../build" } },
+        .pdb_dir = .{ .override = .{ .custom = "../build" } },
+    });
+
+    b.getInstallStep().dependOn(&exe_install_step.step);
+    b.getInstallStep().dependOn(&zigmade_install_step.step);
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish

@@ -1,140 +1,20 @@
 const std = @import("std");
 const assert = std.debug.assert;
-
-pub inline fn Kilobytes(comptime value: comptime_int) comptime_int {
-    return (1024 * value);
-}
-
-pub inline fn Megabytes(comptime value: comptime_int) comptime_int {
-    return Kilobytes(value) * 1024;
-}
-
-pub inline fn Gigabytes(comptime value: comptime_int) comptime_int {
-    return Megabytes(value) * 1024;
-}
-
-pub inline fn Terabytes(comptime value: comptime_int) comptime_int {
-    return Gigabytes(value) * 1024;
-}
-
-pub inline fn safe_truncate_u64(value: u64) u32 {
-    // TODO: consts for maximum values
-    std.debug.assert(value <= 0xffffffff);
-    return @as(u32, @truncate(value));
-}
-
-// NOTE: Services that the platform layer provides to the game
-
-// IMORTANT: These are not for doing anything in the shipped game
-// they are blocking and the write will not protect against
-// lost data!
-pub const DebugReadFileResult = struct {
-    size: u32,
-    contents: ?*anyopaque = undefined,
-};
-
-pub const Platform = struct {
-    debug_platform_read_entire_file: *const fn ([*:0]const u8) DebugReadFileResult,
-    debug_platform_free_file_memory: *const fn (?*anyopaque) void,
-    debug_platform_write_entire_file: *const fn (
-        [*:0]const u8,
-        u32,
-        ?*anyopaque,
-    ) bool,
-};
-
-// NOTE: Services that the game provides to the platform layer
-// maybe expand in the future - sound on separate thread
-
-// TODO: rendering will become a three-tiered abstraction
-pub const GameOffscreenBuffer = struct {
-    memory: ?*void = undefined,
-    width: i32,
-    height: i32,
-    pitch: i32,
-};
-
-pub const GameSoundBuffer = struct {
-    samples: [*]i16 = undefined,
-    samples_per_second: u32,
-    sample_count: u32,
-};
-
-pub const GameButtonState = extern struct {
-    half_transition_count: i32,
-    ended_down: bool,
-};
-
-pub const GameButtonMap = extern struct {
-    move_up: GameButtonState,
-    move_down: GameButtonState,
-    move_left: GameButtonState,
-    move_right: GameButtonState,
-    action_up: GameButtonState,
-    action_down: GameButtonState,
-    action_left: GameButtonState,
-    action_right: GameButtonState,
-    left_shoulder: GameButtonState,
-    right_shoulder: GameButtonState,
-    start: GameButtonState,
-    back: GameButtonState,
-};
-
-pub const GameControllerInput = struct {
-    is_connected: bool,
-    is_analog: bool,
-    stick_average_x: f32,
-    stick_average_y: f32,
-
-    buttons: extern union {
-        array: [12]GameButtonState,
-        map: GameButtonMap,
-    },
-};
-
-pub const GameInput = struct {
-    // TODO: Insert clock value here
-    controllers: [5]GameControllerInput,
-};
-
-pub fn get_controller(input: *GameInput, index: usize) !*GameControllerInput {
-    std.debug.assert(index < input.controllers.len);
-    var result = &input.controllers[index];
-    return (result);
-}
-
-pub const GameMemory = struct {
-    is_initialized: bool = false,
-    permanent_storage_size: u64,
-    // NOTE: Required to be cleared to zero at startup
-    permanent_storage: [*]u8 = undefined,
-    transient_storage_size: u64,
-    transient_storage: [*]u8 = undefined,
-};
-
-const GameState = struct {
-    blue_offset: i32,
-    green_offset: i32,
-    tone_hertz: i32,
-};
+const platform = @import("zigmade_platform");
 
 fn game_output_sound(
-    sound_buffer: *GameSoundBuffer,
-    tone_hertz: i32,
+    sound_buffer: *platform.GameSoundBuffer,
+    game_state: *platform.GameState,
 ) !void {
-    const t_sine = struct {
-        var value: f32 = 0;
-    };
-
     const tone_volume: i16 = 3_000;
     var wave_period = @divTrunc(
         @as(i32, @intCast(sound_buffer.samples_per_second)),
-        tone_hertz,
+        game_state.tone_hertz,
     );
     var sample_out = sound_buffer.samples;
 
     for (0..@intCast(sound_buffer.sample_count)) |i| {
-        var sine_value = std.math.sin(t_sine.value);
+        var sine_value = std.math.sin(game_state.t_sine);
         var sample_value = @as(i16, @intFromFloat(
             sine_value * @as(
                 f32,
@@ -145,20 +25,20 @@ fn game_output_sound(
         sample_out[2 * i] = sample_value;
         sample_out[2 * i + 1] = sample_value;
 
-        t_sine.value +=
+        game_state.t_sine +=
             2.0 *
             std.math.pi *
             1.0 /
             @as(f32, @floatFromInt(wave_period));
 
-        if (t_sine.value > 2.0 * std.math.pi) {
-            t_sine.value -= 2.0 * std.math.pi;
+        if (game_state.t_sine > 2.0 * std.math.pi) {
+            game_state.t_sine -= 2.0 * std.math.pi;
         }
     }
 }
 
 fn render_weird_gradient(
-    buffer: *GameOffscreenBuffer,
+    buffer: *platform.GameOffscreenBuffer,
     blue_offset: i32,
     green_offset: i32,
 ) !void {
@@ -168,7 +48,7 @@ fn render_weird_gradient(
         var pixel: [*]u32 = @ptrCast(@alignCast(row));
 
         for (0..@intCast(buffer.width)) |x| {
-            var blue: u32 = @as(u8, @truncate(x + @as(
+            var blue: u32 = @as(u8, @truncate(x % 2 + @as(
                 u32,
                 @bitCast(blue_offset),
             )));
@@ -189,44 +69,44 @@ fn render_weird_gradient(
 // - controller/keyboard input
 // - bitmap buffer
 // - sound buffer
-pub fn game_update_and_render(
-    platform: *const Platform,
-    memory: *GameMemory,
-    input: *GameInput,
-    offscreen_buffer: *GameOffscreenBuffer,
-) !void {
+pub export fn update_and_render(
+    memory: *platform.GameMemory,
+    input: *platform.GameInput,
+    offscreen_buffer: *platform.GameOffscreenBuffer,
+) void {
     assert(@sizeOf(@TypeOf(input.controllers[0].buttons.map)) ==
-        @sizeOf(GameButtonState) * input.controllers[0].buttons.array.len);
-    assert(@sizeOf(GameState) <= memory.permanent_storage_size);
+        @sizeOf(platform.GameButtonState) * input.controllers[0].buttons.array.len);
+    assert(@sizeOf(platform.GameState) <= memory.permanent_storage_size);
 
-    var game_state: *GameState = @as(
-        *GameState,
+    var game_state: *platform.GameState = @as(
+        *platform.GameState,
         @alignCast(@ptrCast(memory.permanent_storage)),
     );
 
     if (!memory.is_initialized) {
         var file_name = "./src/zigmade/zigmade.zig";
-        var file = platform.debug_platform_read_entire_file(file_name);
+        var file = memory.debug_platform_read_entire_file(file_name);
 
         if (file.contents != undefined) {
-            _ = platform.debug_platform_write_entire_file(
+            _ = memory.debug_platform_write_entire_file(
                 "test.out",
                 file.size,
                 file.contents,
             );
 
-            platform.debug_platform_free_file_memory(file.contents);
+            memory.debug_platform_free_file_memory(file.contents);
         }
 
         game_state.tone_hertz = 512;
+        game_state.t_sine = 0.0;
 
         // TODO: This may be more appropriate to do in the platform layer
         memory.is_initialized = true;
     }
 
     for (0..input.controllers.len) |controller_index| {
-        var controller: *GameControllerInput =
-            try get_controller(input, controller_index);
+        var controller: *platform.GameControllerInput =
+            try platform.get_controller(input, controller_index);
 
         if (controller.is_analog) {
             // NOTE: Use analog movement tuning
@@ -263,17 +143,17 @@ pub fn game_update_and_render(
 // It cannot be greater than ~1ms
 // TODO: Reduce the pressure on this function's performance
 // by measuring it or asking about it, etc.
-pub fn game_get_sound_samples(
-    memory: *GameMemory,
-    sound_buffer: *GameSoundBuffer,
-) !void {
-    var game_state: *GameState = @as(
-        *GameState,
+pub export fn get_sound_samples(
+    memory: *platform.GameMemory,
+    sound_buffer: *platform.GameSoundBuffer,
+) void {
+    var game_state: *platform.GameState = @as(
+        *platform.GameState,
         @alignCast(@ptrCast(memory.permanent_storage)),
     );
 
     try game_output_sound(
         sound_buffer,
-        game_state.tone_hertz,
+        game_state,
     );
 }
