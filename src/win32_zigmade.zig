@@ -962,7 +962,7 @@ pub export fn wWinMain(
                 sound_output.safety_bytes =
                     (sound_output.samples_per_second *
                     sound_output.bytes_per_sample /
-                    game_update_hertz) / 3;
+                    game_update_hertz) / 2;
 
                 try win32_init_direct_sound(
                     window,
@@ -1423,9 +1423,7 @@ pub export fn wWinMain(
                             if (seconds_elapsed_for_frame < target_seconds_per_frame) {
                                 if (sleep_is_granular) {
                                     var sleep_ms = @as(DWORD, @intFromFloat(1000.0 *
-                                        (target_seconds_per_frame -
-                                        seconds_elapsed_for_frame) -
-                                        1.0));
+                                        (target_seconds_per_frame - seconds_elapsed_for_frame)));
 
                                     if (sleep_ms > 0) {
                                         win32.Sleep(sleep_ms);

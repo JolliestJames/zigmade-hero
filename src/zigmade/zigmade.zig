@@ -48,7 +48,7 @@ fn render_weird_gradient(
         var pixel: [*]u32 = @ptrCast(@alignCast(row));
 
         for (0..@intCast(buffer.width)) |x| {
-            var blue: u32 = @as(u8, @truncate(x / 2 + @as(
+            var blue: u32 = @as(u8, @truncate(x + @as(
                 u32,
                 @bitCast(blue_offset),
             )));
