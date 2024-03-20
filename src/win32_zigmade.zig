@@ -949,8 +949,8 @@ pub export fn wWinMain(
                 sound_output.samples_per_second = 48_000;
                 sound_output.bytes_per_sample = @sizeOf(i16) * 2;
                 sound_output.secondary_buffer_size =
-                    @as(DWORD, @intCast(sound_output.samples_per_second)) *
-                    @as(DWORD, @intCast(sound_output.bytes_per_sample));
+                    @as(DWORD, @intCast(sound_output.samples_per_second *
+                    sound_output.bytes_per_sample));
                 // TODO: get rid of latency_sample_count
                 sound_output.latency_sample_count = 3 *
                     @divTrunc(
@@ -997,7 +997,7 @@ pub export fn wWinMain(
 
                 var game_memory = platform.GameMemory{
                     .permanent_storage_size = platform.Megabytes(64),
-                    .transient_storage_size = platform.Gigabytes(4),
+                    .transient_storage_size = platform.Gigabytes(1),
                     .debug_platform_read_entire_file = debug_platform_read_entire_file,
                     .debug_platform_write_entire_file = debug_platform_write_entire_file,
                     .debug_platform_free_file_memory = debug_platform_free_file_memory,
@@ -1345,6 +1345,9 @@ pub export fn wWinMain(
                                 target_cursor = target_cursor % sound_output.secondary_buffer_size;
 
                                 var bytes_to_write: DWORD = 0;
+
+                                // NOTE: The sound skips ONLY when the target cursor wraps
+                                // the length of the buffer. Why is this?
                                 if (byte_to_lock > target_cursor) {
                                     bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
                                     bytes_to_write += target_cursor;
