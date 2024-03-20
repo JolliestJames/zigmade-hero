@@ -1242,8 +1242,6 @@ pub export fn wWinMain(
 
                             if (game.update_and_render) |update_and_render| {
                                 update_and_render(
-                                    //try platform.game_update_and_render(
-                                    //&win32_platform,
                                     &game_memory,
                                     new_input,
                                     &offscreen_buffer,
@@ -1346,8 +1344,8 @@ pub export fn wWinMain(
 
                                 var bytes_to_write: DWORD = 0;
 
-                                // NOTE: The sound skips ONLY when the target cursor wraps
-                                // the length of the buffer. Why is this?
+                                // NOTE: The sound always skips when the target cursor wraps the length
+                                // of the buffer. Why is this?
                                 if (byte_to_lock > target_cursor) {
                                     bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
                                     bytes_to_write += target_cursor;
@@ -1366,8 +1364,6 @@ pub export fn wWinMain(
                                 if (game.get_sound_samples) |get_sound_samples| {
                                     get_sound_samples(&game_memory, &sound_buffer);
                                 }
-
-                                //try platform.game_get_sound_samples(&game_memory, &sound_buffer);
 
                                 if (INTERNAL) {
                                     var marker = &debug_time_markers[debug_time_marker_index];
