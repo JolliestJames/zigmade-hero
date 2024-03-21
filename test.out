@@ -14,10 +14,10 @@ fn game_output_sound(
     var sample_out = sound_buffer.samples;
 
     for (0..@intCast(sound_buffer.sample_count)) |i| {
-        var sine_value = std.math.sin(game_state.t_sine);
+        var sine_value = @sin(game_state.t_sine);
         var sample_value = @as(i16, @intFromFloat(
             sine_value * @as(
-                f32,
+                f16,
                 @floatFromInt(tone_volume),
             ),
         ));

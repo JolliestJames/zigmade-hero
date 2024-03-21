@@ -182,18 +182,38 @@ fn debug_platform_free_file_memory(maybe_memory: ?*anyopaque) void {
 
 const Win32GameCode = struct {
     dll: ?win32.HINSTANCE = null,
+    dll_last_write_time: win32.FILETIME = undefined,
     update_and_render: ?platform.update_and_render_type = null,
     get_sound_samples: ?platform.get_sound_samples_type = null,
     is_valid: bool = false,
 };
 
-fn win32_load_game_code() !Win32GameCode {
+inline fn win32_get_last_write_time(
+    file_name: [*:0]const u8,
+) win32.FILETIME {
+    var last_write_time = std.mem.zeroInit(win32.FILETIME, .{});
+
+    var find_data: win32.WIN32_FIND_DATAA = undefined;
+    var find_handle = win32.FindFirstFileA(file_name, &find_data);
+
+    if (@as(*anyopaque, @ptrCast(&find_handle)) != win32.INVALID_HANDLE_VALUE) {
+        last_write_time = find_data.ftLastWriteTime;
+        _ = win32.FindClose(find_handle);
+    }
+
+    return last_write_time;
+}
+
+fn win32_load_game_code(
+    source_dll_name: [*:0]const u8,
+    temp_dll_name: [*:0]const u8,
+) !Win32GameCode {
     var result = Win32GameCode{};
 
-    // TODO: Need to get the proper path here!
-    // TODO: Automatic determination of when updated are necessary.
-    _ = win32.CopyFileA("build/zigmade.dll", "build/zigmade_temp.dll", win32.FALSE);
-    result.dll = win32.LoadLibraryA("build/zigmade_temp.dll");
+    result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
+
+    _ = win32.CopyFileA(source_dll_name, temp_dll_name, win32.FALSE);
+    result.dll = win32.LoadLibraryA(temp_dll_name);
 
     if (result.dll != null) {
         result.update_and_render =
@@ -889,12 +909,60 @@ inline fn win32_debug_draw_vertical(
     }
 }
 
+fn concatenate(
+    source_a: []const u8,
+    source_b: []const u8,
+    destination: [:0]u8,
+) void {
+    // TODO: Bounds check on destination
+    var index: usize = 0;
+
+    for (source_a, 0..) |char, i| {
+        destination[i] = char;
+        index += 1;
+    }
+
+    for (source_b, 0..) |char, i| {
+        destination[index + i] = char;
+    }
+}
+
 pub export fn wWinMain(
     instance: ?win32.HINSTANCE,
     _: ?win32.HINSTANCE,
     _: [*:0]u16,
     _: u32,
 ) callconv(WINAPI) c_int {
+    // NOTE: Never use MAX_PATH in code that is user-facing, because it
+    // can be dangerous and lead to bad results.
+    var exe_file_name = [_:0]u8{0} ** win32.MAX_PATH;
+    _ = win32.GetModuleFileNameA(null, &exe_file_name, @sizeOf(@TypeOf(exe_file_name)));
+    var one_past_last_slash: usize = 0;
+
+    for (exe_file_name, 0..) |char, index| {
+        if (char == '\\') {
+            one_past_last_slash = index + 1;
+        }
+    }
+
+    var source_game_code_dll_name = "zigmade.dll";
+    var source_game_code_dll_path = [_:0]u8{0} ** win32.MAX_PATH;
+
+    concatenate(
+        exe_file_name[0..one_past_last_slash],
+        source_game_code_dll_name,
+        source_game_code_dll_path[0..win32.MAX_COUNTER_PATH :0],
+    );
+
+    var temp_game_code_dll_name = "zigmade_temp.dll";
+    var temp_game_code_dll_path = [_:0]u8{0} ** win32.MAX_PATH;
+
+    concatenate(
+        exe_file_name[0..one_past_last_slash],
+        temp_game_code_dll_name,
+        temp_game_code_dll_path[0..win32.MAX_COUNTER_PATH :0],
+    );
+
     var perf_count_frequency_result: win32.LARGE_INTEGER = undefined;
     _ = win32.QueryPerformanceFrequency(&perf_count_frequency_result);
     global_perf_count_frequency = perf_count_frequency_result.QuadPart;
@@ -1034,18 +1102,22 @@ pub export fn wWinMain(
                     var audio_latency_seconds: f32 = 0.0;
                     var sound_is_valid = false;
 
-                    var game = try win32_load_game_code();
-                    var load_counter: u32 = 0;
+                    var game = try win32_load_game_code(
+                        &source_game_code_dll_path,
+                        &temp_game_code_dll_path,
+                    );
 
                     var last_cycle_count = rdtsc();
 
                     while (global_running) {
-                        if (load_counter > 120) {
+                        var new_dll_write_time = win32_get_last_write_time(source_game_code_dll_name);
+
+                        if (win32.CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0) {
                             try win32_unload_game_code(&game);
-                            game = try win32_load_game_code();
-                            load_counter = 0;
-                        } else {
-                            load_counter += 1;
+                            game = try win32_load_game_code(
+                                &source_game_code_dll_path,
+                                &temp_game_code_dll_path,
+                            );
                         }
 
                         // TODO: Zeroing "macro" with comptime
@@ -1315,8 +1387,6 @@ pub export fn wWinMain(
                                     @as(DWORD, @intFromFloat((seconds_left_until_flip /
                                     target_seconds_per_frame) *
                                     @as(f32, @floatFromInt(expected_sound_bytes_per_frame))));
-                                // NOTE: Clearly Casey meant to use this and this perhaps
-                                // part of why audio is still bugged
                                 _ = expected_bytes_until_flip;
                                 var expected_frame_boundary_byte = play_cursor +
                                     expected_sound_bytes_per_frame;
@@ -1344,8 +1414,6 @@ pub export fn wWinMain(
 
                                 var bytes_to_write: DWORD = 0;
 
-                                // NOTE: The sound always skips when the target cursor wraps the length
-                                // of the buffer. Why is this?
                                 if (byte_to_lock > target_cursor) {
                                     bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
                                     bytes_to_write += target_cursor;
@@ -1353,14 +1421,11 @@ pub export fn wWinMain(
                                     bytes_to_write = target_cursor - byte_to_lock;
                                 }
 
-                                var sound_buffer: platform.GameSoundBuffer =
-                                    std.mem.zeroInit(platform.GameSoundBuffer, .{});
+                                var sound_buffer = std.mem.zeroInit(platform.GameSoundBuffer, .{});
                                 sound_buffer.samples_per_second = sound_output.samples_per_second;
-                                sound_buffer.sample_count = @divTrunc(
-                                    bytes_to_write,
-                                    sound_output.bytes_per_sample,
-                                );
+                                sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
                                 sound_buffer.samples = @alignCast(@ptrCast(samples.?));
+
                                 if (game.get_sound_samples) |get_sound_samples| {
                                     get_sound_samples(&game_memory, &sound_buffer);
                                 }
