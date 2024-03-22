@@ -53,6 +53,11 @@ const BackBuffer = struct {
     bytes_per_pixel: i32 = 4,
 };
 
+const WindowDimension = struct {
+    width: i32,
+    height: i32,
+};
+
 const Win32DebugTimeMarker = struct {
     output_play_cursor: DWORD,
     output_write_cursor: DWORD,
@@ -63,17 +68,62 @@ const Win32DebugTimeMarker = struct {
     flip_write_cursor: DWORD,
 };
 
+const Win32GameCode = struct {
+    dll: ?win32.HINSTANCE = null,
+    dll_last_write_time: win32.FILETIME = undefined,
+    update_and_render: ?platform.update_and_render_type = null,
+    get_sound_samples: ?platform.get_sound_samples_type = null,
+    is_valid: bool = false,
+};
+
+const Win32SoundOutput = struct {
+    samples_per_second: u32,
+    running_sample_index: u32,
+    bytes_per_sample: u32,
+    secondary_buffer_size: DWORD,
+    safety_bytes: DWORD,
+    latency_sample_count: u32,
+    // TODO: Should running sample index be in bytes as well?
+    // TODO: Math gets simpler if we add a "bytes per second" field?
+};
+
+const Win32State = struct {
+    total_size: u64,
+    game_memory_block: ?*anyopaque = undefined,
+    recording_handle: win32.HANDLE = undefined,
+    input_recording_index: i32,
+    playback_handle: win32.HANDLE = undefined,
+    input_playing_index: i32,
+};
+
+const XInputGetState = struct {
+    var call: *const fn (
+        user_index: DWORD,
+        state: ?*win32.XINPUT_STATE,
+    ) callconv(WINAPI) isize = undefined;
+
+    fn stub(_: DWORD, _: ?*win32.XINPUT_STATE) callconv(WINAPI) isize {
+        return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
+    }
+};
+
+const XInputSetState = struct {
+    var call: *const fn (
+        user_index: DWORD,
+        vibration: ?*win32.XINPUT_VIBRATION,
+    ) callconv(WINAPI) isize = undefined;
+
+    fn stub(_: DWORD, _: ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize {
+        return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
+    }
+};
+
 // TODO: Use globals for now
 var global_running: bool = false;
 var global_pause: bool = false;
 var global_back_buffer: BackBuffer = undefined;
 var global_secondary_buffer: *win32.IDirectSoundBuffer = undefined;
 var global_perf_count_frequency: i64 = undefined;
-
-const WindowDimension = struct {
-    width: i32,
-    height: i32,
-};
 
 fn debug_platform_read_entire_file(file_name: [*:0]const u8) platform.DebugReadFileResult {
     var result: platform.DebugReadFileResult = undefined;
@@ -180,14 +230,6 @@ fn debug_platform_free_file_memory(maybe_memory: ?*anyopaque) void {
     }
 }
 
-const Win32GameCode = struct {
-    dll: ?win32.HINSTANCE = null,
-    dll_last_write_time: win32.FILETIME = undefined,
-    update_and_render: ?platform.update_and_render_type = null,
-    get_sound_samples: ?platform.get_sound_samples_type = null,
-    is_valid: bool = false,
-};
-
 inline fn win32_get_last_write_time(
     file_name: [*:0]const u8,
 ) win32.FILETIME {
@@ -245,28 +287,6 @@ fn win32_unload_game_code(game: *Win32GameCode) !void {
     game.update_and_render = null;
     game.get_sound_samples = null;
 }
-
-const XInputGetState = struct {
-    var call: *const fn (
-        user_index: DWORD,
-        state: ?*win32.XINPUT_STATE,
-    ) callconv(WINAPI) isize = undefined;
-
-    fn stub(_: DWORD, _: ?*win32.XINPUT_STATE) callconv(WINAPI) isize {
-        return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
-    }
-};
-
-const XInputSetState = struct {
-    var call: *const fn (
-        user_index: DWORD,
-        vibration: ?*win32.XINPUT_VIBRATION,
-    ) callconv(WINAPI) isize = undefined;
-
-    fn stub(_: DWORD, _: ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize {
-        return (@intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED));
-    }
-};
 
 fn win32_load_x_input() !void {
     if (win32.LoadLibraryA(win32.XINPUT_DLL)) |x_input_library| {
@@ -483,7 +503,21 @@ fn win32_main_window_callback(
             global_running = false;
         },
         win32.WM_ACTIVATEAPP => {
-            win32.OutputDebugStringA("WM_ACTIVATEAPP\n");
+            if (w_param == win32.TRUE) {
+                _ = win32.SetLayeredWindowAttributes(
+                    window,
+                    0,
+                    255,
+                    win32.LWA_ALPHA,
+                );
+            } else {
+                _ = win32.SetLayeredWindowAttributes(
+                    window,
+                    0,
+                    64,
+                    win32.LWA_ALPHA,
+                );
+            }
         },
         win32.WM_DESTROY => {
             // TODO: Handle as an error--recreate window?
@@ -517,17 +551,6 @@ fn win32_main_window_callback(
 
     return (result);
 }
-
-const Win32SoundOutput = struct {
-    samples_per_second: u32,
-    running_sample_index: u32,
-    bytes_per_sample: u32,
-    secondary_buffer_size: DWORD,
-    safety_bytes: DWORD,
-    latency_sample_count: u32,
-    // TODO: Should running sample index be in bytes as well?
-    // TODO: Math gets simpler if we add a "bytes per second" field?
-};
 
 fn win32_clear_buffer(sound_output: *Win32SoundOutput) !void {
     var region_1: ?*anyopaque = undefined;
@@ -635,7 +658,9 @@ fn win32_process_keyboard_message(
     new_state: *platform.GameButtonState,
     is_down: bool,
 ) !void {
-    std.debug.assert(new_state.ended_down != is_down);
+    // NOTE: This assert fires when tabbing in and out of the game
+    // with a held key that we process
+    // std.debug.assert(new_state.ended_down != is_down);
     new_state.ended_down = is_down;
     new_state.half_transition_count += 1;
 }
@@ -668,7 +693,10 @@ fn win32_process_x_input_stick_value(
     return result;
 }
 
-fn win32_process_pending_messages(keyboard_controller: *platform.GameControllerInput) !void {
+fn win32_process_pending_messages(
+    win32_state: *Win32State,
+    keyboard_controller: *platform.GameControllerInput,
+) !void {
     var message: win32.MSG = undefined;
 
     while (win32.PeekMessageW(
@@ -744,6 +772,16 @@ fn win32_process_pending_messages(keyboard_controller: *platform.GameControllerI
                         win32.VK_P => {
                             if (INTERNAL and is_down) {
                                 global_pause = !global_pause;
+                            }
+                        },
+                        win32.VK_L => {
+                            if (is_down) {
+                                if (win32_state.input_recording_index == 0) {
+                                    win32_begin_recording_input(win32_state, 1);
+                                } else {
+                                    win32_end_recording_input(win32_state);
+                                    win32_begin_input_play_back(win32_state, 1);
+                                }
                             }
                         },
                         else => {},
@@ -927,6 +965,125 @@ fn concatenate(
     }
 }
 
+fn win32_begin_recording_input(
+    win32_state: *Win32State,
+    input_recording_index: i32,
+) void {
+    win32_state.input_recording_index = input_recording_index;
+
+    // TODO: These files must go in a temporary/build directory!
+    // TODO: Lazily write the giant memory block and use a memory copy instead?
+    var file_name = "foo.zmi";
+
+    win32_state.recording_handle = win32.CreateFileA(
+        file_name,
+        win32.FILE_GENERIC_WRITE,
+        win32.FILE_SHARE_NONE,
+        null,
+        win32.CREATE_ALWAYS,
+        win32.FILE_FLAGS_AND_ATTRIBUTES{},
+        null,
+    );
+
+    var bytes_to_write: DWORD = @intCast(win32_state.total_size);
+    std.debug.assert(win32_state.total_size == bytes_to_write);
+    var bytes_written: DWORD = undefined;
+
+    _ = win32.WriteFile(
+        win32_state.recording_handle,
+        win32_state.game_memory_block,
+        bytes_to_write,
+        &bytes_written,
+        null,
+    );
+}
+
+fn win32_end_recording_input(win32_state: *Win32State) void {
+    _ = win32.CloseHandle(win32_state.recording_handle);
+    win32_state.input_recording_index = 0;
+}
+
+fn win32_begin_input_play_back(
+    win32_state: *Win32State,
+    input_playing_index: i32,
+) void {
+    win32_state.input_playing_index = input_playing_index;
+
+    var file_name = "foo.zmi";
+
+    win32_state.playback_handle = win32.CreateFileA(
+        file_name,
+        win32.FILE_GENERIC_READ,
+        win32.FILE_SHARE_READ,
+        null,
+        win32.OPEN_EXISTING,
+        win32.FILE_FLAGS_AND_ATTRIBUTES{},
+        null,
+    );
+
+    var bytes_to_read: DWORD = @intCast(win32_state.total_size);
+    std.debug.assert(win32_state.total_size == bytes_to_read);
+    var bytes_read: DWORD = undefined;
+
+    _ = win32.ReadFile(
+        win32_state.playback_handle,
+        win32_state.game_memory_block,
+        bytes_to_read,
+        &bytes_read,
+        null,
+    );
+}
+
+fn win32_end_input_play_back(win32_state: *Win32State) void {
+    _ = win32.CloseHandle(win32_state.playback_handle);
+    win32_state.input_playing_index = 0;
+}
+
+fn win32_record_input(
+    win32_state: *Win32State,
+    game_input: *platform.GameInput,
+) void {
+    var bytes_written: DWORD = undefined;
+
+    _ = win32.WriteFile(
+        win32_state.recording_handle,
+        game_input,
+        @sizeOf(platform.GameInput),
+        &bytes_written,
+        null,
+    );
+}
+
+fn win32_play_back_input(
+    win32_state: *Win32State,
+    game_input: *platform.GameInput,
+) void {
+    var bytes_read: DWORD = undefined;
+
+    if (win32.ReadFile(
+        win32_state.playback_handle,
+        game_input,
+        @sizeOf(@TypeOf(game_input.*)),
+        &bytes_read,
+        null,
+    ) != win32.FALSE) {
+        if (bytes_read == 0) {
+            // NOTE: We've hit the end of the stream, go back to the beginning
+            var playing_index = win32_state.input_playing_index;
+            win32_end_input_play_back(win32_state);
+            win32_begin_input_play_back(win32_state, playing_index);
+
+            _ = win32.ReadFile(
+                win32_state.playback_handle,
+                game_input,
+                @sizeOf(@TypeOf(game_input.*)),
+                &bytes_read,
+                null,
+            );
+        }
+    }
+}
+
 pub export fn wWinMain(
     instance: ?win32.HINSTANCE,
     _: ?win32.HINSTANCE,
@@ -997,545 +1154,559 @@ pub export fn wWinMain(
         window_style.VISIBLE = 1;
 
         if (win32.CreateWindowExW(
-            win32.WINDOW_EX_STYLE{},
+            win32.WINDOW_EX_STYLE{ .TOPMOST = 1, .LAYERED = 1 },
             window_class.lpszClassName,
             win32.L("Handmade Hero"),
             window_style,
-            win32.CW_USEDEFAULT,
-            win32.CW_USEDEFAULT,
-            win32.CW_USEDEFAULT,
-            win32.CW_USEDEFAULT,
+            1280,
+            25,
+            1280,
+            720,
+            //win32.CW_USEDEFAULT,
+            //win32.CW_USEDEFAULT,
+            //win32.CW_USEDEFAULT,
+            //win32.CW_USEDEFAULT,
             null,
             null,
             instance,
             null,
         )) |window| {
-            if (win32.GetDC(window)) |device_context| {
-                var sound_output: Win32SoundOutput =
-                    std.mem.zeroInit(Win32SoundOutput, .{});
+            var sound_output = std.mem.zeroInit(Win32SoundOutput, .{});
 
-                sound_output.samples_per_second = 48_000;
-                sound_output.bytes_per_sample = @sizeOf(i16) * 2;
-                sound_output.secondary_buffer_size =
-                    @as(DWORD, @intCast(sound_output.samples_per_second *
-                    sound_output.bytes_per_sample));
-                // TODO: get rid of latency_sample_count
-                sound_output.latency_sample_count = 3 *
-                    @divTrunc(
-                    sound_output.samples_per_second,
-                    game_update_hertz,
+            sound_output.samples_per_second = 48_000;
+            sound_output.bytes_per_sample = @sizeOf(i16) * 2;
+            sound_output.secondary_buffer_size =
+                @as(DWORD, @intCast(sound_output.samples_per_second *
+                sound_output.bytes_per_sample));
+            // TODO: get rid of latency_sample_count
+            sound_output.latency_sample_count = 3 *
+                @divTrunc(
+                sound_output.samples_per_second,
+                game_update_hertz,
+            );
+            // TODO: Actually compute the variance and see
+            // what the lowest reasonable value is
+            sound_output.safety_bytes =
+                (sound_output.samples_per_second *
+                sound_output.bytes_per_sample /
+                game_update_hertz) / 2;
+
+            try win32_init_direct_sound(
+                window,
+                sound_output.samples_per_second,
+                sound_output.secondary_buffer_size,
+            );
+
+            try win32_clear_buffer(&sound_output);
+
+            _ = global_secondary_buffer.vtable.Play(
+                global_secondary_buffer,
+                0,
+                0,
+                win32.DSBPLAY_LOOPING,
+            );
+
+            var win32_state = std.mem.zeroInit(Win32State, .{});
+            global_running = true;
+
+            // TODO: pool with bitmap VirtualAlloc
+            var samples = win32.VirtualAlloc(
+                null,
+                sound_output.secondary_buffer_size,
+                win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
+                win32.PAGE_READWRITE,
+            );
+
+            var base_address: ?*anyopaque =
+                if (INTERNAL)
+                @ptrFromInt(platform.Terabytes(2))
+            else
+                null;
+
+            var game_memory = platform.GameMemory{
+                .permanent_storage_size = platform.Megabytes(64),
+                .transient_storage_size = platform.Gigabytes(1),
+                .debug_platform_read_entire_file = debug_platform_read_entire_file,
+                .debug_platform_write_entire_file = debug_platform_write_entire_file,
+                .debug_platform_free_file_memory = debug_platform_free_file_memory,
+            };
+
+            // TODO: Handle various memory footprints using system metrics
+            win32_state.total_size = game_memory.permanent_storage_size +
+                game_memory.transient_storage_size;
+
+            win32_state.game_memory_block = @as([*]u8, @ptrCast(win32.VirtualAlloc(
+                base_address,
+                @intCast(win32_state.total_size),
+                win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
+                win32.PAGE_READWRITE,
+            )));
+
+            game_memory.permanent_storage = @ptrCast(win32_state.game_memory_block);
+            game_memory.transient_storage = game_memory.permanent_storage +
+                game_memory.permanent_storage_size;
+
+            if (samples != undefined and
+                game_memory.permanent_storage != undefined and
+                game_memory.transient_storage != undefined)
+            {
+                var inputs: [2]platform.GameInput = undefined;
+                var new_input = &inputs[0];
+                var old_input = &inputs[1];
+
+                var last_counter = try win32_get_wall_clock();
+                var flip_wall_clock = try win32_get_wall_clock();
+                var debug_time_marker_index: usize = 0;
+                var debug_time_markers: [game_update_hertz / 2]Win32DebugTimeMarker =
+                    std.mem.zeroes([game_update_hertz / 2]Win32DebugTimeMarker);
+
+                var audio_latency_bytes: DWORD = 0;
+                var audio_latency_seconds: f32 = 0.0;
+                var sound_is_valid = false;
+
+                var game = try win32_load_game_code(
+                    &source_game_code_dll_path,
+                    &temp_game_code_dll_path,
                 );
-                // TODO: Actually compute the variance and see
-                // what the lowest reasonable value is
-                sound_output.safety_bytes =
-                    (sound_output.samples_per_second *
-                    sound_output.bytes_per_sample /
-                    game_update_hertz) / 2;
 
-                try win32_init_direct_sound(
-                    window,
-                    sound_output.samples_per_second,
-                    sound_output.secondary_buffer_size,
-                );
+                var last_cycle_count = rdtsc();
 
-                try win32_clear_buffer(&sound_output);
+                while (global_running) {
+                    var new_dll_write_time = win32_get_last_write_time(source_game_code_dll_name);
 
-                _ = global_secondary_buffer.vtable.Play(
-                    global_secondary_buffer,
-                    0,
-                    0,
-                    win32.DSBPLAY_LOOPING,
-                );
+                    if (win32.CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0) {
+                        try win32_unload_game_code(&game);
+                        game = try win32_load_game_code(
+                            &source_game_code_dll_path,
+                            &temp_game_code_dll_path,
+                        );
+                    }
 
-                global_running = true;
+                    // TODO: Zeroing "macro" with comptime
+                    // TODO: We can't zero everything because the up/down state will be wrong
+                    // NOTE: Index 0 belongs to keyboard
+                    var old_keyboard_controller: *platform.GameControllerInput =
+                        try platform.get_controller(old_input, 0);
+                    var new_keyboard_controller: *platform.GameControllerInput =
+                        try platform.get_controller(new_input, 0);
+                    new_keyboard_controller.* =
+                        std.mem.zeroInit(platform.GameControllerInput, .{});
+                    new_keyboard_controller.is_connected = true;
 
-                // TODO: pool with bitmap VirtualAlloc
-                var samples = win32.VirtualAlloc(
-                    null,
-                    sound_output.secondary_buffer_size,
-                    win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
-                    win32.PAGE_READWRITE,
-                );
+                    for (0..new_keyboard_controller.buttons.array.len) |button_index| {
+                        new_keyboard_controller.buttons.array[button_index].ended_down =
+                            old_keyboard_controller.buttons.array[button_index].ended_down;
+                    }
 
-                var base_address: ?*anyopaque =
-                    if (INTERNAL)
-                    @ptrFromInt(platform.Terabytes(2))
-                else
-                    null;
+                    try win32_process_pending_messages(&win32_state, new_keyboard_controller);
 
-                var game_memory = platform.GameMemory{
-                    .permanent_storage_size = platform.Megabytes(64),
-                    .transient_storage_size = platform.Gigabytes(1),
-                    .debug_platform_read_entire_file = debug_platform_read_entire_file,
-                    .debug_platform_write_entire_file = debug_platform_write_entire_file,
-                    .debug_platform_free_file_memory = debug_platform_free_file_memory,
-                };
-
-                // TODO: Handle various memory footprints using system metrics
-                var total_size = game_memory.permanent_storage_size +
-                    game_memory.transient_storage_size;
-
-                game_memory.permanent_storage = @as([*]u8, @ptrCast(win32.VirtualAlloc(
-                    base_address,
-                    @intCast(total_size),
-                    win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
-                    win32.PAGE_READWRITE,
-                )));
-                game_memory.transient_storage = game_memory.permanent_storage +
-                    game_memory.permanent_storage_size;
-
-                if (samples != undefined and
-                    game_memory.permanent_storage != undefined and
-                    game_memory.transient_storage != undefined)
-                {
-                    var inputs: [2]platform.GameInput = undefined;
-                    var new_input = &inputs[0];
-                    var old_input = &inputs[1];
-
-                    var last_counter = try win32_get_wall_clock();
-                    var flip_wall_clock = try win32_get_wall_clock();
-                    var debug_time_marker_index: usize = 0;
-                    var debug_time_markers: [game_update_hertz / 2]Win32DebugTimeMarker =
-                        std.mem.zeroes([game_update_hertz / 2]Win32DebugTimeMarker);
-
-                    var audio_latency_bytes: DWORD = 0;
-                    var audio_latency_seconds: f32 = 0.0;
-                    var sound_is_valid = false;
-
-                    var game = try win32_load_game_code(
-                        &source_game_code_dll_path,
-                        &temp_game_code_dll_path,
-                    );
-
-                    var last_cycle_count = rdtsc();
-
-                    while (global_running) {
-                        var new_dll_write_time = win32_get_last_write_time(source_game_code_dll_name);
-
-                        if (win32.CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0) {
-                            try win32_unload_game_code(&game);
-                            game = try win32_load_game_code(
-                                &source_game_code_dll_path,
-                                &temp_game_code_dll_path,
-                            );
+                    if (!global_pause) {
+                        // TODO: Need to not poll disconnected controllers
+                        // to avoid xinput frame ratre hit on older libraries
+                        // TODO: should we poll this more frequently?
+                        var max_controller_count = win32.XUSER_MAX_COUNT;
+                        if (max_controller_count > new_input.controllers.len - 1) {
+                            max_controller_count = new_input.controllers.len - 1;
                         }
 
-                        // TODO: Zeroing "macro" with comptime
-                        // TODO: We can't zero everything because the up/down state will be wrong
-                        // NOTE: Index 0 belongs to keyboard
-                        var old_keyboard_controller: *platform.GameControllerInput =
-                            try platform.get_controller(old_input, 0);
-                        var new_keyboard_controller: *platform.GameControllerInput =
-                            try platform.get_controller(new_input, 0);
-                        new_keyboard_controller.* =
-                            std.mem.zeroInit(platform.GameControllerInput, .{});
-                        new_keyboard_controller.is_connected = true;
+                        // NOTE: Indices 1..4 belong to gamepad
+                        for (0..max_controller_count) |controller_index| {
+                            var our_index = controller_index + 1;
+                            var old_controller: *platform.GameControllerInput =
+                                try platform.get_controller(old_input, our_index);
+                            var new_controller: *platform.GameControllerInput =
+                                try platform.get_controller(new_input, our_index);
+                            var controller_state: win32.XINPUT_STATE = undefined;
 
-                        for (0..new_keyboard_controller.buttons.array.len) |button_index| {
-                            new_keyboard_controller.buttons.array[button_index].ended_down =
-                                old_keyboard_controller.buttons.array[button_index].ended_down;
-                        }
+                            if (XInputGetState.call(
+                                @intCast(controller_index),
+                                &controller_state,
+                            ) == @intFromEnum(win32.ERROR_SUCCESS)) {
+                                new_controller.is_connected = true;
 
-                        try win32_process_pending_messages(new_keyboard_controller);
+                                // NOTE: Controller is plugged in
+                                // TODO: See if controller_state.dwPacketNumber increments too quickly
+                                var pad: *win32.XINPUT_GAMEPAD = &controller_state.Gamepad;
 
-                        if (!global_pause) {
-                            // TODO: Need to not poll disconnected controllers
-                            // to avoid xinput frame ratre hit on older libraries
-                            // TODO: should we poll this more frequently?
-                            var max_controller_count = win32.XUSER_MAX_COUNT;
-                            if (max_controller_count > new_input.controllers.len - 1) {
-                                max_controller_count = new_input.controllers.len - 1;
-                            }
-
-                            // NOTE: Indices 1..4 belong to gamepad
-                            for (0..max_controller_count) |controller_index| {
-                                var our_index = controller_index + 1;
-                                var old_controller: *platform.GameControllerInput =
-                                    try platform.get_controller(old_input, our_index);
-                                var new_controller: *platform.GameControllerInput =
-                                    try platform.get_controller(new_input, our_index);
-                                var controller_state: win32.XINPUT_STATE = undefined;
-
-                                if (XInputGetState.call(
-                                    @intCast(controller_index),
-                                    &controller_state,
-                                ) == @intFromEnum(win32.ERROR_SUCCESS)) {
-                                    new_controller.is_connected = true;
-
-                                    // NOTE: Controller is plugged in
-                                    // TODO: See if controller_state.dwPacketNumber increments too quickly
-                                    var pad: *win32.XINPUT_GAMEPAD = &controller_state.Gamepad;
-
-                                    // TODO: This is a square deadzone, check XInput to
-                                    // verify that the deadzone is round and show how to do
-                                    // round deadzone processing
-                                    new_controller.stick_average_x = try win32_process_x_input_stick_value(
-                                        pad.sThumbLX,
-                                        win32.XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
-                                    );
-                                    new_controller.stick_average_y = try win32_process_x_input_stick_value(
-                                        pad.sThumbLY,
-                                        win32.XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
-                                    );
-
-                                    if ((new_controller.stick_average_x != 0.0) or
-                                        (new_controller.stick_average_y != 0.0))
-                                    {
-                                        new_controller.is_analog = true;
-                                    }
-
-                                    if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) > 0) {
-                                        new_controller.stick_average_y = 1.0;
-                                        new_controller.is_analog = false;
-                                    }
-
-                                    if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN) > 0) {
-                                        new_controller.stick_average_y = -1.0;
-                                        new_controller.is_analog = false;
-                                    }
-
-                                    if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT) > 0) {
-                                        new_controller.stick_average_x = -1.0;
-                                        new_controller.is_analog = false;
-                                    }
-
-                                    if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT) > 0) {
-                                        new_controller.stick_average_x = 1.0;
-                                        new_controller.is_analog = false;
-                                    }
-
-                                    var threshold: f32 = 0.5;
-                                    try win32_process_x_input_digital_button(
-                                        if (new_controller.stick_average_x < -threshold)
-                                            1
-                                        else
-                                            0,
-                                        &old_controller.buttons.map.move_left,
-                                        &new_controller.buttons.map.move_left,
-                                        1,
-                                    );
-                                    try win32_process_x_input_digital_button(
-                                        if (new_controller.stick_average_x > threshold)
-                                            1
-                                        else
-                                            0,
-                                        &old_controller.buttons.map.move_right,
-                                        &new_controller.buttons.map.move_right,
-                                        1,
-                                    );
-                                    try win32_process_x_input_digital_button(
-                                        if (new_controller.stick_average_y < -threshold)
-                                            1
-                                        else
-                                            0,
-                                        &old_controller.buttons.map.move_down,
-                                        &new_controller.buttons.map.move_down,
-                                        1,
-                                    );
-                                    try win32_process_x_input_digital_button(
-                                        if (new_controller.stick_average_y > threshold)
-                                            1
-                                        else
-                                            0,
-                                        &old_controller.buttons.map.move_up,
-                                        &new_controller.buttons.map.move_up,
-                                        1,
-                                    );
-
-                                    try win32_process_x_input_digital_button(
-                                        pad.wButtons,
-                                        &old_controller.buttons.map.action_down,
-                                        &new_controller.buttons.map.action_down,
-                                        win32.XINPUT_GAMEPAD_A,
-                                    );
-                                    try win32_process_x_input_digital_button(
-                                        pad.wButtons,
-                                        &old_controller.buttons.map.action_right,
-                                        &new_controller.buttons.map.action_right,
-                                        win32.XINPUT_GAMEPAD_B,
-                                    );
-                                    try win32_process_x_input_digital_button(
-                                        pad.wButtons,
-                                        &old_controller.buttons.map.action_left,
-                                        &new_controller.buttons.map.action_left,
-                                        win32.XINPUT_GAMEPAD_X,
-                                    );
-                                    try win32_process_x_input_digital_button(
-                                        pad.wButtons,
-                                        &old_controller.buttons.map.action_up,
-                                        &new_controller.buttons.map.action_up,
-                                        win32.XINPUT_GAMEPAD_Y,
-                                    );
-                                    try win32_process_x_input_digital_button(
-                                        pad.wButtons,
-                                        &old_controller.buttons.map.left_shoulder,
-                                        &new_controller.buttons.map.left_shoulder,
-                                        win32.XINPUT_GAMEPAD_LEFT_SHOULDER,
-                                    );
-                                    try win32_process_x_input_digital_button(
-                                        pad.wButtons,
-                                        &old_controller.buttons.map.right_shoulder,
-                                        &new_controller.buttons.map.right_shoulder,
-                                        win32.XINPUT_GAMEPAD_RIGHT_SHOULDER,
-                                    );
-                                    try win32_process_x_input_digital_button(
-                                        pad.wButtons,
-                                        &old_controller.buttons.map.start,
-                                        &new_controller.buttons.map.start,
-                                        win32.XINPUT_GAMEPAD_START,
-                                    );
-                                    try win32_process_x_input_digital_button(
-                                        pad.wButtons,
-                                        &old_controller.buttons.map.back,
-                                        &new_controller.buttons.map.back,
-                                        win32.XINPUT_GAMEPAD_BACK,
-                                    );
-
-                                    // var start = pad.wButtons & win32.XINPUT_GAMEPAD_START;
-                                    // var back = pad.wButtons & win32.XINPUT_GAMEPAD_BACK;
-                                } else {
-                                    // NOTE: Controller is unavailable
-                                    new_controller.is_connected = false;
-                                }
-                            }
-
-                            // var vibration: win32.XINPUT_VIBRATION = undefined;
-                            // vibration.wLeftMotorSpeed = 60000;
-                            // vibration.wRightMotorSpeed = 60000;
-                            // _ = XInputSetState.call(0, &vibration);
-
-                            var offscreen_buffer: platform.GameOffscreenBuffer =
-                                std.mem.zeroInit(platform.GameOffscreenBuffer, .{});
-                            offscreen_buffer.width = global_back_buffer.width;
-                            offscreen_buffer.height = global_back_buffer.height;
-                            offscreen_buffer.pitch = global_back_buffer.pitch;
-                            offscreen_buffer.memory =
-                                @alignCast(@ptrCast(global_back_buffer.memory));
-
-                            if (game.update_and_render) |update_and_render| {
-                                update_and_render(
-                                    &game_memory,
-                                    new_input,
-                                    &offscreen_buffer,
+                                // TODO: This is a square deadzone, check XInput to
+                                // verify that the deadzone is round and show how to do
+                                // round deadzone processing
+                                new_controller.stick_average_x = try win32_process_x_input_stick_value(
+                                    pad.sThumbLX,
+                                    win32.XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
                                 );
-                            }
-
-                            var audio_wall_clock = try win32_get_wall_clock();
-                            var from_begin_to_audio_seconds = try win32_get_seconds_elapsed(
-                                flip_wall_clock,
-                                audio_wall_clock,
-                            );
-
-                            var play_cursor: DWORD = 0;
-                            var write_cursor: DWORD = 0;
-
-                            // NOTE: Sounds skips on every new loop of the buffer (1 second), so the sine
-                            // wave is not properly lining up on either side of the buffer similar to
-                            // the bug Casey observed in episode 9
-                            if (win32.SUCCEEDED(global_secondary_buffer.vtable.GetCurrentPosition(
-                                global_secondary_buffer,
-                                &play_cursor,
-                                &write_cursor,
-                            ))) {
-                                // NOTE: How sound output computation works
-                                //
-                                // Define a safety value that is the number of samples that the game
-                                // loop may vary by (up to 2ms)
-                                //
-                                // When we wake up to write audio, look and see what the play cursor
-                                // position is and forecast ahead where the play cursor ought to be
-                                // on the next frame boundary.
-                                //
-                                // Then look to see if the write cursor is before this boundary by
-                                // the safety value. If it is, fill target to frame boundary + 1 frame,
-                                // and then one frame further, providing perfect audio sync for
-                                // cards with low enough latency
-                                //
-                                // If write cursor is after the safety value, then assume
-                                // audio cannot be perfectly synced, so write one frame's worth of
-                                // audio plus safety value's amount of guard samples
-
-                                if (!sound_is_valid) {
-                                    sound_output.running_sample_index =
-                                        write_cursor /
-                                        sound_output.bytes_per_sample;
-
-                                    sound_is_valid = true;
-                                }
-
-                                var byte_to_lock =
-                                    (sound_output.running_sample_index *
-                                    sound_output.bytes_per_sample) %
-                                    sound_output.secondary_buffer_size;
-
-                                var expected_sound_bytes_per_frame =
-                                    (sound_output.samples_per_second *
-                                    sound_output.bytes_per_sample) /
-                                    game_update_hertz;
-                                var seconds_left_until_flip: f32 =
-                                    target_seconds_per_frame -
-                                    from_begin_to_audio_seconds;
-
-                                // NOTE: Without this check, a crash occurs when unpausing
-                                // the game due to trying to convert seconds_left_until_flip
-                                // to a DWORD when its value is negative
-                                if (seconds_left_until_flip < 0) {
-                                    seconds_left_until_flip = 0.0;
-                                }
-
-                                var expected_bytes_until_flip =
-                                    @as(DWORD, @intFromFloat((seconds_left_until_flip /
-                                    target_seconds_per_frame) *
-                                    @as(f32, @floatFromInt(expected_sound_bytes_per_frame))));
-                                _ = expected_bytes_until_flip;
-                                var expected_frame_boundary_byte = play_cursor +
-                                    expected_sound_bytes_per_frame;
-                                var safe_write_cursor = write_cursor;
-
-                                if (safe_write_cursor < play_cursor) {
-                                    safe_write_cursor += sound_output.secondary_buffer_size;
-                                }
-
-                                std.debug.assert(safe_write_cursor >= play_cursor);
-
-                                safe_write_cursor += sound_output.safety_bytes;
-                                var audio_card_is_low_latency = safe_write_cursor < expected_frame_boundary_byte;
-                                var target_cursor: DWORD = 0;
-
-                                if (audio_card_is_low_latency) {
-                                    target_cursor = expected_frame_boundary_byte + expected_sound_bytes_per_frame;
-                                } else {
-                                    target_cursor = write_cursor +
-                                        expected_sound_bytes_per_frame +
-                                        sound_output.safety_bytes;
-                                }
-
-                                target_cursor = target_cursor % sound_output.secondary_buffer_size;
-
-                                var bytes_to_write: DWORD = 0;
-
-                                if (byte_to_lock > target_cursor) {
-                                    bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
-                                    bytes_to_write += target_cursor;
-                                } else {
-                                    bytes_to_write = target_cursor - byte_to_lock;
-                                }
-
-                                var sound_buffer = std.mem.zeroInit(platform.GameSoundBuffer, .{});
-                                sound_buffer.samples_per_second = sound_output.samples_per_second;
-                                sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
-                                sound_buffer.samples = @alignCast(@ptrCast(samples.?));
-
-                                if (game.get_sound_samples) |get_sound_samples| {
-                                    get_sound_samples(&game_memory, &sound_buffer);
-                                }
-
-                                if (INTERNAL) {
-                                    var marker = &debug_time_markers[debug_time_marker_index];
-                                    marker.output_play_cursor = play_cursor;
-                                    marker.output_write_cursor = write_cursor;
-                                    marker.output_location = byte_to_lock;
-                                    marker.output_byte_count = bytes_to_write;
-                                    marker.expected_flip_play_cursor = expected_frame_boundary_byte;
-
-                                    var unwrapped_write_cursor = write_cursor;
-
-                                    if (unwrapped_write_cursor < play_cursor) {
-                                        unwrapped_write_cursor += sound_output.secondary_buffer_size;
-                                    }
-
-                                    audio_latency_bytes = unwrapped_write_cursor - play_cursor;
-
-                                    audio_latency_seconds =
-                                        (@as(f32, @floatFromInt(audio_latency_bytes)) /
-                                        @as(f32, @floatFromInt(sound_output.bytes_per_sample))) /
-                                        @as(f32, @floatFromInt(sound_output.samples_per_second));
-
-                                    std.debug.print(
-                                        "BTL: {}, TC {}, BTW: {} - PC: {}, WC: {}, DELTA: {}, ({d:1.6})s\n",
-                                        .{
-                                            byte_to_lock,
-                                            target_cursor,
-                                            bytes_to_write,
-                                            play_cursor,
-                                            write_cursor,
-                                            audio_latency_bytes,
-                                            audio_latency_seconds,
-                                        },
-                                    );
-                                }
-
-                                try win32_fill_sound_buffer(
-                                    &sound_output,
-                                    byte_to_lock,
-                                    bytes_to_write,
-                                    &sound_buffer,
+                                new_controller.stick_average_y = try win32_process_x_input_stick_value(
+                                    pad.sThumbLY,
+                                    win32.XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
                                 );
+
+                                if ((new_controller.stick_average_x != 0.0) or
+                                    (new_controller.stick_average_y != 0.0))
+                                {
+                                    new_controller.is_analog = true;
+                                }
+
+                                if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) > 0) {
+                                    new_controller.stick_average_y = 1.0;
+                                    new_controller.is_analog = false;
+                                }
+
+                                if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN) > 0) {
+                                    new_controller.stick_average_y = -1.0;
+                                    new_controller.is_analog = false;
+                                }
+
+                                if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT) > 0) {
+                                    new_controller.stick_average_x = -1.0;
+                                    new_controller.is_analog = false;
+                                }
+
+                                if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT) > 0) {
+                                    new_controller.stick_average_x = 1.0;
+                                    new_controller.is_analog = false;
+                                }
+
+                                var threshold: f32 = 0.5;
+                                try win32_process_x_input_digital_button(
+                                    if (new_controller.stick_average_x < -threshold)
+                                        1
+                                    else
+                                        0,
+                                    &old_controller.buttons.map.move_left,
+                                    &new_controller.buttons.map.move_left,
+                                    1,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    if (new_controller.stick_average_x > threshold)
+                                        1
+                                    else
+                                        0,
+                                    &old_controller.buttons.map.move_right,
+                                    &new_controller.buttons.map.move_right,
+                                    1,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    if (new_controller.stick_average_y < -threshold)
+                                        1
+                                    else
+                                        0,
+                                    &old_controller.buttons.map.move_down,
+                                    &new_controller.buttons.map.move_down,
+                                    1,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    if (new_controller.stick_average_y > threshold)
+                                        1
+                                    else
+                                        0,
+                                    &old_controller.buttons.map.move_up,
+                                    &new_controller.buttons.map.move_up,
+                                    1,
+                                );
+
+                                try win32_process_x_input_digital_button(
+                                    pad.wButtons,
+                                    &old_controller.buttons.map.action_down,
+                                    &new_controller.buttons.map.action_down,
+                                    win32.XINPUT_GAMEPAD_A,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    pad.wButtons,
+                                    &old_controller.buttons.map.action_right,
+                                    &new_controller.buttons.map.action_right,
+                                    win32.XINPUT_GAMEPAD_B,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    pad.wButtons,
+                                    &old_controller.buttons.map.action_left,
+                                    &new_controller.buttons.map.action_left,
+                                    win32.XINPUT_GAMEPAD_X,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    pad.wButtons,
+                                    &old_controller.buttons.map.action_up,
+                                    &new_controller.buttons.map.action_up,
+                                    win32.XINPUT_GAMEPAD_Y,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    pad.wButtons,
+                                    &old_controller.buttons.map.left_shoulder,
+                                    &new_controller.buttons.map.left_shoulder,
+                                    win32.XINPUT_GAMEPAD_LEFT_SHOULDER,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    pad.wButtons,
+                                    &old_controller.buttons.map.right_shoulder,
+                                    &new_controller.buttons.map.right_shoulder,
+                                    win32.XINPUT_GAMEPAD_RIGHT_SHOULDER,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    pad.wButtons,
+                                    &old_controller.buttons.map.start,
+                                    &new_controller.buttons.map.start,
+                                    win32.XINPUT_GAMEPAD_START,
+                                );
+                                try win32_process_x_input_digital_button(
+                                    pad.wButtons,
+                                    &old_controller.buttons.map.back,
+                                    &new_controller.buttons.map.back,
+                                    win32.XINPUT_GAMEPAD_BACK,
+                                );
+
+                                // var start = pad.wButtons & win32.XINPUT_GAMEPAD_START;
+                                // var back = pad.wButtons & win32.XINPUT_GAMEPAD_BACK;
                             } else {
-                                sound_is_valid = false;
+                                // NOTE: Controller is unavailable
+                                new_controller.is_connected = false;
+                            }
+                        }
+
+                        // var vibration: win32.XINPUT_VIBRATION = undefined;
+                        // vibration.wLeftMotorSpeed = 60000;
+                        // vibration.wRightMotorSpeed = 60000;
+                        // _ = XInputSetState.call(0, &vibration);
+
+                        var offscreen_buffer: platform.GameOffscreenBuffer =
+                            std.mem.zeroInit(platform.GameOffscreenBuffer, .{});
+                        offscreen_buffer.memory = @alignCast(@ptrCast(global_back_buffer.memory));
+                        offscreen_buffer.width = global_back_buffer.width;
+                        offscreen_buffer.height = global_back_buffer.height;
+                        offscreen_buffer.pitch = global_back_buffer.pitch;
+                        offscreen_buffer.bytes_per_pixel = global_back_buffer.bytes_per_pixel;
+
+                        if (win32_state.input_recording_index != 0) {
+                            win32_record_input(&win32_state, new_input);
+                        }
+
+                        if (win32_state.input_playing_index != 0) {
+                            win32_play_back_input(&win32_state, new_input);
+                        }
+
+                        if (game.update_and_render) |update_and_render| {
+                            update_and_render(
+                                &game_memory,
+                                new_input,
+                                &offscreen_buffer,
+                            );
+                        }
+
+                        var audio_wall_clock = try win32_get_wall_clock();
+                        var from_begin_to_audio_seconds = try win32_get_seconds_elapsed(
+                            flip_wall_clock,
+                            audio_wall_clock,
+                        );
+
+                        var play_cursor: DWORD = 0;
+                        var write_cursor: DWORD = 0;
+
+                        // NOTE: Sounds skips on every new loop of the buffer (1 second), so the sine
+                        // wave is not properly lining up on either side of the buffer similar to
+                        // the bug Casey observed in episode 9
+                        if (win32.SUCCEEDED(global_secondary_buffer.vtable.GetCurrentPosition(
+                            global_secondary_buffer,
+                            &play_cursor,
+                            &write_cursor,
+                        ))) {
+                            // NOTE: How sound output computation works
+                            //
+                            // Define a safety value that is the number of samples that the game
+                            // loop may vary by (up to 2ms)
+                            //
+                            // When we wake up to write audio, look and see what the play cursor
+                            // position is and forecast ahead where the play cursor ought to be
+                            // on the next frame boundary.
+                            //
+                            // Then look to see if the write cursor is before this boundary by
+                            // the safety value. If it is, fill target to frame boundary + 1 frame,
+                            // and then one frame further, providing perfect audio sync for
+                            // cards with low enough latency
+                            //
+                            // If write cursor is after the safety value, then assume
+                            // audio cannot be perfectly synced, so write one frame's worth of
+                            // audio plus safety value's amount of guard samples
+
+                            if (!sound_is_valid) {
+                                sound_output.running_sample_index =
+                                    write_cursor /
+                                    sound_output.bytes_per_sample;
+
+                                sound_is_valid = true;
                             }
 
-                            var work_counter = try win32_get_wall_clock();
-                            var work_seconds_elapsed = try win32_get_seconds_elapsed(
-                                last_counter,
-                                work_counter,
-                            );
+                            var byte_to_lock =
+                                (sound_output.running_sample_index *
+                                sound_output.bytes_per_sample) %
+                                sound_output.secondary_buffer_size;
 
-                            var seconds_elapsed_for_frame = work_seconds_elapsed;
+                            var expected_sound_bytes_per_frame =
+                                (sound_output.samples_per_second *
+                                sound_output.bytes_per_sample) /
+                                game_update_hertz;
+                            var seconds_left_until_flip: f32 =
+                                target_seconds_per_frame -
+                                from_begin_to_audio_seconds;
 
-                            // TODO: Not tested yet, probably buggy
-                            if (seconds_elapsed_for_frame < target_seconds_per_frame) {
-                                if (sleep_is_granular) {
-                                    var sleep_ms = @as(DWORD, @intFromFloat(1000.0 *
-                                        (target_seconds_per_frame - seconds_elapsed_for_frame)));
+                            // NOTE: Without this check, a crash occurs when unpausing
+                            // the game due to trying to convert seconds_left_until_flip
+                            // to a DWORD when its value is negative
+                            if (seconds_left_until_flip < 0) {
+                                seconds_left_until_flip = 0.0;
+                            }
 
-                                    if (sleep_ms > 0) {
-                                        win32.Sleep(sleep_ms);
-                                    }
+                            var expected_bytes_until_flip =
+                                @as(DWORD, @intFromFloat((seconds_left_until_flip /
+                                target_seconds_per_frame) *
+                                @as(f32, @floatFromInt(expected_sound_bytes_per_frame))));
+                            _ = expected_bytes_until_flip;
+                            var expected_frame_boundary_byte = play_cursor +
+                                expected_sound_bytes_per_frame;
+                            var safe_write_cursor = write_cursor;
+
+                            if (safe_write_cursor < play_cursor) {
+                                safe_write_cursor += sound_output.secondary_buffer_size;
+                            }
+
+                            std.debug.assert(safe_write_cursor >= play_cursor);
+
+                            safe_write_cursor += sound_output.safety_bytes;
+                            var audio_card_is_low_latency = safe_write_cursor < expected_frame_boundary_byte;
+                            var target_cursor: DWORD = 0;
+
+                            if (audio_card_is_low_latency) {
+                                target_cursor = expected_frame_boundary_byte + expected_sound_bytes_per_frame;
+                            } else {
+                                target_cursor = write_cursor +
+                                    expected_sound_bytes_per_frame +
+                                    sound_output.safety_bytes;
+                            }
+
+                            target_cursor = target_cursor % sound_output.secondary_buffer_size;
+
+                            var bytes_to_write: DWORD = 0;
+
+                            if (byte_to_lock > target_cursor) {
+                                bytes_to_write = sound_output.secondary_buffer_size - byte_to_lock;
+                                bytes_to_write += target_cursor;
+                            } else {
+                                bytes_to_write = target_cursor - byte_to_lock;
+                            }
+
+                            var sound_buffer = std.mem.zeroInit(platform.GameSoundBuffer, .{});
+                            sound_buffer.samples_per_second = sound_output.samples_per_second;
+                            sound_buffer.sample_count = bytes_to_write / sound_output.bytes_per_sample;
+                            sound_buffer.samples = @alignCast(@ptrCast(samples.?));
+
+                            if (game.get_sound_samples) |get_sound_samples| {
+                                get_sound_samples(&game_memory, &sound_buffer);
+                            }
+
+                            if (INTERNAL) {
+                                var marker = &debug_time_markers[debug_time_marker_index];
+                                marker.output_play_cursor = play_cursor;
+                                marker.output_write_cursor = write_cursor;
+                                marker.output_location = byte_to_lock;
+                                marker.output_byte_count = bytes_to_write;
+                                marker.expected_flip_play_cursor = expected_frame_boundary_byte;
+
+                                var unwrapped_write_cursor = write_cursor;
+
+                                if (unwrapped_write_cursor < play_cursor) {
+                                    unwrapped_write_cursor += sound_output.secondary_buffer_size;
                                 }
 
-                                var test_seconds_elapsed_for_frame = try win32_get_seconds_elapsed(
+                                audio_latency_bytes = unwrapped_write_cursor - play_cursor;
+
+                                audio_latency_seconds =
+                                    (@as(f32, @floatFromInt(audio_latency_bytes)) /
+                                    @as(f32, @floatFromInt(sound_output.bytes_per_sample))) /
+                                    @as(f32, @floatFromInt(sound_output.samples_per_second));
+
+                                std.debug.print(
+                                    "BTL: {}, TC {}, BTW: {} - PC: {}, WC: {}, DELTA: {}, ({d:1.6})s\n",
+                                    .{
+                                        byte_to_lock,
+                                        target_cursor,
+                                        bytes_to_write,
+                                        play_cursor,
+                                        write_cursor,
+                                        audio_latency_bytes,
+                                        audio_latency_seconds,
+                                    },
+                                );
+                            }
+
+                            try win32_fill_sound_buffer(
+                                &sound_output,
+                                byte_to_lock,
+                                bytes_to_write,
+                                &sound_buffer,
+                            );
+                        } else {
+                            sound_is_valid = false;
+                        }
+
+                        var work_counter = try win32_get_wall_clock();
+                        var work_seconds_elapsed = try win32_get_seconds_elapsed(
+                            last_counter,
+                            work_counter,
+                        );
+
+                        var seconds_elapsed_for_frame = work_seconds_elapsed;
+
+                        // TODO: Not tested yet, probably buggy
+                        if (seconds_elapsed_for_frame < target_seconds_per_frame) {
+                            if (sleep_is_granular) {
+                                var sleep_ms = @as(DWORD, @intFromFloat(1000.0 *
+                                    (target_seconds_per_frame - seconds_elapsed_for_frame)));
+
+                                if (sleep_ms > 0) {
+                                    win32.Sleep(sleep_ms);
+                                }
+                            }
+
+                            var test_seconds_elapsed_for_frame = try win32_get_seconds_elapsed(
+                                last_counter,
+                                try win32_get_wall_clock(),
+                            );
+
+                            if (test_seconds_elapsed_for_frame < target_seconds_per_frame) {
+                                // TODO: log missed sleep here
+                            }
+
+                            while (seconds_elapsed_for_frame < target_seconds_per_frame) {
+                                seconds_elapsed_for_frame = try win32_get_seconds_elapsed(
                                     last_counter,
                                     try win32_get_wall_clock(),
                                 );
-
-                                if (test_seconds_elapsed_for_frame < target_seconds_per_frame) {
-                                    // TODO: log missed sleep here
-                                }
-
-                                while (seconds_elapsed_for_frame < target_seconds_per_frame) {
-                                    seconds_elapsed_for_frame = try win32_get_seconds_elapsed(
-                                        last_counter,
-                                        try win32_get_wall_clock(),
-                                    );
-                                }
-                            } else {
-                                // TODO: Missed framerate
-                                // TODO: logging
                             }
+                        } else {
+                            // TODO: Missed framerate
+                            // TODO: logging
+                        }
 
-                            var end_counter = try win32_get_wall_clock();
-                            var ms_per_frame = 1000.0 * try win32_get_seconds_elapsed(
-                                last_counter,
-                                end_counter,
+                        var end_counter = try win32_get_wall_clock();
+                        var ms_per_frame = 1000.0 * try win32_get_seconds_elapsed(
+                            last_counter,
+                            end_counter,
+                        );
+                        last_counter = end_counter;
+
+                        var dimension = try win32_get_window_dimension(window);
+
+                        if (INTERNAL) {
+                            try win32_debug_sync_display(
+                                &global_back_buffer,
+                                &debug_time_markers,
+                                @intCast(if (debug_time_marker_index == 0)
+                                    debug_time_markers.len - 1
+                                else
+                                    debug_time_marker_index - 1),
+                                &sound_output,
+                                target_seconds_per_frame,
                             );
-                            last_counter = end_counter;
+                        }
 
-                            var dimension = try win32_get_window_dimension(window);
-
-                            if (INTERNAL) {
-                                try win32_debug_sync_display(
-                                    &global_back_buffer,
-                                    &debug_time_markers,
-                                    @intCast(if (debug_time_marker_index == 0)
-                                        debug_time_markers.len - 1
-                                    else
-                                        debug_time_marker_index - 1),
-                                    &sound_output,
-                                    target_seconds_per_frame,
-                                );
-                            }
-
+                        if (win32.GetDC(window)) |device_context| {
                             try win32_display_buffer_in_window(
                                 &global_back_buffer,
                                 device_context,
@@ -1543,64 +1714,66 @@ pub export fn wWinMain(
                                 dimension.height,
                             );
 
-                            flip_wall_clock = try win32_get_wall_clock();
+                            _ = win32.ReleaseDC(window, device_context);
+                        }
 
-                            // NOTE: This is debug code
-                            if (INTERNAL) {
-                                if (win32.SUCCEEDED(global_secondary_buffer.vtable.GetCurrentPosition(
-                                    global_secondary_buffer,
-                                    &play_cursor,
-                                    &write_cursor,
-                                ))) {
-                                    std.debug.assert(debug_time_marker_index < debug_time_markers.len);
-                                    var marker = &debug_time_markers[debug_time_marker_index];
-                                    marker.flip_play_cursor = play_cursor;
-                                    marker.flip_write_cursor = write_cursor;
-                                }
+                        flip_wall_clock = try win32_get_wall_clock();
+
+                        // NOTE: This is debug code
+                        if (INTERNAL) {
+                            if (win32.SUCCEEDED(global_secondary_buffer.vtable.GetCurrentPosition(
+                                global_secondary_buffer,
+                                &play_cursor,
+                                &write_cursor,
+                            ))) {
+                                std.debug.assert(debug_time_marker_index < debug_time_markers.len);
+                                var marker = &debug_time_markers[debug_time_marker_index];
+                                marker.flip_play_cursor = play_cursor;
+                                marker.flip_write_cursor = write_cursor;
                             }
+                        }
 
-                            var temp = new_input;
-                            new_input = old_input;
-                            old_input = temp;
-                            // TODO: should we clear these here?
+                        var temp = new_input;
+                        new_input = old_input;
+                        old_input = temp;
+                        // TODO: should we clear these here?
 
-                            var end_cycle_count = rdtsc();
-                            var cycles_elapsed = end_cycle_count - last_cycle_count;
-                            last_cycle_count = end_cycle_count;
+                        var end_cycle_count = rdtsc();
+                        var cycles_elapsed = end_cycle_count - last_cycle_count;
+                        last_cycle_count = end_cycle_count;
 
-                            if (DEBUG_WALL_CLOCK) {
-                                var fps: f32 = 0.0;
-                                //var fps = @as(f32, @floatFromInt(global_perf_count_frequency)) /
-                                //    @as(f64, (@floatFromInt(counter_elapsed)));
-                                var mega_cycles_per_frame =
-                                    @as(f64, @floatFromInt(cycles_elapsed)) /
-                                    @as(f64, @floatFromInt(1000 * 1000));
+                        if (DEBUG_WALL_CLOCK) {
+                            var fps: f32 = 0.0;
+                            //var fps = @as(f32, @floatFromInt(global_perf_count_frequency)) /
+                            //    @as(f64, (@floatFromInt(counter_elapsed)));
+                            var mega_cycles_per_frame =
+                                @as(f64, @floatFromInt(cycles_elapsed)) /
+                                @as(f64, @floatFromInt(1000 * 1000));
 
-                                // Trying to print floats with wsprintf does not appear to cause a problem
-                                // Including sprintf perhaps not worth it since we can only see messages from
-                                // std.debug.print() anyways
-                                // Leaving this code here for posterity
-                                var fps_buffer = [_]u8{0} ** 255;
-                                var args = [_]f64{ ms_per_frame, fps, mega_cycles_per_frame };
-                                _ = win32.wvsprintfA(
-                                    @ptrCast(&fps_buffer),
-                                    ",%fms/f, %ff/s, %fmc/f\n",
-                                    @ptrCast(&args),
-                                );
-                                win32.OutputDebugStringA(@ptrCast(&fps_buffer));
+                            // Trying to print floats with wsprintf does not appear to cause a problem
+                            // Including sprintf perhaps not worth it since we can only see messages from
+                            // std.debug.print() anyways
+                            // Leaving this code here for posterity
+                            var fps_buffer = [_]u8{0} ** 255;
+                            var args = [_]f64{ ms_per_frame, fps, mega_cycles_per_frame };
+                            _ = win32.wvsprintfA(
+                                @ptrCast(&fps_buffer),
+                                ",%fms/f, %ff/s, %fmc/f\n",
+                                @ptrCast(&args),
+                            );
+                            win32.OutputDebugStringA(@ptrCast(&fps_buffer));
 
-                                std.debug.print("{d:6.2}ms/f, {d:6.2}f/s, {d:6.2}mc/f\n", .{
-                                    ms_per_frame,
-                                    fps,
-                                    mega_cycles_per_frame,
-                                });
-                            }
+                            std.debug.print("{d:6.2}ms/f, {d:6.2}f/s, {d:6.2}mc/f\n", .{
+                                ms_per_frame,
+                                fps,
+                                mega_cycles_per_frame,
+                            });
+                        }
 
-                            if (INTERNAL) {
-                                debug_time_marker_index += 1;
-                                if (debug_time_marker_index == debug_time_markers.len) {
-                                    debug_time_marker_index = 0;
-                                }
+                        if (INTERNAL) {
+                            debug_time_marker_index += 1;
+                            if (debug_time_marker_index == debug_time_markers.len) {
+                                debug_time_marker_index = 0;
                             }
                         }
                     }

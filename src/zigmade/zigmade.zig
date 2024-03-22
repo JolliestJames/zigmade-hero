@@ -1,6 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const platform = @import("zigmade_platform");
+const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
 fn game_output_sound(
     sound_buffer: *platform.GameSoundBuffer,
@@ -21,6 +22,10 @@ fn game_output_sound(
                 @floatFromInt(tone_volume),
             ),
         ));
+
+        if (INTERNAL) {
+            sample_value = 0;
+        }
 
         sample_out[2 * i] = sample_value;
         sample_out[2 * i + 1] = sample_value;
@@ -57,10 +62,41 @@ fn render_weird_gradient(
                 @bitCast(green_offset),
             )));
 
-            pixel[x] = (green << 8) | blue;
+            pixel[x] = (green << 16) | blue;
         }
 
         row += @as(usize, @intCast(buffer.pitch));
+    }
+}
+
+fn render_player(
+    buffer: *platform.GameOffscreenBuffer,
+    game_state: *platform.GameState,
+) !void {
+    var end_of_buffer: [*]u8 =
+        @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
+        @as(usize, @intCast(buffer.pitch * buffer.height));
+
+    comptime var color = 0xffffffff;
+    var top = game_state.player_y;
+
+    for (0..10) |i| {
+        var x = @as(u32, @bitCast(game_state.player_x));
+        x +%= @intCast(i);
+        var pixel: [*]u8 =
+            @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
+            (x * @as(usize, @intCast(buffer.bytes_per_pixel))) +
+            @as(u32, @bitCast(top *% buffer.pitch));
+
+        for (0..10) |_| {
+            if (@intFromPtr(pixel) >= @intFromPtr(buffer.memory) and
+                @intFromPtr(pixel + 4) <= @intFromPtr(end_of_buffer))
+            {
+                @as([*]u32, @alignCast(@ptrCast(pixel)))[0] = color;
+            }
+
+            pixel += @as(usize, @intCast(buffer.pitch));
+        }
     }
 }
 
@@ -85,20 +121,22 @@ pub export fn update_and_render(
 
     if (!memory.is_initialized) {
         var file_name = "./src/zigmade/zigmade.zig";
-        var file = memory.debug_platform_read_entire_file(file_name);
+        var file = memory.debug_platform_read_entire_file.?(file_name);
 
         if (file.contents != undefined) {
-            _ = memory.debug_platform_write_entire_file(
+            _ = memory.debug_platform_write_entire_file.?(
                 "test.out",
                 file.size,
                 file.contents,
             );
 
-            memory.debug_platform_free_file_memory(file.contents);
+            memory.debug_platform_free_file_memory.?(file.contents);
         }
 
         game_state.tone_hertz = 512;
         game_state.t_sine = 0.0;
+        game_state.player_x = 100;
+        game_state.player_y = 100;
 
         // TODO: This may be more appropriate to do in the platform layer
         memory.is_initialized = true;
@@ -110,7 +148,7 @@ pub export fn update_and_render(
 
         if (controller.is_analog) {
             // NOTE: Use analog movement tuning
-            game_state.blue_offset += @as(i32, @intFromFloat(
+            game_state.blue_offset +%= @as(i32, @intFromFloat(
                 4.0 * (controller.stick_average_x),
             ));
             game_state.tone_hertz = 512 +
@@ -119,17 +157,26 @@ pub export fn update_and_render(
         } else {
             // NOTE: Use digital movement tuning
             if (controller.buttons.map.move_left.ended_down) {
-                game_state.blue_offset -= 1;
+                game_state.blue_offset -%= 1;
             }
 
             if (controller.buttons.map.move_right.ended_down) {
-                game_state.blue_offset += 1;
+                game_state.blue_offset +%= 1;
             }
         }
 
-        if (controller.buttons.map.action_down.ended_down) {
-            game_state.green_offset += 1;
+        game_state.player_x +%= @intFromFloat(4.0 * controller.stick_average_x);
+        game_state.player_y -%= @as(i32, @intFromFloat(4.0 * controller.stick_average_y));
+
+        if (game_state.t_jump > 0) {
+            game_state.player_y +%= @intFromFloat(5.0 * @sin(0.5 * std.math.pi * game_state.t_jump));
         }
+
+        if (controller.buttons.map.action_down.ended_down) {
+            game_state.t_jump = 4.0;
+        }
+
+        game_state.t_jump -= 0.033;
     }
 
     try render_weird_gradient(
@@ -137,6 +184,7 @@ pub export fn update_and_render(
         game_state.blue_offset,
         game_state.green_offset,
     );
+    try render_player(offscreen_buffer, game_state);
 }
 
 // NOTE: At the moment, this must be a very fast function

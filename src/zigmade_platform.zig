@@ -40,6 +40,7 @@ pub const GameOffscreenBuffer = struct {
     width: i32,
     height: i32,
     pitch: i32,
+    bytes_per_pixel: i32,
 };
 
 pub const GameSoundBuffer = struct {
@@ -92,13 +93,13 @@ pub const GameMemory = struct {
     permanent_storage: [*]u8 = undefined,
     transient_storage_size: u64 = 0,
     transient_storage: [*]u8 = undefined,
-    debug_platform_read_entire_file: *const fn ([*:0]const u8) DebugReadFileResult,
-    debug_platform_free_file_memory: *const fn (?*anyopaque) void,
-    debug_platform_write_entire_file: *const fn (
+    debug_platform_read_entire_file: ?*const fn ([*:0]const u8) DebugReadFileResult = undefined,
+    debug_platform_free_file_memory: ?*const fn (?*anyopaque) void = undefined,
+    debug_platform_write_entire_file: ?*const fn (
         [*:0]const u8,
         u32,
         ?*anyopaque,
-    ) bool,
+    ) bool = undefined,
 };
 
 pub const GameState = struct {
@@ -106,6 +107,9 @@ pub const GameState = struct {
     green_offset: i32,
     tone_hertz: i32,
     t_sine: f32,
+    player_x: i32,
+    player_y: i32,
+    t_jump: f32,
 };
 
 // NOTE: Services that the platform layer provides to the game
