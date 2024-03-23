@@ -1292,6 +1292,7 @@ pub export fn wWinMain(
             win32_state.total_size = game_memory.permanent_storage_size +
                 game_memory.transient_storage_size;
 
+            // TODO: Use LARGE_PAGES and call adjust token privileges when not on WinXP?
             win32_state.game_memory_block = @as([*]u8, @ptrCast(win32.VirtualAlloc(
                 base_address,
                 @intCast(win32_state.total_size),
