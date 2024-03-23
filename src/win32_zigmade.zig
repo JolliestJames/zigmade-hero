@@ -23,6 +23,7 @@ const DWORD = std.os.windows.DWORD;
 const WINAPI = std.os.windows.WINAPI;
 const DEBUG_WALL_CLOCK = @import("options").DEBUG_WALL_CLOCK;
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
+const WIN32_STATE_FILE_NAME_COUNT = win32.MAX_PATH;
 
 const win32 = struct {
     usingnamespace @import("win32").foundation;
@@ -32,6 +33,8 @@ const win32 = struct {
     usingnamespace @import("win32").media.audio.direct_sound;
     usingnamespace @import("win32").storage.file_system;
     usingnamespace @import("win32").system;
+    usingnamespace @import("win32").system.io;
+    usingnamespace @import("win32").system.ioctl;
     usingnamespace @import("win32").system.com;
     usingnamespace @import("win32").system.diagnostics.debug;
     usingnamespace @import("win32").system.memory;
@@ -94,6 +97,8 @@ const Win32State = struct {
     input_recording_index: i32,
     playback_handle: win32.HANDLE = undefined,
     input_playing_index: i32,
+    exe_file_name: [WIN32_STATE_FILE_NAME_COUNT:0]u8 = [_:0]u8{0} ** WIN32_STATE_FILE_NAME_COUNT,
+    one_past_last_exe_file_name_slash: usize,
 };
 
 const XInputGetState = struct {
@@ -235,12 +240,14 @@ inline fn win32_get_last_write_time(
 ) win32.FILETIME {
     var last_write_time = std.mem.zeroInit(win32.FILETIME, .{});
 
-    var find_data: win32.WIN32_FIND_DATAA = undefined;
-    var find_handle = win32.FindFirstFileA(file_name, &find_data);
+    var data: win32.WIN32_FILE_ATTRIBUTE_DATA = undefined;
 
-    if (@as(*anyopaque, @ptrCast(&find_handle)) != win32.INVALID_HANDLE_VALUE) {
-        last_write_time = find_data.ftLastWriteTime;
-        _ = win32.FindClose(find_handle);
+    if (win32.GetFileAttributesExA(
+        file_name,
+        win32.GetFileExInfoStandard,
+        &data,
+    ) == win32.TRUE) {
+        last_write_time = data.ftLastWriteTime;
     }
 
     return last_write_time;
@@ -471,13 +478,18 @@ fn win32_display_buffer_in_window(
     window_width: i32,
     window_height: i32,
 ) !void {
-    // TODO: Correct aspect ratio
+    _ = window_height;
+    _ = window_width;
+
+    // NOTE: For prototyping purposes, we're going to always blit
+    // 1:1 pixels to make sure we don't introduce artifacts with
+    // stretching while we are learning to code the renderer
     _ = win32.StretchDIBits(
         device_context,
         0,
         0,
-        window_width,
-        window_height,
+        buffer.width,
+        buffer.height,
         0,
         0,
         buffer.width,
@@ -503,20 +515,22 @@ fn win32_main_window_callback(
             global_running = false;
         },
         win32.WM_ACTIVATEAPP => {
-            if (w_param == win32.TRUE) {
-                _ = win32.SetLayeredWindowAttributes(
-                    window,
-                    0,
-                    255,
-                    win32.LWA_ALPHA,
-                );
-            } else {
-                _ = win32.SetLayeredWindowAttributes(
-                    window,
-                    0,
-                    64,
-                    win32.LWA_ALPHA,
-                );
+            if (false) {
+                if (w_param == win32.TRUE) {
+                    _ = win32.SetLayeredWindowAttributes(
+                        window,
+                        0,
+                        255,
+                        win32.LWA_ALPHA,
+                    );
+                } else {
+                    _ = win32.SetLayeredWindowAttributes(
+                        window,
+                        0,
+                        64,
+                        win32.LWA_ALPHA,
+                    );
+                }
             }
         },
         win32.WM_DESTROY => {
@@ -660,6 +674,8 @@ fn win32_process_keyboard_message(
 ) !void {
     // NOTE: This assert fires when tabbing in and out of the game
     // with a held key that we process
+    // Casey also observed this in day 24!
+    // TODO: Add more industrial strength input handling
     // std.debug.assert(new_state.ended_down != is_down);
     new_state.ended_down = is_down;
     new_state.half_transition_count += 1;
@@ -694,7 +710,7 @@ fn win32_process_x_input_stick_value(
 }
 
 fn win32_process_pending_messages(
-    win32_state: *Win32State,
+    state: *Win32State,
     keyboard_controller: *platform.GameControllerInput,
 ) !void {
     var message: win32.MSG = undefined;
@@ -776,11 +792,11 @@ fn win32_process_pending_messages(
                         },
                         win32.VK_L => {
                             if (is_down) {
-                                if (win32_state.input_recording_index == 0) {
-                                    win32_begin_recording_input(win32_state, 1);
+                                if (state.input_recording_index == 0) {
+                                    win32_begin_recording_input(state, 1);
                                 } else {
-                                    win32_end_recording_input(win32_state);
-                                    win32_begin_input_play_back(win32_state, 1);
+                                    win32_end_recording_input(state);
+                                    win32_begin_input_play_back(state, 1);
                                 }
                             }
                         },
@@ -965,18 +981,34 @@ fn concatenate(
     }
 }
 
+fn win32_get_input_file_location(
+    state: *Win32State,
+    slot_index: i32,
+    destination: [:0]u8,
+) void {
+    std.debug.assert(slot_index == 1);
+    win32_build_exe_path_file_name(state, "loop_edit.zmi", destination);
+}
+
 fn win32_begin_recording_input(
-    win32_state: *Win32State,
+    state: *Win32State,
     input_recording_index: i32,
 ) void {
-    win32_state.input_recording_index = input_recording_index;
+    state.input_recording_index = input_recording_index;
 
     // TODO: These files must go in a temporary/build directory!
     // TODO: Lazily write the giant memory block and use a memory copy instead?
-    var file_name = "foo.zmi";
+    var file_name: [WIN32_STATE_FILE_NAME_COUNT:0]u8 =
+        [_:0]u8{0} ** WIN32_STATE_FILE_NAME_COUNT;
 
-    win32_state.recording_handle = win32.CreateFileA(
-        file_name,
+    win32_get_input_file_location(
+        state,
+        input_recording_index,
+        &file_name,
+    );
+
+    state.recording_handle = win32.CreateFileA(
+        &file_name,
         win32.FILE_GENERIC_WRITE,
         win32.FILE_SHARE_NONE,
         null,
@@ -985,34 +1017,41 @@ fn win32_begin_recording_input(
         null,
     );
 
-    var bytes_to_write: DWORD = @intCast(win32_state.total_size);
-    std.debug.assert(win32_state.total_size == bytes_to_write);
+    var bytes_to_write: DWORD = @intCast(state.total_size);
+    std.debug.assert(state.total_size == bytes_to_write);
     var bytes_written: DWORD = undefined;
 
     _ = win32.WriteFile(
-        win32_state.recording_handle,
-        win32_state.game_memory_block,
+        state.recording_handle,
+        state.game_memory_block,
         bytes_to_write,
         &bytes_written,
         null,
     );
 }
 
-fn win32_end_recording_input(win32_state: *Win32State) void {
-    _ = win32.CloseHandle(win32_state.recording_handle);
-    win32_state.input_recording_index = 0;
+fn win32_end_recording_input(state: *Win32State) void {
+    _ = win32.CloseHandle(state.recording_handle);
+    state.input_recording_index = 0;
 }
 
 fn win32_begin_input_play_back(
-    win32_state: *Win32State,
+    state: *Win32State,
     input_playing_index: i32,
 ) void {
-    win32_state.input_playing_index = input_playing_index;
+    state.input_playing_index = input_playing_index;
 
-    var file_name = "foo.zmi";
+    var file_name: [WIN32_STATE_FILE_NAME_COUNT:0]u8 =
+        [_:0]u8{0} ** WIN32_STATE_FILE_NAME_COUNT;
 
-    win32_state.playback_handle = win32.CreateFileA(
-        file_name,
+    win32_get_input_file_location(
+        state,
+        input_playing_index,
+        &file_name,
+    );
+
+    state.playback_handle = win32.CreateFileA(
+        &file_name,
         win32.FILE_GENERIC_READ,
         win32.FILE_SHARE_READ,
         null,
@@ -1021,32 +1060,32 @@ fn win32_begin_input_play_back(
         null,
     );
 
-    var bytes_to_read: DWORD = @intCast(win32_state.total_size);
-    std.debug.assert(win32_state.total_size == bytes_to_read);
+    var bytes_to_read: DWORD = @intCast(state.total_size);
+    std.debug.assert(state.total_size == bytes_to_read);
     var bytes_read: DWORD = undefined;
 
     _ = win32.ReadFile(
-        win32_state.playback_handle,
-        win32_state.game_memory_block,
+        state.playback_handle,
+        state.game_memory_block,
         bytes_to_read,
         &bytes_read,
         null,
     );
 }
 
-fn win32_end_input_play_back(win32_state: *Win32State) void {
-    _ = win32.CloseHandle(win32_state.playback_handle);
-    win32_state.input_playing_index = 0;
+fn win32_end_input_play_back(state: *Win32State) void {
+    _ = win32.CloseHandle(state.playback_handle);
+    state.input_playing_index = 0;
 }
 
 fn win32_record_input(
-    win32_state: *Win32State,
+    state: *Win32State,
     game_input: *platform.GameInput,
 ) void {
     var bytes_written: DWORD = undefined;
 
     _ = win32.WriteFile(
-        win32_state.recording_handle,
+        state.recording_handle,
         game_input,
         @sizeOf(platform.GameInput),
         &bytes_written,
@@ -1055,13 +1094,13 @@ fn win32_record_input(
 }
 
 fn win32_play_back_input(
-    win32_state: *Win32State,
+    state: *Win32State,
     game_input: *platform.GameInput,
 ) void {
     var bytes_read: DWORD = undefined;
 
     if (win32.ReadFile(
-        win32_state.playback_handle,
+        state.playback_handle,
         game_input,
         @sizeOf(@TypeOf(game_input.*)),
         &bytes_read,
@@ -1069,12 +1108,12 @@ fn win32_play_back_input(
     ) != win32.FALSE) {
         if (bytes_read == 0) {
             // NOTE: We've hit the end of the stream, go back to the beginning
-            var playing_index = win32_state.input_playing_index;
-            win32_end_input_play_back(win32_state);
-            win32_begin_input_play_back(win32_state, playing_index);
+            var playing_index = state.input_playing_index;
+            win32_end_input_play_back(state);
+            win32_begin_input_play_back(state, playing_index);
 
             _ = win32.ReadFile(
-                win32_state.playback_handle,
+                state.playback_handle,
                 game_input,
                 @sizeOf(@TypeOf(game_input.*)),
                 &bytes_read,
@@ -1084,45 +1123,63 @@ fn win32_play_back_input(
     }
 }
 
+fn win32_get_exe_file_name(state: *Win32State) void {
+    // NOTE: Never use MAX_PATH in code that is user-facing, because it
+    // can be dangerous and lead to bad results.
+    //state.exe_file_name = [_:0]u8{0} ** WIN32_STATE_FILE_NAME_COUNT;
+    _ = win32.GetModuleFileNameA(
+        null,
+        &state.exe_file_name,
+        @sizeOf(@TypeOf(state.exe_file_name)),
+    );
+    state.one_past_last_exe_file_name_slash = 0;
+
+    for (state.exe_file_name, 0..) |char, index| {
+        if (char == '\\') {
+            state.one_past_last_exe_file_name_slash = index + 1;
+        }
+    }
+}
+
+fn win32_build_exe_path_file_name(
+    state: *Win32State,
+    file_name: []const u8,
+    destination: [:0]u8,
+) void {
+    concatenate(
+        state.exe_file_name[0..state.one_past_last_exe_file_name_slash],
+        file_name,
+        destination[0..win32.MAX_COUNTER_PATH :0],
+    );
+}
+
 pub export fn wWinMain(
     instance: ?win32.HINSTANCE,
     _: ?win32.HINSTANCE,
     _: [*:0]u16,
     _: u32,
 ) callconv(WINAPI) c_int {
-    // NOTE: Never use MAX_PATH in code that is user-facing, because it
-    // can be dangerous and lead to bad results.
-    var exe_file_name = [_:0]u8{0} ** win32.MAX_PATH;
-    _ = win32.GetModuleFileNameA(null, &exe_file_name, @sizeOf(@TypeOf(exe_file_name)));
-    var one_past_last_slash: usize = 0;
-
-    for (exe_file_name, 0..) |char, index| {
-        if (char == '\\') {
-            one_past_last_slash = index + 1;
-        }
-    }
-
-    var source_game_code_dll_name = "zigmade.dll";
-    var source_game_code_dll_path = [_:0]u8{0} ** win32.MAX_PATH;
-
-    concatenate(
-        exe_file_name[0..one_past_last_slash],
-        source_game_code_dll_name,
-        source_game_code_dll_path[0..win32.MAX_COUNTER_PATH :0],
-    );
-
-    var temp_game_code_dll_name = "zigmade_temp.dll";
-    var temp_game_code_dll_path = [_:0]u8{0} ** win32.MAX_PATH;
-
-    concatenate(
-        exe_file_name[0..one_past_last_slash],
-        temp_game_code_dll_name,
-        temp_game_code_dll_path[0..win32.MAX_COUNTER_PATH :0],
-    );
+    var win32_state = std.mem.zeroInit(Win32State, .{});
 
     var perf_count_frequency_result: win32.LARGE_INTEGER = undefined;
     _ = win32.QueryPerformanceFrequency(&perf_count_frequency_result);
     global_perf_count_frequency = perf_count_frequency_result.QuadPart;
+
+    win32_get_exe_file_name(&win32_state);
+
+    var source_game_code_dll_path = [_:0]u8{0} ** WIN32_STATE_FILE_NAME_COUNT;
+    win32_build_exe_path_file_name(
+        &win32_state,
+        "zigmade.dll",
+        &source_game_code_dll_path,
+    );
+
+    var temp_game_code_dll_path = [_:0]u8{0} ** WIN32_STATE_FILE_NAME_COUNT;
+    win32_build_exe_path_file_name(
+        &win32_state,
+        "zigmade_temp.dll",
+        &temp_game_code_dll_path,
+    );
 
     // NOTE: Set Windows scheduler granularity to 1ms
     // so that Sleep() can be more granular
@@ -1154,7 +1211,8 @@ pub export fn wWinMain(
         window_style.VISIBLE = 1;
 
         if (win32.CreateWindowExW(
-            win32.WINDOW_EX_STYLE{ .TOPMOST = 1, .LAYERED = 1 },
+            win32.WINDOW_EX_STYLE{},
+            //win32.WINDOW_EX_STYLE{ .TOPMOST = 1, .LAYERED = 1 },
             window_class.lpszClassName,
             win32.L("Handmade Hero"),
             window_style,
@@ -1206,7 +1264,6 @@ pub export fn wWinMain(
                 win32.DSBPLAY_LOOPING,
             );
 
-            var win32_state = std.mem.zeroInit(Win32State, .{});
             global_running = true;
 
             // TODO: pool with bitmap VirtualAlloc
@@ -1272,7 +1329,7 @@ pub export fn wWinMain(
                 var last_cycle_count = rdtsc();
 
                 while (global_running) {
-                    var new_dll_write_time = win32_get_last_write_time(source_game_code_dll_name);
+                    var new_dll_write_time = win32_get_last_write_time(&source_game_code_dll_path);
 
                     if (win32.CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0) {
                         try win32_unload_game_code(&game);
@@ -1323,6 +1380,7 @@ pub export fn wWinMain(
                                 &controller_state,
                             ) == @intFromEnum(win32.ERROR_SUCCESS)) {
                                 new_controller.is_connected = true;
+                                new_controller.is_analog = old_controller.is_analog;
 
                                 // NOTE: Controller is plugged in
                                 // TODO: See if controller_state.dwPacketNumber increments too quickly
@@ -1557,9 +1615,8 @@ pub export fn wWinMain(
                                 @as(DWORD, @intFromFloat((seconds_left_until_flip /
                                 target_seconds_per_frame) *
                                 @as(f32, @floatFromInt(expected_sound_bytes_per_frame))));
-                            _ = expected_bytes_until_flip;
-                            var expected_frame_boundary_byte = play_cursor +
-                                expected_sound_bytes_per_frame;
+
+                            var expected_frame_boundary_byte = play_cursor + expected_bytes_until_flip;
                             var safe_write_cursor = write_cursor;
 
                             if (safe_write_cursor < play_cursor) {

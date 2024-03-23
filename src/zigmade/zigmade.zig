@@ -7,7 +7,7 @@ fn game_output_sound(
     sound_buffer: *platform.GameSoundBuffer,
     game_state: *platform.GameState,
 ) !void {
-    const tone_volume: i16 = 3_000;
+    const tone_volume: i16 = 1_000;
     var wave_period = @divTrunc(
         @as(i32, @intCast(sound_buffer.samples_per_second)),
         game_state.tone_hertz,
@@ -23,9 +23,9 @@ fn game_output_sound(
             ),
         ));
 
-        if (INTERNAL) {
-            sample_value = 0;
-        }
+        //if (INTERNAL) {
+        //    sample_value = 0;
+        //}
 
         sample_out[2 * i] = sample_value;
         sample_out[2 * i + 1] = sample_value;

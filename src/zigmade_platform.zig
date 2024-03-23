@@ -25,7 +25,7 @@ pub inline fn safe_truncate_u64(value: u64) u32 {
 // NOTE: Services that the game provides to the platform layer
 // maybe expand in the future - sound on separate thread
 
-pub fn get_controller(
+pub inline fn get_controller(
     input: *GameInput,
     index: usize,
 ) !*GameControllerInput {
