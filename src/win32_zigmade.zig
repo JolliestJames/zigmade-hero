@@ -1801,8 +1801,6 @@ pub export fn wWinMain(
 
                         if (DEBUG_WALL_CLOCK) {
                             var fps: f32 = 0.0;
-                            //var fps = @as(f32, @floatFromInt(global_perf_count_frequency)) /
-                            //    @as(f64, (@floatFromInt(counter_elapsed)));
                             var mega_cycles_per_frame =
                                 @as(f64, @floatFromInt(cycles_elapsed)) /
                                 @as(f64, @floatFromInt(1000 * 1000));
