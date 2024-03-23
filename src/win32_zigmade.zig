@@ -653,8 +653,8 @@ fn win32_fill_sound_buffer(
             var dest_sample: [*]i16 = @alignCast(@ptrCast(region));
 
             for (0..region_2_sample_count) |i| {
-                dest_sample[i * 2] = source_sample[i * 2 + offset];
-                dest_sample[i * 2 + 1] = source_sample[i * 2 + 1 + offset];
+                dest_sample[i * 2] = source_sample[offset + i * 2];
+                dest_sample[i * 2 + 1] = source_sample[offset + i * 2 + 1];
 
                 sound_output.running_sample_index += 1;
             }
