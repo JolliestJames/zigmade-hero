@@ -629,12 +629,17 @@ fn win32_fill_sound_buffer(
         &region_2_size,
         0,
     ))) {
-        // TODO: assert that region size is valid
+        std.debug.assert(region_1_size + region_2_size == bytes_to_write);
+
+        var source_sample = source_buffer.samples;
+        var region_1_sample_count: DWORD = region_1_size /
+            @as(DWORD, @intCast(sound_output.bytes_per_sample));
+        var offset: DWORD = region_1_sample_count * 2;
+        var region_2_sample_count: DWORD = region_2_size /
+            @as(DWORD, @intCast(sound_output.bytes_per_sample));
+
         if (region_1) |region| {
-            var region_1_sample_count: DWORD = region_1_size /
-                @as(DWORD, @intCast(sound_output.bytes_per_sample));
             var dest_sample: [*]i16 = @alignCast(@ptrCast(region));
-            var source_sample = source_buffer.samples;
 
             for (0..region_1_sample_count) |i| {
                 dest_sample[i * 2] = source_sample[i * 2];
@@ -645,14 +650,11 @@ fn win32_fill_sound_buffer(
         }
 
         if (region_2) |region| {
-            var region_2_sample_count: DWORD = region_2_size /
-                @as(DWORD, @intCast(sound_output.bytes_per_sample));
             var dest_sample: [*]i16 = @alignCast(@ptrCast(region));
-            var source_sample = source_buffer.samples;
 
             for (0..region_2_sample_count) |i| {
-                dest_sample[i * 2] = source_sample[i * 2];
-                dest_sample[i * 2 + 1] = source_sample[i * 2 + 1];
+                dest_sample[i * 2] = source_sample[i * 2 + offset];
+                dest_sample[i * 2 + 1] = source_sample[i * 2 + 1 + offset];
 
                 sound_output.running_sample_index += 1;
             }
@@ -1558,9 +1560,6 @@ pub export fn wWinMain(
                         var play_cursor: DWORD = 0;
                         var write_cursor: DWORD = 0;
 
-                        // NOTE: Sounds skips on every new loop of the buffer (1 second), so the sine
-                        // wave is not properly lining up on either side of the buffer similar to
-                        // the bug Casey observed in episode 9
                         if (win32.SUCCEEDED(global_secondary_buffer.vtable.GetCurrentPosition(
                             global_secondary_buffer,
                             &play_cursor,
