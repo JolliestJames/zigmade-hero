@@ -22,6 +22,20 @@ pub inline fn safe_truncate_u64(value: u64) u32 {
     return @as(u32, @truncate(value));
 }
 
+pub const ThreadContext = struct {
+    placeholder: i32,
+};
+
+// NOTE: Services that the platform layer provides to the game
+
+// IMORTANT: These are not for doing anything in the shipped game
+// they are blocking and the write will not protect against
+// lost data!
+pub const DebugReadFileResult = struct {
+    size: u32,
+    contents: ?*anyopaque = undefined,
+};
+
 // NOTE: Services that the game provides to the platform layer
 // maybe expand in the future - sound on separate thread
 
@@ -83,6 +97,10 @@ pub const GameControllerInput = struct {
 
 pub const GameInput = struct {
     // TODO: Insert clock value here
+    mouse_buttons: [5]GameButtonState,
+    mouse_x: i32,
+    mouse_y: i32,
+    mouse_z: i32,
     controllers: [5]GameControllerInput,
 };
 
@@ -93,13 +111,20 @@ pub const GameMemory = struct {
     permanent_storage: [*]u8 = undefined,
     transient_storage_size: u64 = 0,
     transient_storage: [*]u8 = undefined,
-    debug_platform_read_entire_file: ?*const fn ([*:0]const u8) DebugReadFileResult = undefined,
-    debug_platform_free_file_memory: ?*const fn (?*anyopaque) void = undefined,
-    debug_platform_write_entire_file: ?*const fn (
+    debug_platform_read_entire_file: *const fn (
+        *ThreadContext,
+        [*:0]const u8,
+    ) DebugReadFileResult,
+    debug_platform_free_file_memory: *const fn (
+        *ThreadContext,
+        ?*anyopaque,
+    ) void,
+    debug_platform_write_entire_file: *const fn (
+        *ThreadContext,
         [*:0]const u8,
         u32,
         ?*anyopaque,
-    ) bool = undefined,
+    ) bool,
 };
 
 pub const GameState = struct {
@@ -112,23 +137,15 @@ pub const GameState = struct {
     t_jump: f32,
 };
 
-// NOTE: Services that the platform layer provides to the game
-
-// IMORTANT: These are not for doing anything in the shipped game
-// they are blocking and the write will not protect against
-// lost data!
-pub const DebugReadFileResult = struct {
-    size: u32,
-    contents: ?*anyopaque = undefined,
-};
-
 pub const update_and_render_type = *const fn (
+    *ThreadContext,
     *GameMemory,
     *GameInput,
     *GameOffscreenBuffer,
 ) callconv(.C) void;
 
 pub const get_sound_samples_type = *const fn (
+    *ThreadContext,
     *GameMemory,
     *GameSoundBuffer,
 ) callconv(.C) void;

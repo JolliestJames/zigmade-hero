@@ -7,7 +7,7 @@ fn game_output_sound(
     sound_buffer: *platform.GameSoundBuffer,
     game_state: *platform.GameState,
 ) !void {
-    const tone_volume: i16 = 1_000;
+    const tone_volume: i16 = 3_000;
     var wave_period = @divTrunc(
         @as(i32, @intCast(sound_buffer.samples_per_second)),
         game_state.tone_hertz,
@@ -71,17 +71,18 @@ fn render_weird_gradient(
 
 fn render_player(
     buffer: *platform.GameOffscreenBuffer,
-    game_state: *platform.GameState,
+    player_x: i32,
+    player_y: i32,
 ) !void {
     var end_of_buffer: [*]u8 =
         @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
         @as(usize, @intCast(buffer.pitch * buffer.height));
 
     comptime var color = 0xffffffff;
-    var top = game_state.player_y;
+    var top = player_y;
 
     for (0..10) |i| {
-        var x = @as(u32, @bitCast(game_state.player_x));
+        var x = @as(u32, @bitCast(player_x));
         x +%= @intCast(i);
         var pixel: [*]u8 =
             @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
@@ -106,6 +107,7 @@ fn render_player(
 // - bitmap buffer
 // - sound buffer
 pub export fn update_and_render(
+    thread: *platform.ThreadContext,
     memory: *platform.GameMemory,
     input: *platform.GameInput,
     offscreen_buffer: *platform.GameOffscreenBuffer,
@@ -121,16 +123,17 @@ pub export fn update_and_render(
 
     if (!memory.is_initialized) {
         var file_name = "./src/zigmade/zigmade.zig";
-        var file = memory.debug_platform_read_entire_file.?(file_name);
+        var file = memory.debug_platform_read_entire_file(thread, file_name);
 
         if (file.contents != undefined) {
-            _ = memory.debug_platform_write_entire_file.?(
+            _ = memory.debug_platform_write_entire_file(
+                thread,
                 "test.out",
                 file.size,
                 file.contents,
             );
 
-            memory.debug_platform_free_file_memory.?(file.contents);
+            memory.debug_platform_free_file_memory(thread, file.contents);
         }
 
         game_state.tone_hertz = 512;
@@ -184,7 +187,18 @@ pub export fn update_and_render(
         game_state.blue_offset,
         game_state.green_offset,
     );
-    try render_player(offscreen_buffer, game_state);
+    try render_player(offscreen_buffer, game_state.player_x, game_state.player_y);
+    try render_player(offscreen_buffer, input.mouse_x, input.mouse_y);
+
+    for (input.mouse_buttons, 0..) |button, i| {
+        if (button.ended_down) {
+            try render_player(
+                offscreen_buffer,
+                10 + 20 * @as(i32, @intCast(i)),
+                10,
+            );
+        }
+    }
 }
 
 // NOTE: At the moment, this must be a very fast function
@@ -192,9 +206,11 @@ pub export fn update_and_render(
 // TODO: Reduce the pressure on this function's performance
 // by measuring it or asking about it, etc.
 pub export fn get_sound_samples(
+    thread: *platform.ThreadContext,
     memory: *platform.GameMemory,
     sound_buffer: *platform.GameSoundBuffer,
 ) void {
+    _ = thread;
     var game_state: *platform.GameState = @as(
         *platform.GameState,
         @alignCast(@ptrCast(memory.permanent_storage)),
