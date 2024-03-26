@@ -44,7 +44,7 @@ pub inline fn get_controller(
     index: usize,
 ) !*GameControllerInput {
     std.debug.assert(index < input.controllers.len);
-    var result = &input.controllers[index];
+    const result = &input.controllers[index];
     return (result);
 }
 
@@ -96,11 +96,11 @@ pub const GameControllerInput = struct {
 };
 
 pub const GameInput = struct {
-    // TODO: Insert clock value here
     mouse_buttons: [5]GameButtonState,
     mouse_x: i32,
     mouse_y: i32,
     mouse_z: i32,
+    seconds_to_advance_over_update: f32,
     controllers: [5]GameControllerInput,
 };
 
@@ -127,15 +127,7 @@ pub const GameMemory = struct {
     ) bool,
 };
 
-pub const GameState = struct {
-    blue_offset: i32,
-    green_offset: i32,
-    tone_hertz: i32,
-    t_sine: f32,
-    player_x: i32,
-    player_y: i32,
-    t_jump: f32,
-};
+pub const GameState = struct {};
 
 pub const update_and_render_type = *const fn (
     *ThreadContext,

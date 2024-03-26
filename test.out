@@ -23,9 +23,9 @@ fn game_output_sound(
             ),
         ));
 
-        //if (INTERNAL) {
-        //    sample_value = 0;
-        //}
+        if (INTERNAL) {
+            sample_value = 0;
+        }
 
         sample_out[2 * i] = sample_value;
         sample_out[2 * i + 1] = sample_value;

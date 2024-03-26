@@ -157,7 +157,7 @@ fn debug_platform_read_entire_file(
 ) platform.DebugReadFileResult {
     var result: platform.DebugReadFileResult = undefined;
 
-    var handle = win32.CreateFileA(
+    const handle = win32.CreateFileA(
         file_name,
         win32.FILE_GENERIC_READ,
         win32.FILE_SHARE_READ,
@@ -171,7 +171,7 @@ fn debug_platform_read_entire_file(
         var file_size: win32.LARGE_INTEGER = undefined;
 
         if (win32.GetFileSizeEx(handle, &file_size) > 0) {
-            var file_size32 = platform.safe_truncate_u64(@as(u64, @intCast(file_size.QuadPart)));
+            const file_size32 = platform.safe_truncate_u64(@as(u64, @intCast(file_size.QuadPart)));
 
             result.contents = win32.VirtualAlloc(
                 null,
@@ -221,7 +221,7 @@ fn debug_platform_write_entire_file(
     _ = thread;
     var result = false;
 
-    var handle = win32.CreateFileA(
+    const handle = win32.CreateFileA(
         file_name,
         win32.FILE_GENERIC_WRITE,
         win32.FILE_SHARE_NONE,
@@ -489,7 +489,7 @@ fn win32_resize_dib_section(
     buffer.info.bmiHeader.biBitCount = 32;
     buffer.info.bmiHeader.biCompression = win32.BI_RGB;
 
-    var bitmap_memory_size = buffer.bytes_per_pixel * (buffer.width * buffer.height);
+    const bitmap_memory_size = buffer.bytes_per_pixel * (buffer.width * buffer.height);
     buffer.memory = @ptrCast(win32.VirtualAlloc(
         null,
         @intCast(bitmap_memory_size),
@@ -577,8 +577,8 @@ fn win32_main_window_callback(
         },
         win32.WM_PAINT => {
             var paint = std.mem.zeroInit(win32.PAINTSTRUCT, .{});
-            var device_context = win32.BeginPaint(window, &paint);
-            var dimension = win32_get_window_dimension(window);
+            const device_context = win32.BeginPaint(window, &paint);
+            const dimension = win32_get_window_dimension(window);
             win32_display_buffer_in_window(
                 &global_back_buffer,
                 device_context,
@@ -661,11 +661,11 @@ fn win32_fill_sound_buffer(
     ))) {
         std.debug.assert(region_1_size + region_2_size == bytes_to_write);
 
-        var source_sample = source_buffer.samples;
-        var region_1_sample_count: DWORD = region_1_size /
+        const source_sample = source_buffer.samples;
+        const region_1_sample_count: DWORD = region_1_size /
             @as(DWORD, @intCast(sound_output.bytes_per_sample));
-        var offset: DWORD = region_1_sample_count * 2;
-        var region_2_sample_count: DWORD = region_2_size /
+        const offset: DWORD = region_1_sample_count * 2;
+        const region_2_sample_count: DWORD = region_2_size /
             @as(DWORD, @intCast(sound_output.bytes_per_sample));
 
         if (region_1) |region| {
@@ -758,9 +758,9 @@ fn win32_process_pending_messages(
             win32.WM_KEYDOWN,
             win32.WM_KEYUP,
             => {
-                var vk_code: win32.VIRTUAL_KEY = @enumFromInt(message.wParam);
-                var was_down = (message.lParam & (1 << 30)) != 0;
-                var is_down = (message.lParam & (1 << 31)) == 0;
+                const vk_code: win32.VIRTUAL_KEY = @enumFromInt(message.wParam);
+                const was_down = (message.lParam & (1 << 30)) != 0;
+                const is_down = (message.lParam & (1 << 31)) == 0;
 
                 if (was_down != is_down) {
                     switch (vk_code) {
@@ -837,7 +837,7 @@ fn win32_process_pending_messages(
                     }
                 }
 
-                var alt_key_was_down: bool = (message.lParam & (1 << 29)) != 0;
+                const alt_key_was_down: bool = (message.lParam & (1 << 29)) != 0;
                 if (vk_code == win32.VK_F4 and alt_key_was_down) {
                     global_running = false;
                 }
@@ -893,7 +893,7 @@ inline fn win32_debug_sync_display(
 
     const line_height = 64;
 
-    var coefficient = @as(
+    const coefficient = @as(
         f32,
         @floatFromInt(back_buffer.width - 2 * pad_x),
     ) / @as(
@@ -920,7 +920,7 @@ inline fn win32_debug_sync_display(
             top += line_height + pad_y;
             bottom += line_height + pad_y;
 
-            var first_top = top;
+            const first_top = top;
             win32_draw_sound_buffer_marker(back_buffer, sound_output, coefficient, pad_x, top, bottom, marker.output_play_cursor, play_color);
             win32_draw_sound_buffer_marker(back_buffer, sound_output, coefficient, pad_x, top, bottom, marker.output_write_cursor, write_color);
 
@@ -953,7 +953,7 @@ inline fn win32_draw_sound_buffer_marker(
     color: u32,
 ) void {
     _ = sound_output;
-    var x: i32 = pad_x +
+    const x: i32 = pad_x +
         @as(i32, @intFromFloat(coefficient *
         @as(f32, @floatFromInt(value))));
 
@@ -973,15 +973,15 @@ inline fn win32_debug_draw_vertical(
     bottom: i32,
     color: u32,
 ) void {
-    var t = if (top <= 0) 0 else top;
+    const t = if (top <= 0) 0 else top;
 
-    var b = if (bottom >= back_buffer.height)
+    const b = if (bottom >= back_buffer.height)
         back_buffer.height
     else
         bottom;
 
     if (x >= 0 and x < back_buffer.width) {
-        var offset = @as(usize, @intCast(x *
+        const offset = @as(usize, @intCast(x *
             back_buffer.bytes_per_pixel +
             t *
             back_buffer.pitch));
@@ -1038,7 +1038,7 @@ fn win32_get_input_file_location(
 fn win32_get_replay_buffer(state: *Win32State, index: u32) *Win32ReplayBuffer {
     std.debug.assert(index < state.replay_buffers.len);
 
-    var result = &state.replay_buffers[index];
+    const result = &state.replay_buffers[index];
 
     return result;
 }
@@ -1058,7 +1058,7 @@ fn win32_begin_recording_input(
     state: *Win32State,
     input_recording_index: usize,
 ) void {
-    var replay_buffer = win32_get_replay_buffer(
+    const replay_buffer = win32_get_replay_buffer(
         state,
         @intCast(input_recording_index),
     );
@@ -1091,7 +1091,7 @@ fn win32_begin_input_play_back(
     state: *Win32State,
     input_playing_index: usize,
 ) void {
-    var replay_buffer = win32_get_replay_buffer(
+    const replay_buffer = win32_get_replay_buffer(
         state,
         @intCast(input_playing_index),
     );
@@ -1150,7 +1150,7 @@ fn win32_play_back_input(
     ) != win32.FALSE) {
         if (bytes_read == 0) {
             // NOTE: We've hit the end of the stream, go back to the beginning
-            var playing_index = state.input_playing_index;
+            const playing_index = state.input_playing_index;
             win32_end_input_play_back(state);
             win32_begin_input_play_back(state, playing_index);
 
@@ -1226,7 +1226,7 @@ pub export fn wWinMain(
     // NOTE: Set Windows scheduler granularity to 1ms
     // so that Sleep() can be more granular
     const desired_scheduler_ms = 1;
-    var sleep_is_granular = (win32.timeBeginPeriod(desired_scheduler_ms) == win32.TIMERR_NOERROR);
+    const sleep_is_granular = (win32.timeBeginPeriod(desired_scheduler_ms) == win32.TIMERR_NOERROR);
 
     win32_load_x_input();
 
@@ -1234,7 +1234,7 @@ pub export fn wWinMain(
 
     // TODO: would be nice to properly log when something goes wrong
     // with these error union return types
-    win32_resize_dib_section(&global_back_buffer, 1280, 720);
+    win32_resize_dib_section(&global_back_buffer, 960, 540);
 
     window_class.style = win32.WNDCLASS_STYLES{ .HREDRAW = 1, .VREDRAW = 1 };
     window_class.lpfnWndProc = @ptrCast(&win32_main_window_callback);
@@ -1281,9 +1281,9 @@ pub export fn wWinMain(
                 monitor_refresh_hertz = win32_refresh_rate;
             }
 
-            var game_update_hertz: f32 =
+            const game_update_hertz: f32 =
                 @as(f32, @floatFromInt(monitor_refresh_hertz)) / 2.0;
-            var target_seconds_per_frame: f32 = 1.0 / game_update_hertz;
+            const target_seconds_per_frame: f32 = 1.0 / game_update_hertz;
 
             // TODO: Make this like sixty seconds?
             sound_output.samples_per_second = 48_000;
@@ -1297,7 +1297,7 @@ pub export fn wWinMain(
             // NOTE: Because of a higher refresh rate/game_update_hertz,
             // more safety bytes are necessary to make sure we are always
             // writing enough sound output to the buffer
-            var safety_bytes =
+            const safety_bytes =
                 (@as(f32, @floatFromInt(sound_output.samples_per_second)) *
                 @as(f32, @floatFromInt(sound_output.bytes_per_sample)) /
                 game_update_hertz) * 2.0;
@@ -1322,14 +1322,14 @@ pub export fn wWinMain(
             global_running = true;
 
             // TODO: pool with bitmap VirtualAlloc
-            var samples = win32.VirtualAlloc(
+            const samples = win32.VirtualAlloc(
                 null,
                 sound_output.secondary_buffer_size,
                 win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
                 win32.PAGE_READWRITE,
             );
 
-            var base_address: ?*anyopaque =
+            const base_address: ?*anyopaque =
                 if (INTERNAL)
                 @ptrFromInt(platform.Terabytes(2))
             else
@@ -1374,7 +1374,7 @@ pub export fn wWinMain(
                     null,
                 );
 
-                var max_size = win32.LARGE_INTEGER{
+                const max_size = win32.LARGE_INTEGER{
                     .QuadPart = @intCast(win32_state.total_size),
                 };
 
@@ -1409,6 +1409,7 @@ pub export fn wWinMain(
                 var inputs: [2]platform.GameInput = undefined;
                 var new_input = &inputs[0];
                 var old_input = &inputs[1];
+                new_input.seconds_to_advance_over_update = target_seconds_per_frame;
 
                 var last_counter = win32_get_wall_clock();
                 var flip_wall_clock = win32_get_wall_clock();
@@ -1442,7 +1443,7 @@ pub export fn wWinMain(
                     // TODO: Zeroing "macro" with comptime
                     // TODO: We can't zero everything because the up/down state will be wrong
                     // NOTE: Index 0 belongs to keyboard
-                    var old_keyboard_controller: *platform.GameControllerInput =
+                    const old_keyboard_controller: *platform.GameControllerInput =
                         try platform.get_controller(old_input, 0);
                     var new_keyboard_controller: *platform.GameControllerInput =
                         try platform.get_controller(new_input, 0);
@@ -1500,7 +1501,7 @@ pub export fn wWinMain(
 
                         // NOTE: Indices 1..4 belong to gamepad
                         for (0..max_controller_count) |controller_index| {
-                            var our_index = controller_index + 1;
+                            const our_index = controller_index + 1;
                             var old_controller: *platform.GameControllerInput =
                                 try platform.get_controller(old_input, our_index);
                             var new_controller: *platform.GameControllerInput =
@@ -1516,7 +1517,7 @@ pub export fn wWinMain(
 
                                 // NOTE: Controller is plugged in
                                 // TODO: See if controller_state.dwPacketNumber increments too quickly
-                                var pad: *win32.XINPUT_GAMEPAD = &controller_state.Gamepad;
+                                const pad: *win32.XINPUT_GAMEPAD = &controller_state.Gamepad;
 
                                 // TODO: This is a square deadzone, check XInput to
                                 // verify that the deadzone is round and show how to do
@@ -1556,7 +1557,7 @@ pub export fn wWinMain(
                                     new_controller.is_analog = false;
                                 }
 
-                                var threshold: f32 = 0.5;
+                                const threshold: f32 = 0.5;
                                 win32_process_x_input_digital_button(
                                     if (new_controller.stick_average_x < -threshold)
                                         1
@@ -1683,8 +1684,8 @@ pub export fn wWinMain(
                             );
                         }
 
-                        var audio_wall_clock = win32_get_wall_clock();
-                        var from_begin_to_audio_seconds = win32_get_seconds_elapsed(
+                        const audio_wall_clock = win32_get_wall_clock();
+                        const from_begin_to_audio_seconds = win32_get_seconds_elapsed(
                             flip_wall_clock,
                             audio_wall_clock,
                         );
@@ -1723,12 +1724,12 @@ pub export fn wWinMain(
                                 sound_is_valid = true;
                             }
 
-                            var byte_to_lock =
+                            const byte_to_lock =
                                 (sound_output.running_sample_index *
                                 sound_output.bytes_per_sample) %
                                 sound_output.secondary_buffer_size;
 
-                            var expected_sound_bytes_per_frame = @as(
+                            const expected_sound_bytes_per_frame = @as(
                                 DWORD,
                                 @intFromFloat(@as(
                                     f32,
@@ -1748,12 +1749,12 @@ pub export fn wWinMain(
                                 seconds_left_until_flip = 0.0;
                             }
 
-                            var expected_bytes_until_flip =
+                            const expected_bytes_until_flip =
                                 @as(DWORD, @intFromFloat((seconds_left_until_flip /
                                 target_seconds_per_frame) *
                                 @as(f32, @floatFromInt(expected_sound_bytes_per_frame))));
 
-                            var expected_frame_boundary_byte = play_cursor + expected_bytes_until_flip;
+                            const expected_frame_boundary_byte = play_cursor + expected_bytes_until_flip;
                             var safe_write_cursor = write_cursor;
 
                             if (safe_write_cursor < play_cursor) {
@@ -1763,7 +1764,7 @@ pub export fn wWinMain(
                             std.debug.assert(safe_write_cursor >= play_cursor);
 
                             safe_write_cursor += sound_output.safety_bytes;
-                            var audio_card_is_low_latency = safe_write_cursor < expected_frame_boundary_byte;
+                            const audio_card_is_low_latency = safe_write_cursor < expected_frame_boundary_byte;
                             var target_cursor: DWORD = 0;
 
                             if (audio_card_is_low_latency) {
@@ -1845,8 +1846,8 @@ pub export fn wWinMain(
                             sound_is_valid = false;
                         }
 
-                        var work_counter = win32_get_wall_clock();
-                        var work_seconds_elapsed = win32_get_seconds_elapsed(
+                        const work_counter = win32_get_wall_clock();
+                        const work_seconds_elapsed = win32_get_seconds_elapsed(
                             last_counter,
                             work_counter,
                         );
@@ -1856,7 +1857,7 @@ pub export fn wWinMain(
                         // TODO: Not tested yet, probably buggy
                         if (seconds_elapsed_for_frame < target_seconds_per_frame) {
                             if (sleep_is_granular) {
-                                var sleep_ms = @as(DWORD, @intFromFloat(1000.0 *
+                                const sleep_ms = @as(DWORD, @intFromFloat(1000.0 *
                                     (target_seconds_per_frame - seconds_elapsed_for_frame)));
 
                                 if (sleep_ms > 0) {
@@ -1864,7 +1865,7 @@ pub export fn wWinMain(
                                 }
                             }
 
-                            var test_seconds_elapsed_for_frame = win32_get_seconds_elapsed(
+                            const test_seconds_elapsed_for_frame = win32_get_seconds_elapsed(
                                 last_counter,
                                 win32_get_wall_clock(),
                             );
@@ -1884,14 +1885,14 @@ pub export fn wWinMain(
                             // TODO: logging
                         }
 
-                        var end_counter = win32_get_wall_clock();
-                        var ms_per_frame = 1000.0 * win32_get_seconds_elapsed(
+                        const end_counter = win32_get_wall_clock();
+                        const ms_per_frame = 1000.0 * win32_get_seconds_elapsed(
                             last_counter,
                             end_counter,
                         );
                         last_counter = end_counter;
 
-                        var dimension = win32_get_window_dimension(window);
+                        const dimension = win32_get_window_dimension(window);
 
                         if (DEBUG_SYNC_DISPLAY) {
                             win32_debug_sync_display(
@@ -1933,18 +1934,18 @@ pub export fn wWinMain(
                             }
                         }
 
-                        var temp = new_input;
+                        const temp = new_input;
                         new_input = old_input;
                         old_input = temp;
                         // TODO: should we clear these here?
 
                         if (DEBUG_WALL_CLOCK) {
-                            var end_cycle_count = rdtsc();
-                            var cycles_elapsed = end_cycle_count - last_cycle_count;
+                            const end_cycle_count = rdtsc();
+                            const cycles_elapsed = end_cycle_count - last_cycle_count;
                             last_cycle_count = end_cycle_count;
 
-                            var fps: f32 = 0.0;
-                            var mega_cycles_per_frame =
+                            const fps: f32 = 0.0;
+                            const mega_cycles_per_frame =
                                 @as(f64, @floatFromInt(cycles_elapsed)) /
                                 @as(f64, @floatFromInt(1000 * 1000));
 

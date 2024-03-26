@@ -7,38 +7,38 @@ fn game_output_sound(
     sound_buffer: *platform.GameSoundBuffer,
     game_state: *platform.GameState,
 ) !void {
+    _ = game_state;
     const tone_volume: i16 = 3_000;
-    var wave_period = @divTrunc(
+    _ = tone_volume;
+    const wave_period = @divTrunc(
         @as(i32, @intCast(sound_buffer.samples_per_second)),
-        game_state.tone_hertz,
+        400,
     );
+    _ = wave_period;
     var sample_out = sound_buffer.samples;
 
     for (0..@intCast(sound_buffer.sample_count)) |i| {
-        var sine_value = @sin(game_state.t_sine);
-        var sample_value = @as(i16, @intFromFloat(
-            sine_value * @as(
-                f16,
-                @floatFromInt(tone_volume),
-            ),
-        ));
+        //var sine_value = @sin(game_state.t_sine);
+        //var sample_value = @as(i16, @intFromFloat(
+        //    sine_value * @as(
+        //        f16,
+        //        @floatFromInt(tone_volume),
+        //    ),
+        //));
 
-        //if (INTERNAL) {
-        //    sample_value = 0;
-        //}
-
+        const sample_value: i16 = 0;
         sample_out[2 * i] = sample_value;
         sample_out[2 * i + 1] = sample_value;
 
-        game_state.t_sine +=
-            2.0 *
-            std.math.pi *
-            1.0 /
-            @as(f32, @floatFromInt(wave_period));
+        //game_state.t_sine +=
+        //    2.0 *
+        //    std.math.pi *
+        //    1.0 /
+        //    @as(f32, @floatFromInt(wave_period));
 
-        if (game_state.t_sine > 2.0 * std.math.pi) {
-            game_state.t_sine -= 2.0 * std.math.pi;
-        }
+        //if (game_state.t_sine > 2.0 * std.math.pi) {
+        //    game_state.t_sine -= 2.0 * std.math.pi;
+        //}
     }
 }
 
@@ -53,11 +53,11 @@ fn render_weird_gradient(
         var pixel: [*]u32 = @ptrCast(@alignCast(row));
 
         for (0..@intCast(buffer.width)) |x| {
-            var blue: u32 = @as(u8, @truncate(x + @as(
+            const blue: u32 = @as(u8, @truncate(x + @as(
                 u32,
                 @bitCast(blue_offset),
             )));
-            var green: u32 = @as(u8, @truncate(y + @as(
+            const green: u32 = @as(u8, @truncate(y + @as(
                 u32,
                 @bitCast(green_offset),
             )));
@@ -69,35 +69,40 @@ fn render_weird_gradient(
     }
 }
 
-fn render_player(
+fn draw_rectangle(
     buffer: *platform.GameOffscreenBuffer,
-    player_x: i32,
-    player_y: i32,
+    f_min_x: f32,
+    f_min_y: f32,
+    f_max_x: f32,
+    f_max_y: f32,
+    color: u32,
 ) !void {
-    var end_of_buffer: [*]u8 =
+    // TODO: Floating point color tomorrow!
+
+    var min_x: i32 = @intFromFloat(@round(f_min_x));
+    var min_y: i32 = @intFromFloat(@round(f_min_y));
+    var max_x: i32 = @intFromFloat(@round(f_max_x));
+    var max_y: i32 = @intFromFloat(@round(f_max_y));
+
+    if (min_x < 0) min_x = 0;
+    if (min_y < 0) min_y = 0;
+    if (min_x > buffer.width) max_x = buffer.width;
+    if (min_y > buffer.height) max_y = buffer.height;
+
+    var row: [*]u8 =
         @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
-        @as(usize, @intCast(buffer.pitch * buffer.height));
+        (@as(usize, @intCast(min_x)) *
+        @as(usize, @intCast(buffer.bytes_per_pixel))) +
+        @as(u32, @bitCast(min_y *% buffer.pitch));
 
-    comptime var color = 0xffffffff;
-    var top = player_y;
+    for (@intCast(min_y)..@intCast(max_y)) |_| {
+        const pixel: [*]u32 = @alignCast(@ptrCast(row));
 
-    for (0..10) |i| {
-        var x = @as(u32, @bitCast(player_x));
-        x +%= @intCast(i);
-        var pixel: [*]u8 =
-            @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
-            (x * @as(usize, @intCast(buffer.bytes_per_pixel))) +
-            @as(u32, @bitCast(top *% buffer.pitch));
-
-        for (0..10) |_| {
-            if (@intFromPtr(pixel) >= @intFromPtr(buffer.memory) and
-                @intFromPtr(pixel + 4) <= @intFromPtr(end_of_buffer))
-            {
-                @as([*]u32, @alignCast(@ptrCast(pixel)))[0] = color;
-            }
-
-            pixel += @as(usize, @intCast(buffer.pitch));
+        for (@intCast(min_x)..@intCast(max_x)) |x| {
+            pixel[x] = color;
         }
+
+        row += @as(usize, @intCast(buffer.pitch));
     }
 }
 
@@ -110,95 +115,37 @@ pub export fn update_and_render(
     thread: *platform.ThreadContext,
     memory: *platform.GameMemory,
     input: *platform.GameInput,
-    offscreen_buffer: *platform.GameOffscreenBuffer,
+    buffer: *platform.GameOffscreenBuffer,
 ) void {
+    _ = thread;
     assert(@sizeOf(@TypeOf(input.controllers[0].buttons.map)) ==
         @sizeOf(platform.GameButtonState) * input.controllers[0].buttons.array.len);
     assert(@sizeOf(platform.GameState) <= memory.permanent_storage_size);
 
-    var game_state: *platform.GameState = @as(
+    const game_state: *platform.GameState = @as(
         *platform.GameState,
         @alignCast(@ptrCast(memory.permanent_storage)),
     );
+    _ = game_state;
 
     if (!memory.is_initialized) {
-        var file_name = "./src/zigmade/zigmade.zig";
-        var file = memory.debug_platform_read_entire_file(thread, file_name);
-
-        if (file.contents != undefined) {
-            _ = memory.debug_platform_write_entire_file(
-                thread,
-                "test.out",
-                file.size,
-                file.contents,
-            );
-
-            memory.debug_platform_free_file_memory(thread, file.contents);
-        }
-
-        game_state.tone_hertz = 512;
-        game_state.t_sine = 0.0;
-        game_state.player_x = 100;
-        game_state.player_y = 100;
-
         // TODO: This may be more appropriate to do in the platform layer
         memory.is_initialized = true;
     }
 
     for (0..input.controllers.len) |controller_index| {
-        var controller: *platform.GameControllerInput =
+        const controller: *platform.GameControllerInput =
             try platform.get_controller(input, controller_index);
 
         if (controller.is_analog) {
             // NOTE: Use analog movement tuning
-            game_state.blue_offset +%= @as(i32, @intFromFloat(
-                4.0 * (controller.stick_average_x),
-            ));
-            game_state.tone_hertz = 512 +
-                @as(i32, @intFromFloat(128.0 *
-                (controller.stick_average_y)));
         } else {
             // NOTE: Use digital movement tuning
-            if (controller.buttons.map.move_left.ended_down) {
-                game_state.blue_offset -%= 1;
-            }
-
-            if (controller.buttons.map.move_right.ended_down) {
-                game_state.blue_offset +%= 1;
-            }
-        }
-
-        game_state.player_x +%= @intFromFloat(4.0 * controller.stick_average_x);
-        game_state.player_y -%= @as(i32, @intFromFloat(4.0 * controller.stick_average_y));
-
-        if (game_state.t_jump > 0) {
-            game_state.player_y +%= @intFromFloat(5.0 * @sin(0.5 * std.math.pi * game_state.t_jump));
-        }
-
-        if (controller.buttons.map.action_down.ended_down) {
-            game_state.t_jump = 4.0;
-        }
-
-        game_state.t_jump -= 0.033;
-    }
-
-    try render_weird_gradient(
-        offscreen_buffer,
-        game_state.blue_offset,
-        game_state.green_offset,
-    );
-    try render_player(offscreen_buffer, game_state.player_x, game_state.player_y);
-    try render_player(offscreen_buffer, input.mouse_x, input.mouse_y);
-
-    for (input.mouse_buttons, 0..) |button, i| {
-        if (button.ended_down) {
-            try render_player(
-                offscreen_buffer,
-                10 + 20 * @as(i32, @intCast(i)),
-                10,
-            );
         }
     }
+
+    try draw_rectangle(buffer, 0.0, 0.0, @floatFromInt(buffer.width), @floatFromInt(buffer.height), 0x00ff00ff);
+    try draw_rectangle(buffer, 10.0, 10.0, 40.0, 40.0, 0x0000ffff);
 }
 
 // NOTE: At the moment, this must be a very fast function
@@ -211,7 +158,7 @@ pub export fn get_sound_samples(
     sound_buffer: *platform.GameSoundBuffer,
 ) void {
     _ = thread;
-    var game_state: *platform.GameState = @as(
+    const game_state: *platform.GameState = @as(
         *platform.GameState,
         @alignCast(@ptrCast(memory.permanent_storage)),
     );
