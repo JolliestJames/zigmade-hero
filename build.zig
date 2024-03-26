@@ -23,11 +23,11 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "DEBUG_SYNC_DISPLAY", debug_sync_display);
 
     const win32 = b.createModule(.{
-        .source_file = .{ .path = "./src/zigwin32/win32.zig" },
+        .root_source_file = .{ .path = "./src/zigwin32/win32.zig" },
     });
 
     const platform = b.createModule(.{
-        .source_file = .{ .path = "./src/zigmade_platform.zig" },
+        .root_source_file = .{ .path = "./src/zigmade_platform.zig" },
     });
 
     const zigmade = b.addSharedLibrary(.{
@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    zigmade.addModule("zigmade_platform", platform);
+    zigmade.root_module.addImport("zigmade_platform", platform);
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -52,9 +52,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    exe.addModule("win32", win32);
-    exe.addModule("zigmade_platform", platform);
-    exe.addOptions("options", options);
+    exe.root_module.addImport("win32", win32);
+    exe.root_module.addImport("zigmade_platform", platform);
+    exe.root_module.addOptions("options", options);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
