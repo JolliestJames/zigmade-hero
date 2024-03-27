@@ -3,9 +3,14 @@ const assert = std.debug.assert;
 const platform = @import("zigmade_platform");
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
+const GameState = struct {
+    player_x: f32,
+    player_y: f32,
+};
+
 fn game_output_sound(
     sound_buffer: *platform.GameSoundBuffer,
-    game_state: *platform.GameState,
+    game_state: *GameState,
 ) !void {
     _ = game_state;
     const tone_volume: i16 = 3_000;
@@ -75,31 +80,37 @@ fn draw_rectangle(
     f_min_y: f32,
     f_max_x: f32,
     f_max_y: f32,
-    color: u32,
+    r: f32,
+    g: f32,
+    b: f32,
 ) !void {
-    // TODO: Floating point color tomorrow!
-
-    var min_x: i32 = @intFromFloat(@round(f_min_x));
-    var min_y: i32 = @intFromFloat(@round(f_min_y));
-    var max_x: i32 = @intFromFloat(@round(f_max_x));
-    var max_y: i32 = @intFromFloat(@round(f_max_y));
+    var min_x: i32 = @intFromFloat(f_min_x);
+    var min_y: i32 = @intFromFloat(f_min_y);
+    var max_x: i32 = @intFromFloat(f_max_x);
+    var max_y: i32 = @intFromFloat(f_max_y);
 
     if (min_x < 0) min_x = 0;
     if (min_y < 0) min_y = 0;
-    if (min_x > buffer.width) max_x = buffer.width;
-    if (min_y > buffer.height) max_y = buffer.height;
+    if (max_x > buffer.width) max_x = buffer.width;
+    if (max_y > buffer.height) max_y = buffer.height;
+    if (min_x > max_x) max_x = min_x;
+    if (min_y > max_y) max_y = min_y;
 
-    var row: [*]u8 =
-        @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
+    const color: u32 = (@as(u32, (@intFromFloat(r * 255.0))) << 16) |
+        (@as(u32, (@intFromFloat(g * 255.0))) << 8) |
+        (@as(u32, (@intFromFloat(b * 255.0))) << 0);
+
+    var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
         (@as(usize, @intCast(min_x)) *
         @as(usize, @intCast(buffer.bytes_per_pixel))) +
         @as(u32, @bitCast(min_y *% buffer.pitch));
 
     for (@intCast(min_y)..@intCast(max_y)) |_| {
-        const pixel: [*]u32 = @alignCast(@ptrCast(row));
+        var pixel: [*]u32 = @alignCast(@ptrCast(row));
 
-        for (@intCast(min_x)..@intCast(max_x)) |x| {
-            pixel[x] = color;
+        for (@intCast(min_x)..@intCast(max_x)) |_| {
+            pixel[0] = color;
+            pixel += 1;
         }
 
         row += @as(usize, @intCast(buffer.pitch));
@@ -120,13 +131,12 @@ pub export fn update_and_render(
     _ = thread;
     assert(@sizeOf(@TypeOf(input.controllers[0].buttons.map)) ==
         @sizeOf(platform.GameButtonState) * input.controllers[0].buttons.array.len);
-    assert(@sizeOf(platform.GameState) <= memory.permanent_storage_size);
+    assert(@sizeOf(GameState) <= memory.permanent_storage_size);
 
-    const game_state: *platform.GameState = @as(
-        *platform.GameState,
+    const game_state: *GameState = @as(
+        *GameState,
         @alignCast(@ptrCast(memory.permanent_storage)),
     );
-    _ = game_state;
 
     if (!memory.is_initialized) {
         // TODO: This may be more appropriate to do in the platform layer
@@ -141,11 +151,109 @@ pub export fn update_and_render(
             // NOTE: Use analog movement tuning
         } else {
             // NOTE: Use digital movement tuning
+            var d_player_x: f32 = 0.0; //pixels/s
+            var d_player_y: f32 = 0.0; //pixels/s
+
+            // TODO: Investigate timing tomorrow and verify that it
+            // is working properly because it appears things are moving
+            // half as fast as expected
+            if (controller.buttons.map.move_up.ended_down) {
+                d_player_y = -1.0;
+            }
+
+            if (controller.buttons.map.move_down.ended_down) {
+                d_player_y = 1.0;
+            }
+
+            if (controller.buttons.map.move_left.ended_down) {
+                d_player_x = -1.0;
+            }
+
+            if (controller.buttons.map.move_right.ended_down) {
+                d_player_x = 1.0;
+            }
+
+            d_player_x *= 64.0;
+            d_player_y *= 64.0;
+
+            // TODO: Diagonal will be faster. Fix once we have vectors!
+            game_state.player_x += input.delta_t_for_frame * d_player_x;
+            game_state.player_y += input.delta_t_for_frame * d_player_y;
         }
     }
 
-    try draw_rectangle(buffer, 0.0, 0.0, @floatFromInt(buffer.width), @floatFromInt(buffer.height), 0x00ff00ff);
-    try draw_rectangle(buffer, 10.0, 10.0, 40.0, 40.0, 0x0000ffff);
+    const tile_map = [9][17]u32{
+        [_]u32{ 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1 },
+        [_]u32{ 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1 },
+        [_]u32{ 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1 },
+        [_]u32{ 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1 },
+        [_]u32{ 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 },
+        [_]u32{ 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1 },
+        [_]u32{ 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+        [_]u32{ 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1 },
+        [_]u32{ 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1 },
+    };
+
+    const upper_left_x: f32 = -30;
+    const upper_left_y: f32 = 0;
+    const tile_width: f32 = 60;
+    const tile_height: f32 = 60;
+
+    try draw_rectangle(
+        buffer,
+        0.0,
+        0.0,
+        @floatFromInt(buffer.width),
+        @floatFromInt(buffer.height),
+        1.0,
+        0.0,
+        0.1,
+    );
+
+    for (tile_map, 0..9) |row, row_index| {
+        for (row, 0..17) |cell, col_index| {
+            var color: f32 = 0.5;
+
+            if (cell == 1) {
+                color = 1.0;
+            }
+
+            const min_x = upper_left_x + @as(f32, @floatFromInt(col_index)) * tile_width;
+            const min_y = upper_left_y + @as(f32, @floatFromInt(row_index)) * tile_height;
+            const max_x = min_x + tile_width;
+            const max_y = min_y + tile_height;
+
+            try draw_rectangle(
+                buffer,
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                color,
+                color,
+                color,
+            );
+        }
+    }
+
+    const player_r = 1.0;
+    const player_g = 1.0;
+    const player_b = 0.0;
+    const player_width = 0.75 * tile_width;
+    const player_height = tile_height;
+    const player_left = game_state.player_x - 0.5 * player_width;
+    const player_top = game_state.player_y - player_height;
+
+    try draw_rectangle(
+        buffer,
+        player_left,
+        player_top,
+        player_left + player_width,
+        player_top + player_height,
+        player_r,
+        player_g,
+        player_b,
+    );
 }
 
 // NOTE: At the moment, this must be a very fast function
@@ -158,8 +266,8 @@ pub export fn get_sound_samples(
     sound_buffer: *platform.GameSoundBuffer,
 ) void {
     _ = thread;
-    const game_state: *platform.GameState = @as(
-        *platform.GameState,
+    const game_state: *GameState = @as(
+        *GameState,
         @alignCast(@ptrCast(memory.permanent_storage)),
     );
 

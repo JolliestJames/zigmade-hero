@@ -100,7 +100,7 @@ pub const GameInput = struct {
     mouse_x: i32,
     mouse_y: i32,
     mouse_z: i32,
-    seconds_to_advance_over_update: f32,
+    delta_t_for_frame: f32,
     controllers: [5]GameControllerInput,
 };
 
@@ -126,8 +126,6 @@ pub const GameMemory = struct {
         ?*anyopaque,
     ) bool,
 };
-
-pub const GameState = struct {};
 
 pub const update_and_render_type = *const fn (
     *ThreadContext,

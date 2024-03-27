@@ -1252,10 +1252,10 @@ pub export fn wWinMain(
             window_class.lpszClassName,
             win32.L("Handmade Hero"),
             window_style,
-            1280,
+            1600,
             25,
-            1280,
-            720,
+            960,
+            540,
             //win32.CW_USEDEFAULT,
             //win32.CW_USEDEFAULT,
             //win32.CW_USEDEFAULT,
@@ -1409,7 +1409,6 @@ pub export fn wWinMain(
                 var inputs: [2]platform.GameInput = undefined;
                 var new_input = &inputs[0];
                 var old_input = &inputs[1];
-                new_input.seconds_to_advance_over_update = target_seconds_per_frame;
 
                 var last_counter = win32_get_wall_clock();
                 var flip_wall_clock = win32_get_wall_clock();
@@ -1430,6 +1429,8 @@ pub export fn wWinMain(
                 var last_cycle_count = rdtsc();
 
                 while (global_running) {
+                    new_input.delta_t_for_frame = target_seconds_per_frame;
+
                     var new_dll_write_time = win32_get_last_write_time(&source_game_code_dll_path);
 
                     if (win32.CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0) {
