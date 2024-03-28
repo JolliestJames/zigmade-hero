@@ -100,7 +100,7 @@ pub const GameInput = struct {
     mouse_x: i32,
     mouse_y: i32,
     mouse_z: i32,
-    delta_t_for_frame: f32,
+    dt_for_frame: f32,
     controllers: [5]GameControllerInput,
 };
 

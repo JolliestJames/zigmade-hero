@@ -508,16 +508,49 @@ fn win32_display_buffer_in_window(
     window_width: i32,
     window_height: i32,
 ) void {
-    _ = window_height;
-    _ = window_width;
+    const offset_x = 10;
+    const offset_y = 10;
+
+    _ = win32.PatBlt(
+        device_context,
+        0,
+        0,
+        window_width,
+        offset_y,
+        win32.BLACKNESS,
+    );
+    _ = win32.PatBlt(
+        device_context,
+        0,
+        offset_y + buffer.height,
+        window_width,
+        window_height,
+        win32.BLACKNESS,
+    );
+    _ = win32.PatBlt(
+        device_context,
+        0,
+        0,
+        offset_x,
+        window_height,
+        win32.BLACKNESS,
+    );
+    _ = win32.PatBlt(
+        device_context,
+        offset_x + buffer.width,
+        0,
+        window_width,
+        window_height,
+        win32.BLACKNESS,
+    );
 
     // NOTE: For prototyping purposes, we're going to always blit
     // 1:1 pixels to make sure we don't introduce artifacts with
     // stretching while we are learning to code the renderer
     _ = win32.StretchDIBits(
         device_context,
-        0,
-        0,
+        offset_x,
+        offset_y,
         buffer.width,
         buffer.height,
         0,
@@ -578,6 +611,7 @@ fn win32_main_window_callback(
         win32.WM_PAINT => {
             var paint = std.mem.zeroInit(win32.PAINTSTRUCT, .{});
             const device_context = win32.BeginPaint(window, &paint);
+            defer _ = win32.EndPaint(window, &paint);
             const dimension = win32_get_window_dimension(window);
             win32_display_buffer_in_window(
                 &global_back_buffer,
@@ -585,8 +619,6 @@ fn win32_main_window_callback(
                 dimension.width,
                 dimension.height,
             );
-
-            _ = win32.EndPaint(window, &paint);
         },
         else => {
             result = win32.DefWindowProcW(window, message, w_param, l_param);
@@ -1252,10 +1284,10 @@ pub export fn wWinMain(
             window_class.lpszClassName,
             win32.L("Handmade Hero"),
             window_style,
-            1600,
+            1280,
             25,
-            960,
-            540,
+            1280,
+            720,
             //win32.CW_USEDEFAULT,
             //win32.CW_USEDEFAULT,
             //win32.CW_USEDEFAULT,
@@ -1429,7 +1461,7 @@ pub export fn wWinMain(
                 var last_cycle_count = rdtsc();
 
                 while (global_running) {
-                    new_input.delta_t_for_frame = target_seconds_per_frame;
+                    new_input.dt_for_frame = target_seconds_per_frame;
 
                     var new_dll_write_time = win32_get_last_write_time(&source_game_code_dll_path);
 
@@ -1909,14 +1941,14 @@ pub export fn wWinMain(
                         }
 
                         if (win32.GetDC(window)) |device_context| {
+                            defer _ = win32.ReleaseDC(window, device_context);
+
                             win32_display_buffer_in_window(
                                 &global_back_buffer,
                                 device_context,
                                 dimension.width,
                                 dimension.height,
                             );
-
-                            _ = win32.ReleaseDC(window, device_context);
                         }
 
                         flip_wall_clock = win32_get_wall_clock();
