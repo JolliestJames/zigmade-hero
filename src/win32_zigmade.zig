@@ -1272,7 +1272,7 @@ pub export fn wWinMain(
     window_class.lpfnWndProc = @ptrCast(&win32_main_window_callback);
     window_class.hInstance = instance;
     // window_class.hIcon = ;
-    window_class.lpszClassName = win32.L("HandmadeHeroWindowClass");
+    window_class.lpszClassName = win32.L("ZigmadeHeroWindowClass");
 
     if (win32.RegisterClassW(&window_class) != 0) {
         var window_style = win32.WS_OVERLAPPEDWINDOW;
@@ -1282,7 +1282,7 @@ pub export fn wWinMain(
             win32.WINDOW_EX_STYLE{},
             //win32.WINDOW_EX_STYLE{ .TOPMOST = 1, .LAYERED = 1 },
             window_class.lpszClassName,
-            win32.L("Handmade Hero"),
+            win32.L("Zigmade Hero"),
             window_style,
             1280,
             25,
