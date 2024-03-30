@@ -14,11 +14,16 @@ const GameState = struct {
 };
 
 const CanonicalPosition = struct {
+    // TODO: Take tile map x and y and tile x and y
+    // then pack them into single 32-bit values for x and y
+    // where there is some low bits for the tile index
+    // and the high bits are for the tile page
     tile_map_x: usize,
     tile_map_y: usize,
     tile_x: i32,
     tile_y: i32,
-    // NOTE: Tile-relative x and y
+    // Convert these to math-friendly, resolution independent
+    // representations of world units relative to a tile
     tile_rel_x: f32,
     tile_rel_y: f32,
 };
@@ -37,6 +42,8 @@ const TileMap = struct {
 };
 
 const World = struct {
+    tile_side_in_meters: f32,
+    tile_side_in_pixels: i32,
     // TODO: Beginner's sparseness
     tile_maps: ?[*]TileMap = undefined,
     tile_map_count_x: usize,
@@ -45,8 +52,6 @@ const World = struct {
     count_y: usize,
     upper_left_x: f32,
     upper_left_y: f32,
-    tile_width: f32,
-    tile_height: f32,
 };
 
 fn game_output_sound(
@@ -239,16 +244,17 @@ inline fn get_canonical_position(
 
     const x = pos.x - world.upper_left_x;
     const y = pos.y - world.upper_left_y;
+    const f_tile_side_in_pixels = @as(f32, @floatFromInt(world.tile_side_in_pixels));
 
-    result.tile_x = @as(i32, @intFromFloat(@divFloor(x, world.tile_width)));
-    result.tile_y = @as(i32, @intFromFloat(@divFloor(y, world.tile_height)));
-    result.tile_rel_x = x - @as(f32, @floatFromInt(result.tile_x)) * world.tile_width;
-    result.tile_rel_y = y - @as(f32, @floatFromInt(result.tile_y)) * world.tile_height;
+    result.tile_x = @as(i32, @intFromFloat(@divFloor(x, f_tile_side_in_pixels)));
+    result.tile_y = @as(i32, @intFromFloat(@divFloor(y, f_tile_side_in_pixels)));
+    result.tile_rel_x = x - @as(f32, @floatFromInt(result.tile_x * world.tile_side_in_pixels));
+    result.tile_rel_y = y - @as(f32, @floatFromInt(result.tile_y * world.tile_side_in_pixels));
 
     assert(result.tile_rel_x >= 0);
     assert(result.tile_rel_y >= 0);
-    assert(result.tile_rel_x < world.tile_width);
-    assert(result.tile_rel_y < world.tile_height);
+    assert(result.tile_rel_x < @as(f32, @floatFromInt(world.tile_side_in_pixels)));
+    assert(result.tile_rel_y < @as(f32, @floatFromInt(world.tile_side_in_pixels)));
 
     if (result.tile_x < 0) {
         result.tile_x = @as(i32, @intCast(world.count_x)) + result.tile_x;
@@ -366,20 +372,20 @@ pub export fn update_and_render(
     tile_maps[1][0].tiles = @ptrCast(&tiles_01);
     tile_maps[1][1].tiles = @ptrCast(&tiles_11);
 
-    var world = World{
-        .tile_maps = @ptrCast(&tile_maps),
-        .tile_map_count_x = 2,
-        .tile_map_count_y = 2,
-        .count_x = TILE_MAP_COUNT_X,
-        .count_y = TILE_MAP_COUNT_Y,
-        .upper_left_x = -30.0,
-        .upper_left_y = 0.0,
-        .tile_width = 60.0,
-        .tile_height = 60.0,
-    };
+    var world = std.mem.zeroInit(World, .{});
+    world.tile_maps = @ptrCast(&tile_maps);
+    world.tile_map_count_x = 2;
+    world.tile_map_count_y = 2;
+    world.count_x = TILE_MAP_COUNT_X;
+    world.count_y = TILE_MAP_COUNT_Y;
+    // TODO: Begin using tile side in meters
+    world.tile_side_in_meters = 1.4;
+    world.tile_side_in_pixels = 60;
+    world.upper_left_x = @floatFromInt(@divFloor(-world.tile_side_in_pixels, 2));
+    world.upper_left_y = 0.0;
 
-    const player_width = 0.75 * world.tile_width;
-    const player_height = world.tile_height;
+    const player_width = 0.75 * @as(f32, @floatFromInt(world.tile_side_in_pixels));
+    const player_height = world.tile_side_in_pixels;
 
     const game_state: *GameState = @as(
         *GameState,
@@ -388,7 +394,7 @@ pub export fn update_and_render(
 
     if (!memory.is_initialized) {
         // TODO: This may be more appropriate to do in the platform layer
-        game_state.player_x = 150.0;
+        game_state.player_x = 185.0;
         game_state.player_y = 150.0;
 
         memory.is_initialized = true;
@@ -458,10 +464,12 @@ pub export fn update_and_render(
                 game_state.player_tile_map_x = can_pos.tile_map_x;
                 game_state.player_tile_map_y = can_pos.tile_map_y;
 
-                game_state.player_x = world.upper_left_x + world.tile_width *
-                    @as(f32, @floatFromInt(can_pos.tile_x)) + can_pos.tile_rel_x;
-                game_state.player_y = world.upper_left_y + world.tile_height *
-                    @as(f32, @floatFromInt(can_pos.tile_y)) + can_pos.tile_rel_y;
+                game_state.player_x = world.upper_left_x +
+                    @as(f32, @floatFromInt(world.tile_side_in_pixels * can_pos.tile_x)) +
+                    can_pos.tile_rel_x;
+                game_state.player_y = world.upper_left_y +
+                    @as(f32, @floatFromInt(world.tile_side_in_pixels * can_pos.tile_y)) +
+                    can_pos.tile_rel_y;
             }
         }
     }
@@ -488,16 +496,16 @@ pub export fn update_and_render(
 
             const min_x =
                 world.upper_left_x +
-                @as(f32, @floatFromInt(column)) *
-                world.tile_width;
+                @as(f32, @floatFromInt(column *
+                @as(usize, @intCast(world.tile_side_in_pixels))));
 
             const min_y =
                 world.upper_left_y +
-                @as(f32, @floatFromInt(row)) *
-                world.tile_height;
+                @as(f32, @floatFromInt(row *
+                @as(usize, @intCast(world.tile_side_in_pixels))));
 
-            const max_x = min_x + world.tile_width;
-            const max_y = min_y + world.tile_height;
+            const max_x = min_x + @as(f32, @floatFromInt(world.tile_side_in_pixels));
+            const max_y = min_y + @as(f32, @floatFromInt(world.tile_side_in_pixels));
 
             try draw_rectangle(
                 buffer,
@@ -516,14 +524,14 @@ pub export fn update_and_render(
     const player_g = 1.0;
     const player_b = 0.0;
     const player_left = game_state.player_x - 0.5 * player_width;
-    const player_top = game_state.player_y - player_height;
+    const player_top = game_state.player_y - @as(f32, @floatFromInt(player_height));
 
     try draw_rectangle(
         buffer,
         player_left,
         player_top,
         player_left + player_width,
-        player_top + player_height,
+        player_top + @as(f32, @floatFromInt(player_height)),
         player_r,
         player_g,
         player_b,
