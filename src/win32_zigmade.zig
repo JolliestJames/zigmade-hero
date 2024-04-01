@@ -1068,6 +1068,7 @@ fn win32_get_input_file_location(
 }
 
 fn win32_get_replay_buffer(state: *Win32State, index: u32) *Win32ReplayBuffer {
+    std.debug.assert(index > 0);
     std.debug.assert(index < state.replay_buffers.len);
 
     const result = &state.replay_buffers[index];
@@ -1377,6 +1378,8 @@ pub export fn wWinMain(
 
             // TODO: Handle various memory footprints using system metrics
             // TODO: Use LARGE_PAGES and call adjust token privileges when not on WinXP?
+            // TODO: Transient storage should be broken up into game transient and
+            // cache transiet, and only the former must be stored for state playback
             win32_state.total_size = game_memory.permanent_storage_size +
                 game_memory.transient_storage_size;
             win32_state.game_memory_block = @as([*]u8, @ptrCast(win32.VirtualAlloc(
@@ -1390,7 +1393,7 @@ pub export fn wWinMain(
             game_memory.transient_storage = game_memory.permanent_storage +
                 game_memory.permanent_storage_size;
 
-            for (&win32_state.replay_buffers, 0..) |*buffer, index| {
+            for (&win32_state.replay_buffers, 1..) |*buffer, index| {
                 // TODO: Recording system still seems to take a brief moment
                 // on record start--find out what Windows is doing and if
                 // we can speed up/defer some of that processing.
