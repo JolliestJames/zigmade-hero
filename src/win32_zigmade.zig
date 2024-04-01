@@ -60,7 +60,7 @@ const win32 = struct {
 };
 
 const BackBuffer = struct {
-    memory: ?*void = undefined,
+    memory: ?*void = null,
     info: win32.BITMAPINFO,
     width: i32,
     height: i32,
@@ -102,20 +102,20 @@ const Win32SoundOutput = struct {
 };
 
 const Win32ReplayBuffer = struct {
-    file_handle: ?win32.HANDLE = undefined,
-    memory_map: ?win32.HANDLE = undefined,
+    file_handle: ?win32.HANDLE = null,
+    memory_map: ?win32.HANDLE = null,
     file_name: [WIN32_STATE_FILE_NAME_COUNT:0]u8 =
         [_:0]u8{0} ** WIN32_STATE_FILE_NAME_COUNT,
-    memory_block: ?*anyopaque = undefined,
+    memory_block: ?*anyopaque = null,
 };
 
 const Win32State = struct {
     total_size: u64,
-    game_memory_block: ?*anyopaque = undefined,
+    game_memory_block: ?*anyopaque = null,
     replay_buffers: [4]Win32ReplayBuffer,
-    recording_handle: ?win32.HANDLE = undefined,
+    recording_handle: ?win32.HANDLE = null,
     input_recording_index: usize,
-    playback_handle: ?win32.HANDLE = undefined,
+    playback_handle: ?win32.HANDLE = null,
     input_playing_index: usize,
     exe_file_name: [WIN32_STATE_FILE_NAME_COUNT:0]u8 =
         [_:0]u8{0} ** WIN32_STATE_FILE_NAME_COUNT,
@@ -378,7 +378,7 @@ fn win32_init_direct_sound(
                 @ptrCast(direct_sound_create_address),
             );
 
-            var maybe_direct_sound: ?*win32.IDirectSound = undefined;
+            var maybe_direct_sound: ?*win32.IDirectSound = null;
 
             if (win32.SUCCEEDED(direct_sound_create(
                 null,
@@ -404,7 +404,7 @@ fn win32_init_direct_sound(
                     var buffer_description = std.mem.zeroInit(win32.DSBUFFERDESC, .{});
                     buffer_description.dwSize = @sizeOf(@TypeOf(buffer_description));
                     buffer_description.dwFlags = win32.DSBCAPS_PRIMARYBUFFER;
-                    var maybe_primary_buffer: ?*win32.IDirectSoundBuffer = undefined;
+                    var maybe_primary_buffer: ?*win32.IDirectSoundBuffer = null;
 
                     if (win32.SUCCEEDED(direct_sound.vtable.CreateSoundBuffer(
                         direct_sound,
@@ -434,7 +434,7 @@ fn win32_init_direct_sound(
                 buffer_description.dwFlags = win32.DSBCAPS_GETCURRENTPOSITION2;
                 buffer_description.dwBufferBytes = @intCast(buffer_size);
                 buffer_description.lpwfxFormat = &wave_format;
-                var maybe_secondary_buffer: ?*win32.IDirectSoundBuffer = undefined;
+                var maybe_secondary_buffer: ?*win32.IDirectSoundBuffer = null;
 
                 if (win32.SUCCEEDED(direct_sound.vtable.CreateSoundBuffer(
                     direct_sound,
@@ -629,9 +629,9 @@ fn win32_main_window_callback(
 }
 
 fn win32_clear_buffer(sound_output: *Win32SoundOutput) void {
-    var region_1: ?*anyopaque = undefined;
+    var region_1: ?*anyopaque = null;
     var region_1_size: DWORD = undefined;
-    var region_2: ?*anyopaque = undefined;
+    var region_2: ?*anyopaque = null;
     var region_2_size: DWORD = undefined;
 
     if (win32.SUCCEEDED(global_secondary_buffer.vtable.Lock(
@@ -676,9 +676,9 @@ fn win32_fill_sound_buffer(
     bytes_to_write: DWORD,
     source_buffer: *platform.GameSoundBuffer,
 ) void {
-    var region_1: ?*anyopaque = undefined;
+    var region_1: ?*anyopaque = null;
     var region_1_size: DWORD = undefined;
-    var region_2: ?*anyopaque = undefined;
+    var region_2: ?*anyopaque = null;
     var region_2_size: DWORD = undefined;
 
     if (win32.SUCCEEDED(global_secondary_buffer.vtable.Lock(

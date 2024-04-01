@@ -33,7 +33,7 @@ pub const ThreadContext = struct {
 // lost data!
 pub const DebugReadFileResult = struct {
     size: u32,
-    contents: ?*anyopaque = undefined,
+    contents: ?*anyopaque = null,
 };
 
 // NOTE: Services that the game provides to the platform layer
@@ -50,7 +50,7 @@ pub inline fn get_controller(
 
 // TODO: rendering will become a three-tiered abstraction
 pub const GameOffscreenBuffer = struct {
-    memory: ?*void = undefined,
+    memory: ?*void = null,
     width: i32,
     height: i32,
     pitch: i32,
