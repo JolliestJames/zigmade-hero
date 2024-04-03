@@ -3,8 +3,6 @@ const assert = std.debug.assert;
 const platform = @import("zigmade_platform");
 const tiling = @import("zigmade_tile.zig");
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
-const TILE_MAP_COUNT_X = 256;
-const TILE_MAP_COUNT_Y = 256;
 
 const GameState = struct {
     player_p: tiling.TileMapPosition,
@@ -156,7 +154,7 @@ fn push_array(
     arena: *MemoryArena,
     count: usize,
     comptime T: type,
-) ?[*]T {
+) [*]T {
     assert((arena.used + count * @sizeOf(T)) <= arena.size);
     const result = arena.base + arena.used;
     arena.used += count * @sizeOf(T);
@@ -227,7 +225,7 @@ pub export fn update_and_render(
                     push_array(
                     &game_state.world_arena,
                     tile_map.chunk_dim * tile_map.chunk_dim,
-                    u32,
+                    usize,
                 );
             }
         }
@@ -259,7 +257,10 @@ pub export fn update_and_render(
                             tile_map,
                             abs_tile_x,
                             abs_tile_y,
-                            if ((tile_x == tile_y) and (tile_y % 2 == 0)) @intCast(1) else @intCast(0),
+                            if ((tile_x == tile_y) and (tile_y % 2 == 0))
+                                1
+                            else
+                                0,
                         );
                     }
                 }
@@ -356,12 +357,12 @@ pub export fn update_and_render(
 
         while (rel_column < 20) : (rel_column += 1) {
             const column = @as(usize, @bitCast(
-                @as(isize, @intCast(game_state.player_p.abs_tile_x)) +
+                @as(isize, @bitCast(game_state.player_p.abs_tile_x)) +
                     rel_column,
             ));
 
             const row = @as(usize, @bitCast(
-                @as(isize, @intCast(game_state.player_p.abs_tile_y)) +
+                @as(isize, @bitCast(game_state.player_p.abs_tile_y)) +
                     rel_row,
             ));
 

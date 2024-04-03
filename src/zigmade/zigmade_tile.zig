@@ -6,10 +6,9 @@ pub const TileMapPosition = struct {
     // NOTE: These are fixed point tile locations. The high bits are
     // the tile chunk index and the low bits are the tile index in
     // the chunk
-    // TODO: Think about what the approach here would be with usize
-    // and/or 3D coordinates
-    abs_tile_x: u32,
-    abs_tile_y: u32,
+    // TODO: Think about what the approach here would be 3D coordinates
+    abs_tile_x: usize,
+    abs_tile_y: usize,
     // TODO: Should these be from the center of a tile?
     // TODO: Rename to offset x and y
     rel_tile_x: f32,
@@ -24,12 +23,12 @@ const TileChunkPosition = struct {
 };
 
 pub const TileChunk = struct {
-    tiles: ?[*]u32 = undefined,
+    tiles: ?[*]usize = undefined,
 };
 
 pub const TileMap = struct {
-    chunk_shift: u32,
-    chunk_mask: u32,
+    chunk_shift: usize,
+    chunk_mask: usize,
     chunk_dim: usize,
     tile_side_in_meters: f32,
     tile_side_in_pixels: i32,
@@ -70,7 +69,7 @@ inline fn get_tile_value_unchecked(
     tile_chunk: ?*TileChunk,
     tile_x: usize,
     tile_y: usize,
-) u32 {
+) usize {
     assert(tile_chunk != null);
     assert(tile_x < world.chunk_dim);
     assert(tile_y < world.chunk_dim);
@@ -98,8 +97,8 @@ inline fn get_chunk_position(
 
 pub inline fn get_tile_value(
     world: *TileMap,
-    abs_tile_x: u32,
-    abs_tile_y: u32,
+    abs_tile_x: usize,
+    abs_tile_y: usize,
 ) usize {
     const chunk_pos = get_chunk_position(world, abs_tile_x, abs_tile_y);
 
@@ -156,7 +155,7 @@ pub inline fn is_world_point_empty(
 
 inline fn recanonicalize_coordinate(
     world: *TileMap,
-    tile: *u32,
+    tile: *usize,
     tile_rel: *f32,
 ) void {
     // TODO: Don't use the divide/multiply method for recanonicalizing
@@ -165,9 +164,9 @@ inline fn recanonicalize_coordinate(
 
     // NOTE: TileMap is assumed to be toroidal topology, if you step off
     // one end you wind up on the other
-    const offset: i32 = @intFromFloat(@round(tile_rel.* / world.tile_side_in_meters));
+    const offset: i64 = @intFromFloat(@round(tile_rel.* / world.tile_side_in_meters));
 
-    tile.* +%= @as(u32, @bitCast(offset));
+    tile.* +%= @as(usize, @bitCast(offset));
     tile_rel.* -= @as(f32, @floatFromInt(offset)) * world.tile_side_in_meters;
 
     assert(tile_rel.* >= -0.5 * world.tile_side_in_meters);
@@ -202,7 +201,7 @@ pub inline fn set_tile_value(
     tile_map: *TileMap,
     abs_tile_x: usize,
     abs_tile_y: usize,
-    tile_value: u32,
+    tile_value: usize,
 ) void {
     _ = arena;
     const chunk_pos = get_chunk_position(tile_map, abs_tile_x, abs_tile_y);
@@ -230,7 +229,7 @@ pub inline fn set_tile_chunk_value(
     tile_chunk: ?*TileChunk,
     test_tile_x: usize,
     test_tile_y: usize,
-    tile_value: u32,
+    tile_value: usize,
 ) void {
     if (tile_chunk) |chunk| {
         set_tile_value_unchecked(
@@ -248,7 +247,7 @@ inline fn set_tile_value_unchecked(
     tile_chunk: ?*TileChunk,
     tile_x: usize,
     tile_y: usize,
-    tile_value: u32,
+    tile_value: usize,
 ) void {
     assert(tile_chunk != null);
     assert(tile_x < tile_map.chunk_dim);
