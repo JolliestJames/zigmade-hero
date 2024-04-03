@@ -106,10 +106,10 @@ pub const GameInput = struct {
 
 pub const GameMemory = struct {
     is_initialized: bool = false,
-    permanent_storage_size: u64 = 0,
+    permanent_storage_size: usize = 0,
     // NOTE: Required to be cleared to zero at startup
     permanent_storage: [*]u8 = undefined,
-    transient_storage_size: u64 = 0,
+    transient_storage_size: usize = 0,
     transient_storage: [*]u8 = undefined,
     debug_platform_read_entire_file: *const fn (
         *ThreadContext,

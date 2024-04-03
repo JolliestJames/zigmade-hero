@@ -1,50 +1,25 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const platform = @import("zigmade_platform");
+const tiling = @import("zigmade_tile.zig");
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 const TILE_MAP_COUNT_X = 256;
 const TILE_MAP_COUNT_Y = 256;
 
 const GameState = struct {
-    player_p: WorldPosition,
-};
-
-const TileChunkPosition = struct {
-    tile_chunk_x: u32,
-    tile_chunk_y: u32,
-    rel_tile_x: u32,
-    rel_tile_y: u32,
-};
-
-const WorldPosition = struct {
-    // TODO: Take tile map x and y and tile x and y
-    // then pack them into single 32-bit values for x and y
-    // where there is some low bits for the tile index
-    // and the high bits are for the tile page
-    // (we can eliminate the need for floor)
-    abs_tile_x: u32,
-    abs_tile_y: u32,
-    // TODO: Should these be from the center of a tile?
-    // TODO: Rename to offset x and y
-    rel_tile_x: f32,
-    rel_tile_y: f32,
-};
-
-const TileChunk = struct {
-    tiles: ?[*]u32 = undefined,
+    player_p: tiling.TileMapPosition,
+    world: ?*World = null,
+    world_arena: MemoryArena,
 };
 
 const World = struct {
-    chunk_shift: u32,
-    chunk_mask: u32,
-    chunk_dim: usize,
-    tile_side_in_meters: f32,
-    tile_side_in_pixels: i32,
-    meters_to_pixels: f32,
-    // TODO: Beginner's sparseness
-    tile_chunks: ?[*]TileChunk = undefined,
-    tile_chunk_count_x: usize,
-    tile_chunk_count_y: usize,
+    tile_map: *tiling.TileMap,
+};
+
+pub const MemoryArena = struct {
+    size: usize,
+    base: [*]u8,
+    used: usize,
 };
 
 fn game_output_sound(
@@ -123,10 +98,10 @@ fn draw_rectangle(
     g: f32,
     b: f32,
 ) !void {
-    var min_x: i32 = @intFromFloat(f_min_x);
-    var min_y: i32 = @intFromFloat(f_min_y);
-    var max_x: i32 = @intFromFloat(f_max_x);
-    var max_y: i32 = @intFromFloat(f_max_y);
+    var min_x: i32 = @intFromFloat(@round(f_min_x));
+    var min_y: i32 = @intFromFloat(@round(f_min_y));
+    var max_x: i32 = @intFromFloat(@round(f_max_x));
+    var max_y: i32 = @intFromFloat(@round(f_max_y));
 
     if (min_x < 0) min_x = 0;
     if (min_y < 0) min_y = 0;
@@ -135,9 +110,10 @@ fn draw_rectangle(
     if (min_x > max_x) max_x = min_x;
     if (min_y > max_y) max_y = min_y;
 
-    const color: u32 = (@as(u32, (@intFromFloat(r * 255.0))) << 16) |
-        (@as(u32, (@intFromFloat(g * 255.0))) << 8) |
-        (@as(u32, (@intFromFloat(b * 255.0))) << 0);
+    const color: u32 =
+        (@as(u32, (@intFromFloat(@round(r * 255.0)))) << 16) |
+        (@as(u32, (@intFromFloat(@round(g * 255.0)))) << 8) |
+        (@as(u32, (@intFromFloat(@round(b * 255.0)))) << 0);
 
     var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
         (@as(usize, @intCast(min_x)) *
@@ -156,164 +132,35 @@ fn draw_rectangle(
     }
 }
 
-inline fn get_tile_chunk(
-    world: *World,
-    tile_chunk_x: usize,
-    tile_chunk_y: usize,
-) ?*TileChunk {
-    var tile_chunk: ?*TileChunk = null;
-
-    if (tile_chunk_x >= 0 and
-        tile_chunk_x < world.tile_chunk_count_x and
-        tile_chunk_y >= 0 and
-        tile_chunk_y < world.tile_chunk_count_y)
-    {
-        const tile_chunk_index =
-            tile_chunk_y *
-            world.tile_chunk_count_x +
-            tile_chunk_x;
-
-        if (world.tile_chunks) |tile_chunks| {
-            tile_chunk = &tile_chunks[tile_chunk_index];
-        }
-    }
-
-    return tile_chunk;
-}
-
-inline fn get_tile_value_unchecked(
-    world: *World,
-    tile_chunk: ?*TileChunk,
-    tile_x: usize,
-    tile_y: usize,
-) u32 {
-    assert(tile_chunk != null);
-    assert(tile_x < world.chunk_dim);
-    assert(tile_y < world.chunk_dim);
-
-    const tile_index = tile_y * world.chunk_dim + tile_x;
-    const tiles = tile_chunk.?.tiles.?;
-    const tile_chunk_value = tiles[tile_index];
-    return tile_chunk_value;
-}
-
-inline fn recanonicalize_coordinate(
-    world: *World,
-    tile: *u32,
-    tile_rel: *f32,
+fn initialize_arena(
+    arena: *MemoryArena,
+    size: usize,
+    base: [*]u8,
 ) void {
-    // TODO: Don't use the divide/multiply method for recanonicalizing
-    // because this can round back onto the previous tile
-    // TODO: Add bounds checking to prevent wrapping
-
-    // NOTE: World is assumed to be toroidal topology, if you step off
-    // one end you wind up on the other
-    const offset: i32 = @intFromFloat(@divFloor(
-        tile_rel.*,
-        world.tile_side_in_meters,
-    ));
-
-    tile.* +%= @as(u32, @bitCast(offset));
-    tile_rel.* -= @as(f32, @floatFromInt(offset)) * world.tile_side_in_meters;
-
-    assert(tile_rel.* >= 0.0);
-    // TODO: Fix floating point math so this can be <
-    // NOTE: With <, this assert only seems to trip with Casey's code
-    assert(tile_rel.* <= world.tile_side_in_meters);
+    arena.size = size;
+    arena.base = base;
+    arena.used = 0;
 }
 
-inline fn recanonicalize_position(
-    world: *World,
-    pos: WorldPosition,
-) WorldPosition {
-    var result = pos;
-
-    recanonicalize_coordinate(
-        world,
-        &result.abs_tile_x,
-        &result.rel_tile_x,
-    );
-
-    recanonicalize_coordinate(
-        world,
-        &result.abs_tile_y,
-        &result.rel_tile_y,
-    );
-
-    return result;
+fn push_size(
+    arena: *MemoryArena,
+    comptime T: type,
+) *T {
+    assert((arena.used + @sizeOf(T)) <= arena.size);
+    const result = arena.base + arena.used;
+    arena.used += @sizeOf(T);
+    return @as(*T, @alignCast(@ptrCast(result)));
 }
 
-inline fn get_chunk_position(
-    world: *World,
-    abs_tile_x: u32,
-    abs_tile_y: u32,
-) TileChunkPosition {
-    var result = std.mem.zeroInit(TileChunkPosition, .{});
-
-    result.tile_chunk_x = abs_tile_x >> @as(u5, @intCast(world.chunk_shift));
-    result.tile_chunk_y = abs_tile_y >> @as(u5, @intCast(world.chunk_shift));
-    result.rel_tile_x = abs_tile_x & world.chunk_mask;
-    result.rel_tile_y = abs_tile_y & world.chunk_mask;
-
-    return result;
-}
-
-inline fn get_tile_value(
-    world: *World,
-    abs_tile_x: u32,
-    abs_tile_y: u32,
-) usize {
-    const chunk_pos = get_chunk_position(world, abs_tile_x, abs_tile_y);
-
-    const tile_chunk = get_tile_chunk(
-        world,
-        chunk_pos.tile_chunk_x,
-        chunk_pos.tile_chunk_y,
-    );
-
-    const tile_chunk_value = get_tile_chunk_value(
-        world,
-        tile_chunk,
-        chunk_pos.rel_tile_x,
-        chunk_pos.rel_tile_y,
-    );
-
-    return tile_chunk_value;
-}
-
-inline fn get_tile_chunk_value(
-    world: *World,
-    tile_chunk: ?*TileChunk,
-    test_tile_x: usize,
-    test_tile_y: usize,
-) usize {
-    var tile_chunk_value: usize = 0;
-
-    if (tile_chunk) |chunk| {
-        tile_chunk_value = get_tile_value_unchecked(
-            world,
-            chunk,
-            test_tile_x,
-            test_tile_y,
-        );
-    }
-
-    return tile_chunk_value;
-}
-
-inline fn is_world_point_empty(
-    world: *World,
-    world_pos: WorldPosition,
-) bool {
-    const tile_chunk_value = get_tile_value(
-        world,
-        world_pos.abs_tile_x,
-        world_pos.abs_tile_y,
-    );
-
-    const empty = (tile_chunk_value == 0);
-
-    return empty;
+fn push_array(
+    arena: *MemoryArena,
+    count: usize,
+    comptime T: type,
+) ?[*]T {
+    assert((arena.used + count * @sizeOf(T)) <= arena.size);
+    const result = arena.base + arena.used;
+    arena.used += count * @sizeOf(T);
+    return @as([*]T, @alignCast(@ptrCast(result)));
 }
 
 // GAME NEEDS FOUR THINGS
@@ -332,65 +179,98 @@ pub export fn update_and_render(
         @sizeOf(platform.GameButtonState) * input.controllers[0].buttons.array.len);
     assert(@sizeOf(GameState) <= memory.permanent_storage_size);
 
-    var tiles = [_][TILE_MAP_COUNT_X]u32{
-        [_]u32{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-        [_]u32{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 } ++ [1]u32{0} ** (TILE_MAP_COUNT_X - 34),
-    } ++ [1][TILE_MAP_COUNT_X]u32{[1]u32{0} ** TILE_MAP_COUNT_X} ** (TILE_MAP_COUNT_Y - 18);
-
-    var tile_chunks = TileChunk{ .tiles = @ptrCast(&tiles) };
-
-    var world = std.mem.zeroInit(World, .{});
-    world.chunk_shift = 8;
-    world.chunk_mask = (@as(u32, @intCast(1)) << @as(u5, @intCast(world.chunk_shift))) - 1;
-    world.chunk_dim = 256;
-    world.tile_chunks = @ptrCast(&tile_chunks);
-    world.tile_chunk_count_x = 1;
-    world.tile_chunk_count_y = 1;
-    // TODO: Begin using tile side in meters
-    world.tile_side_in_meters = 1.4;
-    world.tile_side_in_pixels = 60;
-    world.meters_to_pixels =
-        @as(f32, @floatFromInt(world.tile_side_in_pixels)) /
-        world.tile_side_in_meters;
-
-    const lower_left_x: f32 = @floatFromInt(@divFloor(-world.tile_side_in_pixels, 2));
-    _ = lower_left_x;
-    const lower_left_y: f32 = @floatFromInt(buffer.height);
-    _ = lower_left_y;
-
     const player_height = 1.4;
     const player_width = 0.75 * player_height;
 
-    const game_state: *GameState = @as(
+    var game_state: *GameState = @as(
         *GameState,
         @alignCast(@ptrCast(memory.permanent_storage)),
     );
 
     if (!memory.is_initialized) {
         // TODO: This may be more appropriate to do in the platform layer
-        game_state.player_p.abs_tile_x = 0;
-        game_state.player_p.abs_tile_y = 0;
+        game_state.player_p.abs_tile_x = 1;
+        game_state.player_p.abs_tile_y = 3;
         game_state.player_p.rel_tile_x = 5.0;
         game_state.player_p.rel_tile_y = 5.0;
 
+        // TODO: Can we just use Zig's own arena allocator?
+        initialize_arena(
+            &game_state.world_arena,
+            memory.permanent_storage_size - @sizeOf(GameState),
+            memory.permanent_storage + @sizeOf(GameState),
+        );
+
+        game_state.world = push_size(&game_state.world_arena, World);
+        var world = game_state.world.?;
+        world.tile_map = push_size(&game_state.world_arena, tiling.TileMap);
+
+        var tile_map = world.tile_map;
+
+        tile_map.chunk_shift = 4;
+        tile_map.chunk_mask = (@as(u32, @intCast(1)) <<
+            @as(u5, @intCast(tile_map.chunk_shift))) - 1;
+        tile_map.chunk_dim = (@as(u32, @intCast(1)) <<
+            @as(u5, @intCast(tile_map.chunk_shift)));
+        tile_map.tile_chunk_count_x = 128;
+        tile_map.tile_chunk_count_y = 128;
+
+        tile_map.tile_chunks = push_array(
+            &game_state.world_arena,
+            tile_map.tile_chunk_count_x * tile_map.tile_chunk_count_y,
+            tiling.TileChunk,
+        );
+
+        for (0..tile_map.tile_chunk_count_y) |y| {
+            for (0..tile_map.tile_chunk_count_x) |x| {
+                tile_map.tile_chunks.?[y * tile_map.tile_chunk_count_x + x].tiles =
+                    push_array(
+                    &game_state.world_arena,
+                    tile_map.chunk_dim * tile_map.chunk_dim,
+                    u32,
+                );
+            }
+        }
+
+        // TODO: Begin using tile side in meters
+        tile_map.tile_side_in_meters = 1.4;
+        tile_map.tile_side_in_pixels = 60;
+        tile_map.meters_to_pixels =
+            @as(f32, @floatFromInt(tile_map.tile_side_in_pixels)) /
+            tile_map.tile_side_in_meters;
+
+        const lower_left_x: f32 = @floatFromInt(@divFloor(-tile_map.tile_side_in_pixels, 2));
+        _ = lower_left_x;
+        const lower_left_y: f32 = @floatFromInt(buffer.height);
+        _ = lower_left_y;
+
+        const tiles_per_width = 17;
+        const tiles_per_height = 9;
+
+        for (0..32) |screen_y| {
+            for (0..32) |screen_x| {
+                for (0..tiles_per_height) |tile_y| {
+                    for (0..tiles_per_width) |tile_x| {
+                        const abs_tile_x = screen_x * tiles_per_width + tile_x;
+                        const abs_tile_y = screen_y * tiles_per_height + tile_y;
+
+                        tiling.set_tile_value(
+                            &game_state.world_arena,
+                            tile_map,
+                            abs_tile_x,
+                            abs_tile_y,
+                            if ((tile_x == tile_y) and (tile_y % 2 == 0)) @intCast(1) else @intCast(0),
+                        );
+                    }
+                }
+            }
+        }
+
         memory.is_initialized = true;
     }
+
+    const world = game_state.world.?;
+    const tile_map = world.tile_map;
 
     for (0..input.controllers.len) |controller_index| {
         const controller: *platform.GameControllerInput =
@@ -422,27 +302,33 @@ pub export fn update_and_render(
                 d_player_x = 1.0;
             }
 
-            d_player_x *= 2.0;
-            d_player_y *= 2.0;
+            var player_speed: f32 = 2.0;
+
+            if (controller.buttons.map.action_up.ended_down) {
+                player_speed = 10.0;
+            }
+
+            d_player_x *= player_speed;
+            d_player_y *= player_speed;
 
             // TODO: Diagonal will be faster. Fix once we have vectors!
             var new_player_p = game_state.player_p;
             new_player_p.rel_tile_x += input.dt_for_frame * d_player_x;
             new_player_p.rel_tile_y += input.dt_for_frame * d_player_y;
-            new_player_p = recanonicalize_position(&world, new_player_p);
+            new_player_p = tiling.recanonicalize_position(tile_map, new_player_p);
             //// TODO: delta function to auto-recanonicalize
 
             var player_left = new_player_p;
             player_left.rel_tile_x -= 0.5 * player_width;
-            player_left = recanonicalize_position(&world, player_left);
+            player_left = tiling.recanonicalize_position(tile_map, player_left);
 
             var player_right = new_player_p;
             player_right.rel_tile_x += 0.5 * player_width;
-            player_right = recanonicalize_position(&world, player_right);
+            player_right = tiling.recanonicalize_position(tile_map, player_right);
 
-            if (is_world_point_empty(&world, new_player_p) and
-                is_world_point_empty(&world, player_right) and
-                is_world_point_empty(&world, player_left))
+            if (tiling.is_world_point_empty(tile_map, new_player_p) and
+                tiling.is_world_point_empty(tile_map, player_right) and
+                tiling.is_world_point_empty(tile_map, player_left))
             {
                 game_state.player_p = new_player_p;
             }
@@ -460,8 +346,8 @@ pub export fn update_and_render(
         0.1,
     );
 
-    const center_x = 0.5 * @as(f32, @floatFromInt(buffer.width));
-    const center_y = 0.5 * @as(f32, @floatFromInt(buffer.height));
+    const screen_center_x = 0.5 * @as(f32, @floatFromInt(buffer.width));
+    const screen_center_y = 0.5 * @as(f32, @floatFromInt(buffer.height));
 
     var rel_row: i32 = -10;
 
@@ -469,17 +355,21 @@ pub export fn update_and_render(
         var rel_column: i32 = -20;
 
         while (rel_column < 20) : (rel_column += 1) {
-            const column = @as(u32, @bitCast(
-                @as(i32, @intCast(game_state.player_p.abs_tile_x)) +
+            const column = @as(usize, @bitCast(
+                @as(isize, @intCast(game_state.player_p.abs_tile_x)) +
                     rel_column,
             ));
 
-            const row = @as(u32, @bitCast(
-                @as(i32, @intCast(game_state.player_p.abs_tile_y)) +
+            const row = @as(usize, @bitCast(
+                @as(isize, @intCast(game_state.player_p.abs_tile_y)) +
                     rel_row,
             ));
 
-            const tile_id = get_tile_value(&world, column, row);
+            const tile_id = tiling.get_tile_value(
+                tile_map,
+                @truncate(column),
+                @truncate(row),
+            );
 
             var color: f32 = 0.5;
 
@@ -491,23 +381,25 @@ pub export fn update_and_render(
                 color = 0.0;
             }
 
-            const min_x = center_x +
-                @as(f32, @floatFromInt(rel_column *
-                world.tile_side_in_pixels));
+            const cen_x = screen_center_x -
+                tile_map.meters_to_pixels * game_state.player_p.rel_tile_x +
+                @as(f32, @floatFromInt(rel_column * tile_map.tile_side_in_pixels));
 
-            const min_y = center_y -
-                @as(f32, @floatFromInt(rel_row *
-                world.tile_side_in_pixels));
+            const cen_y = screen_center_y +
+                tile_map.meters_to_pixels * game_state.player_p.rel_tile_y -
+                @as(f32, @floatFromInt(rel_row * tile_map.tile_side_in_pixels));
 
-            const max_x = min_x + @as(f32, @floatFromInt(world.tile_side_in_pixels));
-            const max_y = min_y - @as(f32, @floatFromInt(world.tile_side_in_pixels));
+            const min_x = cen_x - 0.5 * @as(f32, @floatFromInt(tile_map.tile_side_in_pixels));
+            const min_y = cen_y - 0.5 * @as(f32, @floatFromInt(tile_map.tile_side_in_pixels));
+            const max_x = cen_x + 0.5 * @as(f32, @floatFromInt(tile_map.tile_side_in_pixels));
+            const max_y = cen_y + 0.5 * @as(f32, @floatFromInt(tile_map.tile_side_in_pixels));
 
             try draw_rectangle(
                 buffer,
                 min_x,
-                max_y,
-                max_x,
                 min_y,
+                max_x,
+                max_y,
                 color,
                 color,
                 color,
@@ -518,19 +410,15 @@ pub export fn update_and_render(
     const player_r = 1.0;
     const player_g = 1.0;
     const player_b = 0.0;
-    const player_left = center_x +
-        world.meters_to_pixels * game_state.player_p.rel_tile_x -
-        0.5 * world.meters_to_pixels * player_width;
-    const player_top = center_y -
-        world.meters_to_pixels * game_state.player_p.rel_tile_y -
-        world.meters_to_pixels * player_height;
+    const player_left = screen_center_x - 0.5 * tile_map.meters_to_pixels * player_width;
+    const player_top = screen_center_y - tile_map.meters_to_pixels * player_height;
 
     try draw_rectangle(
         buffer,
         player_left,
         player_top,
-        player_left + world.meters_to_pixels * player_width,
-        player_top + world.meters_to_pixels * player_height,
+        player_left + tile_map.meters_to_pixels * player_width,
+        player_top + tile_map.meters_to_pixels * player_height,
         player_r,
         player_g,
         player_b,
