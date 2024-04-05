@@ -1265,8 +1265,10 @@ pub export fn wWinMain(
 
     var window_class = std.mem.zeroInit(win32.WNDCLASSW, .{});
 
-    // TODO: would be nice to properly log when something goes wrong
-    // with these error union return types
+    // NOTE: 1080p display mode is 1920x1080/2 = 960x540
+    // 1920 -> 2048 = 2048 - 1920 -> 128
+    // 1080 -> 2048 = 2048 - 1080 -> 968
+    // 1024 + 128 = 1152
     win32_resize_dib_section(&global_back_buffer, 960, 540);
 
     window_class.style = win32.WNDCLASS_STYLES{ .HREDRAW = 1, .VREDRAW = 1 };

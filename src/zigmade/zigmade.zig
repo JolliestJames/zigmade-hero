@@ -6,6 +6,7 @@ const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
 const GameState = struct {
     player_p: tiling.TileMapPosition,
+    pixel_pointer: [*]u32,
     world: ?*World = null,
     world_arena: MemoryArena,
 };
@@ -132,6 +133,39 @@ fn draw_rectangle(
     }
 }
 
+const BitmapHeader = packed struct {
+    file_type: u16,
+    file_size: u32,
+    reserved_1: u16,
+    reserved_2: u16,
+    bitmap_offset: u32,
+    size: u32,
+    width: i32,
+    height: i32,
+    planes: u16,
+    bits_per_pixel: u16,
+};
+
+fn debug_load_bmp(
+    thread: *platform.ThreadContext,
+    read_entire_file: platform.debug_platform_read_entire_file,
+    file_name: [*:0]const u8,
+) [*]u32 {
+    var result: [*]u32 = undefined;
+    const read_result = read_entire_file(thread, file_name);
+
+    if (read_result.size != 0) {
+        const header: *BitmapHeader = @alignCast(@ptrCast(read_result.contents));
+        const pixels =
+            @as([*]u32, @alignCast(@ptrCast(read_result.contents))) +
+            header.bitmap_offset;
+
+        result = pixels;
+    }
+
+    return result;
+}
+
 fn initialize_arena(
     arena: *MemoryArena,
     size: usize,
@@ -180,7 +214,6 @@ pub export fn update_and_render(
     input: *platform.GameInput,
     buffer: *platform.GameOffscreenBuffer,
 ) void {
-    _ = thread;
     assert(@sizeOf(@TypeOf(input.controllers[0].buttons.map)) ==
         @sizeOf(platform.GameButtonState) * input.controllers[0].buttons.array.len);
     assert(@sizeOf(GameState) <= memory.permanent_storage_size);
@@ -194,11 +227,16 @@ pub export fn update_and_render(
     );
 
     if (!memory.is_initialized) {
-        // TODO: This may be more appropriate to do in the platform layer
+        game_state.pixel_pointer = debug_load_bmp(
+            thread,
+            memory.debug_platform_read_entire_file,
+            "assets/test_background.bmp",
+        );
+
         game_state.player_p.abs_tile_x = 1;
         game_state.player_p.abs_tile_y = 3;
-        game_state.player_p.rel_tile_x = 5.0;
-        game_state.player_p.rel_tile_y = 5.0;
+        game_state.player_p.offset_x = 5.0;
+        game_state.player_p.offset_y = 5.0;
 
         // TODO: Can we just use Zig's own arena allocator?
         initialize_arena(
@@ -256,7 +294,11 @@ pub export fn update_and_render(
                 random_choice = rand.random().int(usize) % 3;
             }
 
+            var created_z_door = false;
+
             if (random_choice == 2) {
+                created_z_door = true;
+
                 if (abs_tile_z == 0) {
                     door_up = true;
                 } else {
@@ -319,12 +361,9 @@ pub export fn update_and_render(
             door_left = door_right;
             door_bottom = door_top;
 
-            if (door_up) {
-                door_down = true;
-                door_up = false;
-            } else if (door_down) {
-                door_up = true;
-                door_down = false;
+            if (created_z_door) {
+                door_down = !door_down;
+                door_up = !door_up;
             } else {
                 door_up = false;
                 door_down = false;
@@ -402,23 +441,36 @@ pub export fn update_and_render(
 
             // TODO: Diagonal will be faster. Fix once we have vectors!
             var new_player_p = game_state.player_p;
-            new_player_p.rel_tile_x += input.dt_for_frame * d_player_x;
-            new_player_p.rel_tile_y += input.dt_for_frame * d_player_y;
+            new_player_p.offset_x += input.dt_for_frame * d_player_x;
+            new_player_p.offset_y += input.dt_for_frame * d_player_y;
             new_player_p = tiling.recanonicalize_position(tile_map, new_player_p);
             //// TODO: delta function to auto-recanonicalize
 
             var player_left = new_player_p;
-            player_left.rel_tile_x -= 0.5 * player_width;
+            player_left.offset_x -= 0.5 * player_width;
             player_left = tiling.recanonicalize_position(tile_map, player_left);
 
             var player_right = new_player_p;
-            player_right.rel_tile_x += 0.5 * player_width;
+            player_right.offset_x += 0.5 * player_width;
             player_right = tiling.recanonicalize_position(tile_map, player_right);
 
             if (tiling.is_tile_map_point_empty(tile_map, new_player_p) and
                 tiling.is_tile_map_point_empty(tile_map, player_right) and
                 tiling.is_tile_map_point_empty(tile_map, player_left))
             {
+                if (!tiling.on_same_tile(&game_state.player_p, &new_player_p)) {
+                    const new_tile_value = tiling.get_tile_value_from_pos(
+                        tile_map,
+                        new_player_p,
+                    );
+
+                    if (new_tile_value == 3) {
+                        new_player_p.abs_tile_z += 1;
+                    } else if (new_tile_value == 4) {
+                        new_player_p.abs_tile_z -= 1;
+                    }
+                }
+
                 game_state.player_p = new_player_p;
             }
         }
@@ -475,11 +527,11 @@ pub export fn update_and_render(
                 }
 
                 const cen_x = screen_center_x -
-                    meters_to_pixels * game_state.player_p.rel_tile_x +
+                    meters_to_pixels * game_state.player_p.offset_x +
                     @as(f32, @floatFromInt(rel_column * tile_side_in_pixels));
 
                 const cen_y = screen_center_y +
-                    meters_to_pixels * game_state.player_p.rel_tile_y -
+                    meters_to_pixels * game_state.player_p.offset_y -
                     @as(f32, @floatFromInt(rel_row * tile_side_in_pixels));
 
                 const min_x = cen_x - 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels));
@@ -517,6 +569,20 @@ pub export fn update_and_render(
         player_g,
         player_b,
     );
+
+    if (false) {
+        var source = game_state.pixel_pointer;
+        var dest: [*]u32 = @alignCast(@ptrCast(buffer.memory));
+        for (0..@intCast(buffer.height)) |y| {
+            _ = y;
+            for (0..@intCast(buffer.width)) |x| {
+                _ = x;
+                dest[0] = source[0];
+                dest += 1;
+                source += 1;
+            }
+        }
+    }
 }
 
 // NOTE: At the moment, this must be a very fast function

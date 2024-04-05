@@ -104,6 +104,23 @@ pub const GameInput = struct {
     controllers: [5]GameControllerInput,
 };
 
+pub const debug_platform_read_entire_file = *const fn (
+    *ThreadContext,
+    [*:0]const u8,
+) DebugReadFileResult;
+
+const debug_platform_free_file_memory = *const fn (
+    *ThreadContext,
+    ?*anyopaque,
+) void;
+
+const debug_platform_write_entire_file = *const fn (
+    *ThreadContext,
+    [*:0]const u8,
+    u32,
+    ?*anyopaque,
+) bool;
+
 pub const GameMemory = struct {
     is_initialized: bool = false,
     permanent_storage_size: usize = 0,
@@ -111,20 +128,9 @@ pub const GameMemory = struct {
     permanent_storage: [*]u8 = undefined,
     transient_storage_size: usize = 0,
     transient_storage: [*]u8 = undefined,
-    debug_platform_read_entire_file: *const fn (
-        *ThreadContext,
-        [*:0]const u8,
-    ) DebugReadFileResult,
-    debug_platform_free_file_memory: *const fn (
-        *ThreadContext,
-        ?*anyopaque,
-    ) void,
-    debug_platform_write_entire_file: *const fn (
-        *ThreadContext,
-        [*:0]const u8,
-        u32,
-        ?*anyopaque,
-    ) bool,
+    debug_platform_read_entire_file: debug_platform_read_entire_file,
+    debug_platform_free_file_memory: debug_platform_free_file_memory,
+    debug_platform_write_entire_file: debug_platform_write_entire_file,
 };
 
 pub const update_and_render_type = *const fn (

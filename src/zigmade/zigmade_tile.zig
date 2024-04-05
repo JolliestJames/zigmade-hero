@@ -6,14 +6,12 @@ pub const TileMapPosition = struct {
     // NOTE: These are fixed point tile locations. The high bits are
     // the tile chunk index and the low bits are the tile index in
     // the chunk
-    // TODO: Think about what the approach here would be 3D coordinates
+    // TODO: Think about what the approach here would be with 3D coordinates
     abs_tile_x: usize,
     abs_tile_y: usize,
     abs_tile_z: usize,
-    // TODO: Should these be from the center of a tile?
-    // TODO: Rename to offset x and y
-    rel_tile_x: f64,
-    rel_tile_y: f64,
+    offset_x: f64,
+    offset_y: f64,
 };
 
 const TileChunkPosition = struct {
@@ -136,6 +134,20 @@ pub inline fn get_tile_value(
     return tile_chunk_value;
 }
 
+pub inline fn get_tile_value_from_pos(
+    tile_map: *TileMap,
+    pos: TileMapPosition,
+) usize {
+    const tile_chunk_value = get_tile_value(
+        tile_map,
+        pos.abs_tile_x,
+        pos.abs_tile_y,
+        pos.abs_tile_z,
+    );
+
+    return tile_chunk_value;
+}
+
 inline fn get_tile_chunk_value(
     tile_map: *TileMap,
     tile_chunk: ?*TileChunk,
@@ -169,52 +181,11 @@ pub inline fn is_tile_map_point_empty(
         tile_map_pos.abs_tile_z,
     );
 
-    const empty = (tile_chunk_value == 1);
+    const empty = (tile_chunk_value == 1) or
+        (tile_chunk_value == 3) or
+        (tile_chunk_value == 4);
 
     return empty;
-}
-
-inline fn recanonicalize_coordinate(
-    tile_map: *TileMap,
-    tile: *usize,
-    tile_rel: *f64,
-) void {
-    // TODO: Don't use the divide/multiply method for recanonicalizing
-    // because this can round back onto the previous tile
-    // TODO: Add bounds checking to prevent wrapping
-
-    // NOTE: TileMap is assumed to be toroidal topology, if you step off
-    // one end you wind up on the other
-    const offset: i64 = @intFromFloat(@round(tile_rel.* / tile_map.tile_side_in_meters));
-
-    tile.* +%= @as(usize, @bitCast(offset));
-    tile_rel.* -= @as(f64, @floatFromInt(offset)) * tile_map.tile_side_in_meters;
-
-    assert(tile_rel.* >= -0.5 * tile_map.tile_side_in_meters);
-    // TODO: Fix floating point math so this can be <
-    // NOTE: With <, this assert only seems to trip with Casey's code
-    assert(tile_rel.* <= 0.5 * tile_map.tile_side_in_meters);
-}
-
-pub inline fn recanonicalize_position(
-    tile_map: *TileMap,
-    pos: TileMapPosition,
-) TileMapPosition {
-    var result = pos;
-
-    recanonicalize_coordinate(
-        tile_map,
-        &result.abs_tile_x,
-        &result.rel_tile_x,
-    );
-
-    recanonicalize_coordinate(
-        tile_map,
-        &result.abs_tile_y,
-        &result.rel_tile_y,
-    );
-
-    return result;
 }
 
 pub inline fn set_tile_value(
@@ -302,4 +273,60 @@ inline fn set_tile_value_unchecked(
     const tile_index = tile_y * tile_map.chunk_dim + tile_x;
     var tiles = tile_chunk.?.tiles.?;
     tiles[tile_index] = tile_value;
+}
+
+// TODO: Do these functions below belong in a "positioning" or "geometry" import?
+
+inline fn recanonicalize_coordinate(
+    tile_map: *TileMap,
+    tile: *usize,
+    tile_rel: *f64,
+) void {
+    // TODO: Don't use the divide/multiply method for recanonicalizing
+    // because this can round back onto the previous tile
+    // TODO: Add bounds checking to prevent wrapping
+
+    // NOTE: TileMap is assumed to be toroidal topology, if you step off
+    // one end you wind up on the other
+    const offset: i64 = @intFromFloat(@round(tile_rel.* / tile_map.tile_side_in_meters));
+
+    tile.* +%= @as(usize, @bitCast(offset));
+    tile_rel.* -= @as(f64, @floatFromInt(offset)) * tile_map.tile_side_in_meters;
+
+    assert(tile_rel.* >= -0.5 * tile_map.tile_side_in_meters);
+    // TODO: Fix floating point math so this can be <
+    // NOTE: With <, this assert only seems to trip with Casey's code
+    assert(tile_rel.* <= 0.5 * tile_map.tile_side_in_meters);
+}
+
+pub inline fn recanonicalize_position(
+    tile_map: *TileMap,
+    pos: TileMapPosition,
+) TileMapPosition {
+    var result = pos;
+
+    recanonicalize_coordinate(
+        tile_map,
+        &result.abs_tile_x,
+        &result.offset_x,
+    );
+
+    recanonicalize_coordinate(
+        tile_map,
+        &result.abs_tile_y,
+        &result.offset_y,
+    );
+
+    return result;
+}
+
+pub inline fn on_same_tile(
+    a: *TileMapPosition,
+    b: *TileMapPosition,
+) bool {
+    const result = (a.abs_tile_x == b.abs_tile_x and
+        a.abs_tile_y == b.abs_tile_y and
+        a.abs_tile_z == b.abs_tile_z);
+
+    return result;
 }
