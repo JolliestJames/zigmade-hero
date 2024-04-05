@@ -20,6 +20,8 @@ pub const MemoryArena = struct {
     used: usize,
 };
 
+var rand = std.rand.DefaultPrng.init(4096);
+
 fn game_output_sound(
     sound_buffer: *platform.GameSoundBuffer,
     game_state: *GameState,
@@ -88,10 +90,10 @@ fn render_weird_gradient(
 
 fn draw_rectangle(
     buffer: *platform.GameOffscreenBuffer,
-    f_min_x: f32,
-    f_min_y: f32,
-    f_max_x: f32,
-    f_max_y: f32,
+    f_min_x: f64,
+    f_min_y: f64,
+    f_max_x: f64,
+    f_max_y: f64,
     r: f32,
     g: f32,
     b: f32,
@@ -142,22 +144,28 @@ fn initialize_arena(
 
 fn push_size(
     arena: *MemoryArena,
+    size: usize,
+) [*]u8 {
+    assert((arena.used + size) <= arena.size);
+    const result = arena.base + arena.used;
+    arena.used += size;
+    return result;
+}
+
+fn push_struct(
+    arena: *MemoryArena,
     comptime T: type,
 ) *T {
-    assert((arena.used + @sizeOf(T)) <= arena.size);
-    const result = arena.base + arena.used;
-    arena.used += @sizeOf(T);
+    const result = push_size(arena, @sizeOf(T));
     return @as(*T, @alignCast(@ptrCast(result)));
 }
 
-fn push_array(
+pub fn push_array(
     arena: *MemoryArena,
     count: usize,
     comptime T: type,
 ) [*]T {
-    assert((arena.used + count * @sizeOf(T)) <= arena.size);
-    const result = arena.base + arena.used;
-    arena.used += count * @sizeOf(T);
+    const result = push_size(arena, count * @sizeOf(T));
     return @as([*]T, @alignCast(@ptrCast(result)));
 }
 
@@ -199,9 +207,9 @@ pub export fn update_and_render(
             memory.permanent_storage + @sizeOf(GameState),
         );
 
-        game_state.world = push_size(&game_state.world_arena, World);
+        game_state.world = push_struct(&game_state.world_arena, World);
         var world = game_state.world.?;
-        world.tile_map = push_size(&game_state.world_arena, tiling.TileMap);
+        world.tile_map = push_struct(&game_state.world_arena, tiling.TileMap);
 
         var tile_map = world.tile_map;
 
@@ -212,58 +220,128 @@ pub export fn update_and_render(
             @as(u5, @intCast(tile_map.chunk_shift)));
         tile_map.tile_chunk_count_x = 128;
         tile_map.tile_chunk_count_y = 128;
+        tile_map.tile_chunk_count_z = 2;
 
         tile_map.tile_chunks = push_array(
             &game_state.world_arena,
-            tile_map.tile_chunk_count_x * tile_map.tile_chunk_count_y,
+            tile_map.tile_chunk_count_x *
+                tile_map.tile_chunk_count_y *
+                tile_map.tile_chunk_count_z,
             tiling.TileChunk,
         );
 
-        for (0..tile_map.tile_chunk_count_y) |y| {
-            for (0..tile_map.tile_chunk_count_x) |x| {
-                tile_map.tile_chunks.?[y * tile_map.tile_chunk_count_x + x].tiles =
-                    push_array(
-                    &game_state.world_arena,
-                    tile_map.chunk_dim * tile_map.chunk_dim,
-                    usize,
-                );
-            }
-        }
-
-        // TODO: Begin using tile side in meters
         tile_map.tile_side_in_meters = 1.4;
-        tile_map.tile_side_in_pixels = 60;
-        tile_map.meters_to_pixels =
-            @as(f32, @floatFromInt(tile_map.tile_side_in_pixels)) /
-            tile_map.tile_side_in_meters;
-
-        const lower_left_x: f32 = @floatFromInt(@divFloor(-tile_map.tile_side_in_pixels, 2));
-        _ = lower_left_x;
-        const lower_left_y: f32 = @floatFromInt(buffer.height);
-        _ = lower_left_y;
 
         const tiles_per_width = 17;
         const tiles_per_height = 9;
 
-        for (0..32) |screen_y| {
-            for (0..32) |screen_x| {
-                for (0..tiles_per_height) |tile_y| {
-                    for (0..tiles_per_width) |tile_x| {
-                        const abs_tile_x = screen_x * tiles_per_width + tile_x;
-                        const abs_tile_y = screen_y * tiles_per_height + tile_y;
+        var screen_x: usize = 0;
+        var screen_y: usize = 0;
+        var abs_tile_z: usize = 0;
 
-                        tiling.set_tile_value(
-                            &game_state.world_arena,
-                            tile_map,
-                            abs_tile_x,
-                            abs_tile_y,
-                            if ((tile_x == tile_y) and (tile_y % 2 == 0))
-                                1
-                            else
-                                0,
-                        );
-                    }
+        // TODO: Replace with real world generation
+        var door_left = false;
+        var door_right = false;
+        var door_top = false;
+        var door_bottom = false;
+        var door_up = false;
+        var door_down = false;
+
+        for (0..100) |_| {
+            var random_choice: usize = undefined;
+
+            if (door_up or door_down) {
+                random_choice = rand.random().int(usize) % 2;
+            } else {
+                random_choice = rand.random().int(usize) % 3;
+            }
+
+            if (random_choice == 2) {
+                if (abs_tile_z == 0) {
+                    door_up = true;
+                } else {
+                    door_down = true;
                 }
+            } else if (random_choice == 1) {
+                door_right = true;
+            } else {
+                door_top = true;
+            }
+
+            for (0..tiles_per_height) |tile_y| {
+                for (0..tiles_per_width) |tile_x| {
+                    const abs_tile_x = screen_x * tiles_per_width + tile_x;
+                    const abs_tile_y = screen_y * tiles_per_height + tile_y;
+
+                    var tile_value: usize = 1;
+
+                    if (tile_x == 0 and (!door_left or (tile_y != tiles_per_height / 2))) {
+                        tile_value = 2;
+                    }
+
+                    if (tile_x == (tiles_per_width - 1) and
+                        (!door_right or (tile_y != tiles_per_height / 2)))
+                    {
+                        tile_value = 2;
+                    }
+
+                    if (tile_y == 0 and (!door_bottom or (tile_x != tiles_per_width / 2))) {
+                        tile_value = 2;
+                    }
+
+                    if (tile_y == (tiles_per_height - 1) and
+                        (!door_top or tile_x != (tiles_per_width / 2)))
+                    {
+                        tile_value = 2;
+                    }
+
+                    if (tile_x == 10 and tile_y == 6) {
+                        if (door_up) {
+                            tile_value = 3;
+                        }
+
+                        if (door_down) {
+                            tile_value = 4;
+                        }
+                    }
+
+                    tiling.set_tile_value(
+                        &game_state.world_arena,
+                        tile_map,
+                        abs_tile_x,
+                        abs_tile_y,
+                        abs_tile_z,
+                        tile_value,
+                    );
+                }
+            }
+
+            door_left = door_right;
+            door_bottom = door_top;
+
+            if (door_up) {
+                door_down = true;
+                door_up = false;
+            } else if (door_down) {
+                door_up = true;
+                door_down = false;
+            } else {
+                door_up = false;
+                door_down = false;
+            }
+
+            door_right = false;
+            door_top = false;
+
+            if (random_choice == 2) {
+                if (abs_tile_z == 0)
+                    abs_tile_z = 1
+                else
+                    abs_tile_z = 0;
+            } else if (random_choice == 1) {
+                screen_x += 1;
+            } else {
+                screen_y += 1;
             }
         }
 
@@ -273,6 +351,16 @@ pub export fn update_and_render(
     const world = game_state.world.?;
     const tile_map = world.tile_map;
 
+    const tile_side_in_pixels: i32 = 60;
+    const meters_to_pixels: f64 =
+        @as(f64, @floatFromInt(tile_side_in_pixels)) /
+        tile_map.tile_side_in_meters;
+
+    const lower_left_x: f32 = @floatFromInt(@divFloor(-tile_side_in_pixels, 2));
+    _ = lower_left_x;
+    const lower_left_y: f32 = @floatFromInt(buffer.height);
+    _ = lower_left_y;
+
     for (0..input.controllers.len) |controller_index| {
         const controller: *platform.GameControllerInput =
             try platform.get_controller(input, controller_index);
@@ -281,8 +369,8 @@ pub export fn update_and_render(
             // NOTE: Use analog movement tuning
         } else {
             // NOTE: Use digital movement tuning
-            var d_player_x: f32 = 0.0; //pixels/s
-            var d_player_y: f32 = 0.0; //pixels/s
+            var d_player_x: f64 = 0.0; //pixels/s
+            var d_player_y: f64 = 0.0; //pixels/s
 
             // TODO: Investigate timing tomorrow and verify that it
             // is working properly because it appears things are moving
@@ -327,9 +415,9 @@ pub export fn update_and_render(
             player_right.rel_tile_x += 0.5 * player_width;
             player_right = tiling.recanonicalize_position(tile_map, player_right);
 
-            if (tiling.is_world_point_empty(tile_map, new_player_p) and
-                tiling.is_world_point_empty(tile_map, player_right) and
-                tiling.is_world_point_empty(tile_map, player_left))
+            if (tiling.is_tile_map_point_empty(tile_map, new_player_p) and
+                tiling.is_tile_map_point_empty(tile_map, player_right) and
+                tiling.is_tile_map_point_empty(tile_map, player_left))
             {
                 game_state.player_p = new_player_p;
             }
@@ -368,58 +456,63 @@ pub export fn update_and_render(
 
             const tile_id = tiling.get_tile_value(
                 tile_map,
-                @truncate(column),
-                @truncate(row),
+                column,
+                row,
+                game_state.player_p.abs_tile_z,
             );
 
-            var color: f32 = 0.5;
+            if (tile_id > 0) {
+                var color: f32 = 0.5;
 
-            if (tile_id == 1) color = 1.0;
+                if (tile_id == 2) color = 1.0;
 
-            if ((column == game_state.player_p.abs_tile_x) and
-                (row == game_state.player_p.abs_tile_y))
-            {
-                color = 0.0;
+                if (tile_id > 2) color = 0.25;
+
+                if ((column == game_state.player_p.abs_tile_x) and
+                    (row == game_state.player_p.abs_tile_y))
+                {
+                    color = 0.0;
+                }
+
+                const cen_x = screen_center_x -
+                    meters_to_pixels * game_state.player_p.rel_tile_x +
+                    @as(f32, @floatFromInt(rel_column * tile_side_in_pixels));
+
+                const cen_y = screen_center_y +
+                    meters_to_pixels * game_state.player_p.rel_tile_y -
+                    @as(f32, @floatFromInt(rel_row * tile_side_in_pixels));
+
+                const min_x = cen_x - 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels));
+                const min_y = cen_y - 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels));
+                const max_x = cen_x + 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels));
+                const max_y = cen_y + 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels));
+
+                try draw_rectangle(
+                    buffer,
+                    min_x,
+                    min_y,
+                    max_x,
+                    max_y,
+                    color,
+                    color,
+                    color,
+                );
             }
-
-            const cen_x = screen_center_x -
-                tile_map.meters_to_pixels * game_state.player_p.rel_tile_x +
-                @as(f32, @floatFromInt(rel_column * tile_map.tile_side_in_pixels));
-
-            const cen_y = screen_center_y +
-                tile_map.meters_to_pixels * game_state.player_p.rel_tile_y -
-                @as(f32, @floatFromInt(rel_row * tile_map.tile_side_in_pixels));
-
-            const min_x = cen_x - 0.5 * @as(f32, @floatFromInt(tile_map.tile_side_in_pixels));
-            const min_y = cen_y - 0.5 * @as(f32, @floatFromInt(tile_map.tile_side_in_pixels));
-            const max_x = cen_x + 0.5 * @as(f32, @floatFromInt(tile_map.tile_side_in_pixels));
-            const max_y = cen_y + 0.5 * @as(f32, @floatFromInt(tile_map.tile_side_in_pixels));
-
-            try draw_rectangle(
-                buffer,
-                min_x,
-                min_y,
-                max_x,
-                max_y,
-                color,
-                color,
-                color,
-            );
         }
     }
 
     const player_r = 1.0;
     const player_g = 1.0;
     const player_b = 0.0;
-    const player_left = screen_center_x - 0.5 * tile_map.meters_to_pixels * player_width;
-    const player_top = screen_center_y - tile_map.meters_to_pixels * player_height;
+    const player_left = screen_center_x - 0.5 * meters_to_pixels * player_width;
+    const player_top = screen_center_y - meters_to_pixels * player_height;
 
     try draw_rectangle(
         buffer,
         player_left,
         player_top,
-        player_left + tile_map.meters_to_pixels * player_width,
-        player_top + tile_map.meters_to_pixels * player_height,
+        player_left + meters_to_pixels * player_width,
+        player_top + meters_to_pixels * player_height,
         player_r,
         player_g,
         player_b,
