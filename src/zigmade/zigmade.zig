@@ -5,10 +5,13 @@ const tiling = @import("zigmade_tile.zig");
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
 const GameState = struct {
-    player_p: tiling.TileMapPosition,
-    pixel_pointer: [*]u32,
     world: ?*World = null,
     world_arena: MemoryArena,
+    player_p: tiling.TileMapPosition,
+    backdrop: Bitmap,
+    hero_head: Bitmap,
+    hero_cape: Bitmap,
+    hero_torso: Bitmap,
 };
 
 const World = struct {
@@ -19,6 +22,37 @@ pub const MemoryArena = struct {
     size: usize,
     base: [*]u8,
     used: usize,
+};
+
+const Bitmap = struct {
+    width: usize,
+    height: usize,
+    content: extern union {
+        bytes: [*]u8,
+        pixels: [*]u32,
+    },
+};
+
+const BitmapHeader = packed struct {
+    file_type: u16,
+    file_size: u32,
+    reserved_1: u16,
+    reserved_2: u16,
+    bitmap_offset: u32,
+    size: u32,
+    width: i32,
+    height: i32,
+    planes: u16,
+    bits_per_pixel: u16,
+    compression: u32,
+    size_of_bitmap: u32,
+    horz_resolution: i32,
+    vert_resolution: i32,
+    colors_used: u32,
+    colors_important: u32,
+    red_mask: u32,
+    green_mask: u32,
+    blue_mask: u32,
 };
 
 var rand = std.rand.DefaultPrng.init(4096);
@@ -98,11 +132,11 @@ fn draw_rectangle(
     r: f32,
     g: f32,
     b: f32,
-) !void {
-    var min_x: i32 = @intFromFloat(@round(f_min_x));
-    var min_y: i32 = @intFromFloat(@round(f_min_y));
-    var max_x: i32 = @intFromFloat(@round(f_max_x));
-    var max_y: i32 = @intFromFloat(@round(f_max_y));
+) void {
+    var min_x: isize = @intFromFloat(@round(f_min_x));
+    var min_y: isize = @intFromFloat(@round(f_min_y));
+    var max_x: isize = @intFromFloat(@round(f_max_x));
+    var max_y: isize = @intFromFloat(@round(f_max_y));
 
     if (min_x < 0) min_x = 0;
     if (min_y < 0) min_y = 0;
@@ -119,7 +153,7 @@ fn draw_rectangle(
     var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
         (@as(usize, @intCast(min_x)) *
         @as(usize, @intCast(buffer.bytes_per_pixel))) +
-        @as(u32, @bitCast(min_y *% buffer.pitch));
+        @as(usize, @bitCast(min_y *% buffer.pitch));
 
     for (@intCast(min_y)..@intCast(max_y)) |_| {
         var pixel: [*]u32 = @alignCast(@ptrCast(row));
@@ -133,34 +167,87 @@ fn draw_rectangle(
     }
 }
 
-const BitmapHeader = packed struct {
-    file_type: u16,
-    file_size: u32,
-    reserved_1: u16,
-    reserved_2: u16,
-    bitmap_offset: u32,
-    size: u32,
-    width: i32,
-    height: i32,
-    planes: u16,
-    bits_per_pixel: u16,
-};
+fn draw_bitmap(
+    buffer: *platform.GameOffscreenBuffer,
+    bitmap: *Bitmap,
+    real_x: f64,
+    real_y: f64,
+) void {
+    var min_x: isize = @intFromFloat(@round(real_x));
+    var min_y: isize = @intFromFloat(@round(real_y));
+    var max_x: isize = @intFromFloat(@round(real_x + @as(f64, @floatFromInt(bitmap.width))));
+    var max_y: isize = @intFromFloat(@round(real_y + @as(f64, @floatFromInt(bitmap.height))));
+
+    if (min_x < 0) min_x = 0;
+    if (min_y < 0) min_y = 0;
+    if (max_x > buffer.width) max_x = @intCast(buffer.width);
+    if (max_y > buffer.height) max_y = @intCast(buffer.height);
+    if (min_x > max_x) max_x = min_x;
+    if (min_y > max_y) max_y = min_y;
+
+    // TODO: source_row needs to be changed based on clipping
+    var source_row = bitmap.content.pixels +
+        bitmap.width * (bitmap.height - 1);
+    var dest_row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
+        (@as(usize, @intCast(min_x)) *
+        @as(usize, @intCast(buffer.bytes_per_pixel))) +
+        @as(usize, @bitCast(min_y *% buffer.pitch));
+
+    for (@intCast(min_y)..@intCast(max_y)) |_| {
+        var dest: [*]u32 = @alignCast(@ptrCast(dest_row));
+        var source = source_row;
+
+        for (@intCast(min_x)..@intCast(max_x)) |_| {
+            dest[0] = source[0];
+            dest += 1;
+            source += 1;
+        }
+
+        dest_row += @as(usize, @intCast(buffer.pitch));
+        source_row -= bitmap.width;
+    }
+}
 
 fn debug_load_bmp(
     thread: *platform.ThreadContext,
     read_entire_file: platform.debug_platform_read_entire_file,
     file_name: [*:0]const u8,
-) [*]u32 {
-    var result: [*]u32 = undefined;
+) Bitmap {
+    var result: Bitmap = undefined;
+
+    // NOTE: Byte order is in AA BB GG RR, bottom up
+    // In little endian -> 0xRRGGBBAA
     const read_result = read_entire_file(thread, file_name);
 
     if (read_result.size != 0) {
         const header: *BitmapHeader = @alignCast(@ptrCast(read_result.contents));
-        const pixels =
-            @as([*]u32, @alignCast(@ptrCast(read_result.contents))) +
+        const bytes: [*]u8 =
+            @as([*]u8, @ptrCast(read_result.contents)) +
             header.bitmap_offset;
 
-        result = pixels;
+        result.content.bytes = bytes;
+        result.width = @intCast(header.width);
+        result.height = @intCast(header.height);
+
+        // NOTE: If using this generically, remember that BMP
+        // files can go in either direction and height will be
+        // negative for top-down
+        // Also, there can be compression, etc. this is not complete
+        // BMP loading code
+        //
+        // NOTE: For whatever reason, pixels already have the
+        // alpha channel in the right place with structured_art.bmp,
+        // so there's no need to execute the code below to move the
+        // bits around with that particular asset
+
+        var source_dest = result.content.pixels;
+
+        for (0..@intCast(header.height)) |_| {
+            for (0..@intCast(header.width)) |_| {
+                source_dest[0] = (source_dest[0] >> 8) | (source_dest[0] << 24);
+                source_dest += 1;
+            }
+        }
     }
 
     return result;
@@ -227,10 +314,28 @@ pub export fn update_and_render(
     );
 
     if (!memory.is_initialized) {
-        game_state.pixel_pointer = debug_load_bmp(
+        game_state.backdrop = debug_load_bmp(
             thread,
             memory.debug_platform_read_entire_file,
-            "assets/test_background.bmp",
+            "data/test/test_background.bmp",
+        );
+
+        game_state.hero_head = debug_load_bmp(
+            thread,
+            memory.debug_platform_read_entire_file,
+            "data/test/test_hero_front_head.bmp",
+        );
+
+        game_state.hero_cape = debug_load_bmp(
+            thread,
+            memory.debug_platform_read_entire_file,
+            "data/test/test_hero_front_cape.bmp",
+        );
+
+        game_state.hero_torso = debug_load_bmp(
+            thread,
+            memory.debug_platform_read_entire_file,
+            "data/test/test_hero_front_torso.bmp",
         );
 
         game_state.player_p.abs_tile_x = 1;
@@ -476,15 +581,11 @@ pub export fn update_and_render(
         }
     }
 
-    try draw_rectangle(
+    draw_bitmap(
         buffer,
+        &game_state.backdrop,
         0.0,
         0.0,
-        @floatFromInt(buffer.width),
-        @floatFromInt(buffer.height),
-        1.0,
-        0.0,
-        0.1,
     );
 
     const screen_center_x = 0.5 * @as(f32, @floatFromInt(buffer.width));
@@ -513,7 +614,7 @@ pub export fn update_and_render(
                 game_state.player_p.abs_tile_z,
             );
 
-            if (tile_id > 0) {
+            if (tile_id > 1) {
                 var color: f32 = 0.5;
 
                 if (tile_id == 2) color = 1.0;
@@ -539,7 +640,7 @@ pub export fn update_and_render(
                 const max_x = cen_x + 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels));
                 const max_y = cen_y + 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels));
 
-                try draw_rectangle(
+                draw_rectangle(
                     buffer,
                     min_x,
                     min_y,
@@ -559,7 +660,7 @@ pub export fn update_and_render(
     const player_left = screen_center_x - 0.5 * meters_to_pixels * player_width;
     const player_top = screen_center_y - meters_to_pixels * player_height;
 
-    try draw_rectangle(
+    draw_rectangle(
         buffer,
         player_left,
         player_top,
@@ -570,19 +671,12 @@ pub export fn update_and_render(
         player_b,
     );
 
-    if (false) {
-        var source = game_state.pixel_pointer;
-        var dest: [*]u32 = @alignCast(@ptrCast(buffer.memory));
-        for (0..@intCast(buffer.height)) |y| {
-            _ = y;
-            for (0..@intCast(buffer.width)) |x| {
-                _ = x;
-                dest[0] = source[0];
-                dest += 1;
-                source += 1;
-            }
-        }
-    }
+    draw_bitmap(
+        buffer,
+        &game_state.hero_head,
+        0.0,
+        0.0,
+    );
 }
 
 // NOTE: At the moment, this must be a very fast function

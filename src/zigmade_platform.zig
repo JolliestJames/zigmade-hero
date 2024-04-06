@@ -32,7 +32,7 @@ pub const ThreadContext = struct {
 // they are blocking and the write will not protect against
 // lost data!
 pub const DebugReadFileResult = struct {
-    size: u32,
+    size: u32 = 0,
     contents: ?*anyopaque = null,
 };
 

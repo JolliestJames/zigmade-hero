@@ -155,7 +155,7 @@ fn debug_platform_read_entire_file(
     thread: *platform.ThreadContext,
     file_name: [*:0]const u8,
 ) platform.DebugReadFileResult {
-    var result: platform.DebugReadFileResult = undefined;
+    var result = platform.DebugReadFileResult{};
 
     const handle = win32.CreateFileA(
         file_name,
