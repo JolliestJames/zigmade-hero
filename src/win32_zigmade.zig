@@ -886,7 +886,7 @@ inline fn rdtsc() u64 {
     var low: u32 = undefined;
     var high: u32 = undefined;
 
-    asm volatile ("rdtsc"
+    asm ("rdtsc"
         : [low] "={eax}" (low),
           [high] "={edx}" (high),
     );

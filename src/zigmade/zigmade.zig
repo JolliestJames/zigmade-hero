@@ -2,6 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const platform = @import("zigmade_platform");
 const tiling = @import("zigmade_tile.zig");
+const intrinsics = @import("zigmade_intrinsics.zig");
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
 const GameState = struct {
@@ -198,7 +199,25 @@ fn draw_bitmap(
         var source = source_row;
 
         for (@intCast(min_x)..@intCast(max_x)) |_| {
-            dest[0] = source[0];
+            const a = @as(f32, @floatFromInt(((source[0] >> 24) & 0xFF))) / 255.0;
+            const sr: f32 = @floatFromInt((source[0] >> 16) & 0xFF);
+            const sg: f32 = @floatFromInt((source[0] >> 8) & 0xFF);
+            const sb: f32 = @floatFromInt((source[0] >> 0) & 0xFF);
+
+            const dr: f32 = @floatFromInt((dest[0] >> 16) & 0xFF);
+            const dg: f32 = @floatFromInt((dest[0] >> 8) & 0xFF);
+            const db: f32 = @floatFromInt((dest[0] >> 0) & 0xFF);
+
+            // TODO: Someday, we need to talk about premultiplied alpha!
+            // which this is not
+            const r = (1.0 - a) * dr + a * sr;
+            const g = (1.0 - a) * dg + a * sg;
+            const b = (1.0 - a) * db + a * sb;
+
+            dest[0] = (@as(u32, @intFromFloat(r + 0.5)) << 16) |
+                (@as(u32, @intFromFloat(g + 0.5)) << 8) |
+                (@as(u32, @intFromFloat(b + 0.5)) << 0);
+
             dest += 1;
             source += 1;
         }
@@ -215,8 +234,6 @@ fn debug_load_bmp(
 ) Bitmap {
     var result: Bitmap = undefined;
 
-    // NOTE: Byte order is in AA BB GG RR, bottom up
-    // In little endian -> 0xRRGGBBAA
     const read_result = read_entire_file(thread, file_name);
 
     if (read_result.size != 0) {
@@ -229,22 +246,42 @@ fn debug_load_bmp(
         result.width = @intCast(header.width);
         result.height = @intCast(header.height);
 
+        assert(header.compression == 3);
+
         // NOTE: If using this generically, remember that BMP
         // files can go in either direction and height will be
         // negative for top-down
         // Also, there can be compression, etc. this is not complete
         // BMP loading code
         //
-        // NOTE: For whatever reason, pixels already have the
-        // alpha channel in the right place with structured_art.bmp,
-        // so there's no need to execute the code below to move the
-        // bits around with that particular asset
+        // NOTE: Byte order memory is determined by the header itself,
+        // so we have to read out the masks and convert pixels ourselves
 
         var source_dest = result.content.pixels;
 
+        const red_mask = header.red_mask;
+        const green_mask = header.green_mask;
+        const blue_mask = header.blue_mask;
+        const alpha_mask = ~(red_mask | green_mask | blue_mask);
+
+        const red_shift = intrinsics.find_least_sig_set_bit(red_mask);
+        const green_shift = intrinsics.find_least_sig_set_bit(green_mask);
+        const blue_shift = intrinsics.find_least_sig_set_bit(blue_mask);
+        const alpha_shift = intrinsics.find_least_sig_set_bit(alpha_mask);
+
+        assert(red_shift.found);
+        assert(green_shift.found);
+        assert(blue_shift.found);
+        assert(alpha_shift.found);
+
         for (0..@intCast(header.height)) |_| {
             for (0..@intCast(header.width)) |_| {
-                source_dest[0] = (source_dest[0] >> 8) | (source_dest[0] << 24);
+                const coefficient = source_dest[0];
+                source_dest[0] =
+                    (((coefficient >> @as(u5, @intCast(alpha_shift.index))) & 0xFF) << 24) |
+                    (((coefficient >> @as(u5, @intCast(red_shift.index))) & 0xFF) << 16) |
+                    (((coefficient >> @as(u5, @intCast(green_shift.index))) & 0xFF) << 8) |
+                    (((coefficient >> @as(u5, @intCast(blue_shift.index))) & 0xFF) << 0);
                 source_dest += 1;
             }
         }
@@ -674,8 +711,8 @@ pub export fn update_and_render(
     draw_bitmap(
         buffer,
         &game_state.hero_head,
-        0.0,
-        0.0,
+        player_left,
+        player_top,
     );
 }
 
