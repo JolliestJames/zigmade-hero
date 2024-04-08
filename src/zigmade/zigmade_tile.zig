@@ -2,6 +2,12 @@ const std = @import("std");
 const assert = std.debug.assert;
 const game = @import("zigmade.zig");
 
+pub const TileMapDifference = struct {
+    dx: f64,
+    dy: f64,
+    dz: f64,
+};
+
 pub const TileMapPosition = struct {
     // NOTE: These are fixed point tile locations. The high bits are
     // the tile chunk index and the low bits are the tile index in
@@ -273,6 +279,30 @@ inline fn set_tile_value_unchecked(
     const tile_index = tile_y * tile_map.chunk_dim + tile_x;
     var tiles = tile_chunk.?.tiles.?;
     tiles[tile_index] = tile_value;
+}
+
+pub inline fn subtract(
+    tile_map: *TileMap,
+    a: TileMapPosition,
+    b: TileMapPosition,
+) TileMapDifference {
+    var result: TileMapDifference = undefined;
+
+    const d_tile_x = @as(f64, @floatFromInt(a.abs_tile_x)) -
+        @as(f64, @floatFromInt(b.abs_tile_x));
+    const d_tile_y = @as(f64, @floatFromInt(a.abs_tile_y)) -
+        @as(f64, @floatFromInt(b.abs_tile_y));
+    const d_tile_z = @as(f64, @floatFromInt(a.abs_tile_z)) -
+        @as(f64, @floatFromInt(b.abs_tile_z));
+
+    result.dx = tile_map.tile_side_in_meters * d_tile_x +
+        (a.offset_x - b.offset_x);
+    result.dy = tile_map.tile_side_in_meters * d_tile_y +
+        (a.offset_y - b.offset_y);
+    // TODO: Think about what we want to do with z
+    result.dz = tile_map.tile_side_in_meters * d_tile_z;
+
+    return result;
 }
 
 // TODO: Do these functions below belong in a "positioning" or "geometry" import?

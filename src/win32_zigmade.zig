@@ -286,23 +286,28 @@ inline fn win32_get_last_write_time(
 fn win32_load_game_code(
     source_dll_name: [*:0]const u8,
     temp_dll_name: [*:0]const u8,
+    lock_file_name: [*:0]const u8,
 ) Win32GameCode {
     var result = Win32GameCode{};
 
-    result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
+    var ignored: win32.WIN32_FILE_ATTRIBUTE_DATA = undefined;
 
-    _ = win32.CopyFileA(source_dll_name, temp_dll_name, win32.FALSE);
-    result.dll = win32.LoadLibraryA(temp_dll_name);
+    if (win32.GetFileAttributesExA(lock_file_name, win32.GetFileExInfoStandard, &ignored) == win32.FALSE) {
+        result.dll_last_write_time = win32_get_last_write_time(source_dll_name);
 
-    if (result.dll != null) {
-        result.update_and_render =
-            @ptrCast(win32.GetProcAddress(result.dll, "update_and_render"));
+        _ = win32.CopyFileA(source_dll_name, temp_dll_name, win32.FALSE);
+        result.dll = win32.LoadLibraryA(temp_dll_name);
 
-        result.get_sound_samples =
-            @ptrCast(win32.GetProcAddress(result.dll, "get_sound_samples"));
+        if (result.dll != null) {
+            result.update_and_render =
+                @ptrCast(win32.GetProcAddress(result.dll, "update_and_render"));
 
-        if (result.update_and_render != null and result.get_sound_samples != null) {
-            result.is_valid = true;
+            result.get_sound_samples =
+                @ptrCast(win32.GetProcAddress(result.dll, "get_sound_samples"));
+
+            if (result.update_and_render != null and result.get_sound_samples != null) {
+                result.is_valid = true;
+            }
         }
     }
 
@@ -1243,18 +1248,15 @@ pub export fn wWinMain(
     win32_get_exe_file_name(&win32_state);
 
     var source_game_code_dll_path = [_:0]u8{0} ** WIN32_STATE_FILE_NAME_COUNT;
-    win32_build_exe_path_file_name(
-        &win32_state,
-        "zigmade.dll",
-        &source_game_code_dll_path,
-    );
+    win32_build_exe_path_file_name(&win32_state, "zigmade.dll", &source_game_code_dll_path);
 
     var temp_game_code_dll_path = [_:0]u8{0} ** WIN32_STATE_FILE_NAME_COUNT;
-    win32_build_exe_path_file_name(
-        &win32_state,
-        "zigmade_temp.dll",
-        &temp_game_code_dll_path,
-    );
+    win32_build_exe_path_file_name(&win32_state, "zigmade_temp.dll", &temp_game_code_dll_path);
+
+    // NOTE: There is no lock file being used by this project's build,
+    // so the lock path is provided simply out of posterity
+    var game_code_lock_path = [_:0]u8{0} ** WIN32_STATE_FILE_NAME_COUNT;
+    win32_build_exe_path_file_name(&win32_state, "lock.tmp", &game_code_lock_path);
 
     // NOTE: Set Windows scheduler granularity to 1ms
     // so that Sleep() can be more granular
@@ -1461,6 +1463,7 @@ pub export fn wWinMain(
                 var game = win32_load_game_code(
                     &source_game_code_dll_path,
                     &temp_game_code_dll_path,
+                    &game_code_lock_path,
                 );
 
                 var last_cycle_count = rdtsc();
@@ -1475,6 +1478,7 @@ pub export fn wWinMain(
                         game = win32_load_game_code(
                             &source_game_code_dll_path,
                             &temp_game_code_dll_path,
+                            &game_code_lock_path,
                         );
                     }
 
