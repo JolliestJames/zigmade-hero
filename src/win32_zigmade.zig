@@ -1,19 +1,19 @@
 //
 // TODO:
+//
+// - Make calls so Windows doesn't think we're still loading for a bit after startup
 // - Saved game locations
 // - Getting a handle to our own exe
 // - Asset loading path
 // - Threading
 // - Raw input
-// - Sleep/timeBeginPeriod
 // - ClipCursor() for multimonitor support
-// - Fullscreen support
-// - WM_SETCURSOR to control cursor visibilty
 // - QueryCancelAutoplay
 // - WM_ACTIVATEAPP for when we are not the active application
 // - Blit speed improvements with BitBlt
 // - Hardware acceleration (OpenGL/Direct3D/Both)
 // - GetKeyboardLayout for French keyboards/intnl WASD support
+// - ChangeDisplaySettings option if we detect slow fullscreen blit?
 //
 
 const std = @import("std");
@@ -35,6 +35,17 @@ const WIN32_GENERIC_READ_WRITE = win32.FILE_ACCESS_FLAGS{
     .FILE_WRITE_EA = 1,
     .FILE_WRITE_ATTRIBUTES = 1,
     .SYNCHRONIZE = 1,
+};
+const WIN32_WINDOW_POS_FULLSCREEN_FLAGS = win32.SET_WINDOW_POS_FLAGS{
+    .NOOWNERZORDER = 1,
+    .DRAWFRAME = 1,
+};
+const WIN32_WINDOW_POS_FLAGS = win32.SET_WINDOW_POS_FLAGS{
+    .NOMOVE = 1,
+    .NOSIZE = 1,
+    .NOZORDER = 1,
+    .NOOWNERZORDER = 1,
+    .DRAWFRAME = 1,
 };
 
 const win32 = struct {
@@ -150,6 +161,8 @@ var global_pause: bool = false;
 var global_back_buffer: BackBuffer = undefined;
 var global_secondary_buffer: *win32.IDirectSoundBuffer = undefined;
 var global_perf_count_frequency: i64 = undefined;
+var debug_global_show_cursor = false;
+var global_window_position = std.mem.zeroInit(win32.WINDOWPLACEMENT, .{});
 
 fn debug_platform_read_entire_file(
     thread: *platform.ThreadContext,
@@ -513,60 +526,56 @@ fn win32_display_buffer_in_window(
     window_width: i32,
     window_height: i32,
 ) void {
-    const offset_x = 10;
-    const offset_y = 10;
+    // TODO: Centering/black bars?
 
-    _ = win32.PatBlt(
-        device_context,
-        0,
-        0,
-        window_width,
-        offset_y,
-        win32.BLACKNESS,
-    );
-    _ = win32.PatBlt(
-        device_context,
-        0,
-        offset_y + buffer.height,
-        window_width,
-        window_height,
-        win32.BLACKNESS,
-    );
-    _ = win32.PatBlt(
-        device_context,
-        0,
-        0,
-        offset_x,
-        window_height,
-        win32.BLACKNESS,
-    );
-    _ = win32.PatBlt(
-        device_context,
-        offset_x + buffer.width,
-        0,
-        window_width,
-        window_height,
-        win32.BLACKNESS,
-    );
+    if ((window_width >= buffer.width * 2) and (window_height >= buffer.height * 2)) {
+        _ = win32.StretchDIBits(
+            device_context,
+            0,
+            0,
+            // NOTE: Because I'm on a 2k monitor, using buffer width/height * 2
+            // does not produce a great result. Since I can't observe an
+            // artifacting problem like what Casey alludes to, I'm just
+            // using window width/height to get a nicely filled screen
+            window_width,
+            window_height,
+            0,
+            0,
+            buffer.width,
+            buffer.height,
+            buffer.memory,
+            &buffer.info,
+            win32.DIB_RGB_COLORS,
+            win32.SRCCOPY,
+        );
+    } else {
+        const offset_x = 10;
+        const offset_y = 10;
 
-    // NOTE: For prototyping purposes, we're going to always blit
-    // 1:1 pixels to make sure we don't introduce artifacts with
-    // stretching while we are learning to code the renderer
-    _ = win32.StretchDIBits(
-        device_context,
-        offset_x,
-        offset_y,
-        buffer.width,
-        buffer.height,
-        0,
-        0,
-        buffer.width,
-        buffer.height,
-        buffer.memory,
-        &buffer.info,
-        win32.DIB_RGB_COLORS,
-        win32.SRCCOPY,
-    );
+        _ = win32.PatBlt(device_context, 0, 0, window_width, offset_y, win32.BLACKNESS);
+        _ = win32.PatBlt(device_context, 0, offset_y + buffer.height, window_width, window_height, win32.BLACKNESS);
+        _ = win32.PatBlt(device_context, 0, 0, offset_x, window_height, win32.BLACKNESS);
+        _ = win32.PatBlt(device_context, offset_x + buffer.width, 0, window_width, window_height, win32.BLACKNESS);
+
+        // NOTE: For prototyping purposes, we're going to always blit
+        // 1:1 pixels to make sure we don't introduce artifacts with
+        // stretching while we are learning to code the renderer
+        _ = win32.StretchDIBits(
+            device_context,
+            offset_x,
+            offset_y,
+            buffer.width,
+            buffer.height,
+            0,
+            0,
+            buffer.width,
+            buffer.height,
+            buffer.memory,
+            &buffer.info,
+            win32.DIB_RGB_COLORS,
+            win32.SRCCOPY,
+        );
+    }
 }
 
 fn win32_main_window_callback(
@@ -581,6 +590,13 @@ fn win32_main_window_callback(
         win32.WM_CLOSE => {
             // TODO: Handle with a message to the user?
             global_running = false;
+        },
+        win32.WM_SETCURSOR => {
+            if (debug_global_show_cursor) {
+                result = win32.DefWindowProcA(window, message, w_param, l_param);
+            } else {
+                _ = win32.SetCursor(null);
+            }
         },
         win32.WM_ACTIVATEAPP => {
             if (false) {
@@ -775,6 +791,55 @@ fn win32_process_x_input_stick_value(
     return result;
 }
 
+fn toggle_full_screen(window: ?win32.HWND) void {
+    const style: i32 = win32.GetWindowLongW(window, win32.GWL_STYLE);
+
+    if ((style & @as(i32, @bitCast(win32.WS_OVERLAPPEDWINDOW))) != 0) {
+        var monitor_info: win32.MONITORINFO = undefined;
+        monitor_info.cbSize = @sizeOf(win32.MONITORINFO);
+
+        if (win32.GetWindowPlacement(window, &global_window_position) != win32.FALSE and
+            win32.GetMonitorInfoA(
+            win32.MonitorFromWindow(window, win32.MONITOR_DEFAULTTOPRIMARY),
+            &monitor_info,
+        ) != win32.FALSE) {
+            _ = win32.SetWindowLongA(
+                window,
+                win32.GWL_STYLE,
+                style & ~@as(i32, @bitCast(win32.WS_OVERLAPPEDWINDOW)),
+            );
+
+            _ = win32.SetWindowPos(
+                window,
+                null,
+                monitor_info.rcMonitor.left,
+                monitor_info.rcMonitor.top,
+                monitor_info.rcMonitor.right - monitor_info.rcMonitor.left,
+                monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top,
+                WIN32_WINDOW_POS_FULLSCREEN_FLAGS,
+            );
+        }
+    } else {
+        _ = win32.SetWindowLongA(
+            window,
+            win32.GWL_STYLE,
+            style | @as(i32, @bitCast(win32.WS_OVERLAPPEDWINDOW)),
+        );
+
+        _ = win32.SetWindowPlacement(window, &global_window_position);
+
+        _ = win32.SetWindowPos(
+            window,
+            null,
+            0,
+            0,
+            0,
+            0,
+            WIN32_WINDOW_POS_FLAGS,
+        );
+    }
+}
+
 fn win32_process_pending_messages(
     state: *Win32State,
     keyboard_controller: *platform.GameControllerInput,
@@ -872,11 +937,20 @@ fn win32_process_pending_messages(
                         },
                         else => {},
                     }
-                }
 
-                const alt_key_was_down: bool = (message.lParam & (1 << 29)) != 0;
-                if (vk_code == win32.VK_F4 and alt_key_was_down) {
-                    global_running = false;
+                    if (is_down) {
+                        const alt_key_was_down: bool = (message.lParam & (1 << 29)) != 0;
+
+                        if (vk_code == win32.VK_F4 and alt_key_was_down) {
+                            global_running = false;
+                        }
+
+                        if (vk_code == win32.VK_RETURN and alt_key_was_down) {
+                            if (message.hwnd != null) {
+                                toggle_full_screen(message.hwnd);
+                            }
+                        }
+                    }
                 }
             },
             else => {
@@ -1265,6 +1339,10 @@ pub export fn wWinMain(
 
     win32_load_x_input();
 
+    if (INTERNAL) {
+        debug_global_show_cursor = true;
+    }
+
     var window_class = std.mem.zeroInit(win32.WNDCLASSW, .{});
 
     // NOTE: 1080p display mode is 1920x1080/2 = 960x540
@@ -1276,6 +1354,7 @@ pub export fn wWinMain(
     window_class.style = win32.WNDCLASS_STYLES{ .HREDRAW = 1, .VREDRAW = 1 };
     window_class.lpfnWndProc = @ptrCast(&win32_main_window_callback);
     window_class.hInstance = instance;
+    window_class.hCursor = win32.LoadCursorW(null, win32.IDC_ARROW);
     // window_class.hIcon = ;
     window_class.lpszClassName = win32.L("ZigmadeHeroWindowClass");
 
