@@ -46,3 +46,9 @@ pub inline fn sub(v1: Vec2, v2: Vec2) Vec2 {
 
     return result;
 }
+
+pub inline fn square(f: f64) f64 {
+    const result = f * f;
+
+    return result;
+}

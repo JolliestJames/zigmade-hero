@@ -20,6 +20,7 @@ const GameState = struct {
     world_arena: MemoryArena,
     camera_p: tile.TileMapPosition,
     player_p: tile.TileMapPosition,
+    d_player_p: Vec2,
     backdrop: Bitmap,
     hero_direction: usize = 0,
     hero_bitmaps: [4]HeroBitmaps,
@@ -584,46 +585,65 @@ pub export fn update_and_render(
             // NOTE: Use analog movement tuning
         } else {
             // NOTE: Use digital movement tuning
-            var d_player = Vec2{};
+            var dd_player = Vec2{};
 
             // TODO: Investigate timing tomorrow and verify that it
             // is working properly because it appears things are moving
             // half as fast as expected
             if (controller.buttons.map.move_up.ended_down) {
                 game_state.hero_direction = 1;
-                d_player.y = 1.0;
+                dd_player.y = 1.0;
             }
 
             if (controller.buttons.map.move_down.ended_down) {
                 game_state.hero_direction = 3;
-                d_player.y = -1.0;
+                dd_player.y = -1.0;
             }
 
             if (controller.buttons.map.move_left.ended_down) {
                 game_state.hero_direction = 2;
-                d_player.x = -1.0;
+                dd_player.x = -1.0;
             }
 
             if (controller.buttons.map.move_right.ended_down) {
                 game_state.hero_direction = 0;
-                d_player.x = 1.0;
+                dd_player.x = 1.0;
             }
 
-            var player_speed: f32 = 2.0;
+            if (dd_player.x != 0 and dd_player.y != 0) {
+                dd_player = math.scale(dd_player, 0.707106781187);
+            }
+
+            var player_speed: f32 = 10.0; // m/s^2
 
             if (controller.buttons.map.action_up.ended_down) {
-                player_speed = 10.0;
+                player_speed = 50.0; // m/s^2
             }
 
-            d_player = math.scale(d_player, player_speed);
+            // player's acceleration
+            dd_player = math.scale(dd_player, player_speed);
 
-            if (d_player.x != 0 and d_player.y != 0) {
-                d_player = math.scale(d_player, 0.707106781187);
-            }
+            // TODO: ODE here
+            dd_player = math.add(
+                dd_player,
+                math.scale(game_state.d_player_p, -1.5),
+            );
 
             var new_player_p = game_state.player_p;
-            d_player = math.scale(d_player, input.dt_for_frame);
-            new_player_p.offset = math.add(new_player_p.offset, d_player);
+            // calculate new player position from current velocity
+            new_player_p.offset = math.add(
+                math.add(
+                    math.scale(dd_player, 0.5 * math.square(input.dt_for_frame)),
+                    math.scale(game_state.d_player_p, input.dt_for_frame),
+                ),
+                new_player_p.offset,
+            );
+            // calculate new player velocity
+            game_state.d_player_p = math.add(
+                math.scale(dd_player, input.dt_for_frame),
+                game_state.d_player_p,
+            );
+
             new_player_p = tile.recanonicalize_position(tile_map, new_player_p);
             //// TODO: delta function to auto-recanonicalize
 
