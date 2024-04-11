@@ -1,7 +1,9 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const platform = @import("zigmade_platform");
-const tiling = @import("zigmade_tile.zig");
+const tile = @import("zigmade_tile.zig");
+const math = @import("zigmade_math.zig");
+const Vec2 = math.Vec2;
 const intrinsics = @import("zigmade_intrinsics.zig");
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
@@ -16,15 +18,15 @@ const HeroBitmaps = struct {
 const GameState = struct {
     world: ?*World = null,
     world_arena: MemoryArena,
-    camera_p: tiling.TileMapPosition,
-    player_p: tiling.TileMapPosition,
+    camera_p: tile.TileMapPosition,
+    player_p: tile.TileMapPosition,
     backdrop: Bitmap,
     hero_direction: usize = 0,
     hero_bitmaps: [4]HeroBitmaps,
 };
 
 const World = struct {
-    tile_map: *tiling.TileMap,
+    tile_map: *tile.TileMap,
 };
 
 pub const MemoryArena = struct {
@@ -134,18 +136,16 @@ fn render_weird_gradient(
 
 fn draw_rectangle(
     buffer: *platform.GameOffscreenBuffer,
-    f_min_x: f64,
-    f_min_y: f64,
-    f_max_x: f64,
-    f_max_y: f64,
+    min: Vec2,
+    max: Vec2,
     r: f32,
     g: f32,
     b: f32,
 ) void {
-    var min_x: i64 = @intFromFloat(@round(f_min_x));
-    var min_y: i64 = @intFromFloat(@round(f_min_y));
-    var max_x: i64 = @intFromFloat(@round(f_max_x));
-    var max_y: i64 = @intFromFloat(@round(f_max_y));
+    var min_x: i64 = @intFromFloat(@round(min.x));
+    var min_y: i64 = @intFromFloat(@round(min.y));
+    var max_x: i64 = @intFromFloat(@round(max.x));
+    var max_y: i64 = @intFromFloat(@round(max.y));
 
     if (min_x < 0) min_x = 0;
     if (min_y < 0) min_y = 0;
@@ -411,8 +411,8 @@ pub export fn update_and_render(
 
         game_state.player_p.abs_tile_x = 1;
         game_state.player_p.abs_tile_y = 3;
-        game_state.player_p.offset_x = 5.0;
-        game_state.player_p.offset_y = 5.0;
+        game_state.player_p.offset.x = 5.0;
+        game_state.player_p.offset.y = 5.0;
 
         // TODO: Can we just use Zig's own arena allocator?
         initialize_arena(
@@ -423,7 +423,7 @@ pub export fn update_and_render(
 
         game_state.world = push_struct(&game_state.world_arena, World);
         var world = game_state.world.?;
-        world.tile_map = push_struct(&game_state.world_arena, tiling.TileMap);
+        world.tile_map = push_struct(&game_state.world_arena, tile.TileMap);
 
         var tile_map = world.tile_map;
 
@@ -441,7 +441,7 @@ pub export fn update_and_render(
             tile_map.tile_chunk_count_x *
                 tile_map.tile_chunk_count_y *
                 tile_map.tile_chunk_count_z,
-            tiling.TileChunk,
+            tile.TileChunk,
         );
 
         tile_map.tile_side_in_meters = 1.4;
@@ -523,7 +523,7 @@ pub export fn update_and_render(
                         }
                     }
 
-                    tiling.set_tile_value(
+                    tile.set_tile_value(
                         &game_state.world_arena,
                         tile_map,
                         abs_tile_x,
@@ -584,30 +584,29 @@ pub export fn update_and_render(
             // NOTE: Use analog movement tuning
         } else {
             // NOTE: Use digital movement tuning
-            var d_player_x: f64 = 0.0; //pixels/s
-            var d_player_y: f64 = 0.0; //pixels/s
+            var d_player = Vec2{};
 
             // TODO: Investigate timing tomorrow and verify that it
             // is working properly because it appears things are moving
             // half as fast as expected
             if (controller.buttons.map.move_up.ended_down) {
                 game_state.hero_direction = 1;
-                d_player_y = 1.0;
+                d_player.y = 1.0;
             }
 
             if (controller.buttons.map.move_down.ended_down) {
                 game_state.hero_direction = 3;
-                d_player_y = -1.0;
+                d_player.y = -1.0;
             }
 
             if (controller.buttons.map.move_left.ended_down) {
                 game_state.hero_direction = 2;
-                d_player_x = -1.0;
+                d_player.x = -1.0;
             }
 
             if (controller.buttons.map.move_right.ended_down) {
                 game_state.hero_direction = 0;
-                d_player_x = 1.0;
+                d_player.x = 1.0;
             }
 
             var player_speed: f32 = 2.0;
@@ -616,30 +615,32 @@ pub export fn update_and_render(
                 player_speed = 10.0;
             }
 
-            d_player_x *= player_speed;
-            d_player_y *= player_speed;
+            d_player = math.scale(d_player, player_speed);
 
-            // TODO: Diagonal will be faster. Fix once we have vectors!
+            if (d_player.x != 0 and d_player.y != 0) {
+                d_player = math.scale(d_player, 0.707106781187);
+            }
+
             var new_player_p = game_state.player_p;
-            new_player_p.offset_x += input.dt_for_frame * d_player_x;
-            new_player_p.offset_y += input.dt_for_frame * d_player_y;
-            new_player_p = tiling.recanonicalize_position(tile_map, new_player_p);
+            d_player = math.scale(d_player, input.dt_for_frame);
+            new_player_p.offset = math.add(new_player_p.offset, d_player);
+            new_player_p = tile.recanonicalize_position(tile_map, new_player_p);
             //// TODO: delta function to auto-recanonicalize
 
             var player_left = new_player_p;
-            player_left.offset_x -= 0.5 * player_width;
-            player_left = tiling.recanonicalize_position(tile_map, player_left);
+            player_left.offset.x -= 0.5 * player_width;
+            player_left = tile.recanonicalize_position(tile_map, player_left);
 
             var player_right = new_player_p;
-            player_right.offset_x += 0.5 * player_width;
-            player_right = tiling.recanonicalize_position(tile_map, player_right);
+            player_right.offset.x += 0.5 * player_width;
+            player_right = tile.recanonicalize_position(tile_map, player_right);
 
-            if (tiling.is_tile_map_point_empty(tile_map, new_player_p) and
-                tiling.is_tile_map_point_empty(tile_map, player_right) and
-                tiling.is_tile_map_point_empty(tile_map, player_left))
+            if (tile.is_tile_map_point_empty(tile_map, new_player_p) and
+                tile.is_tile_map_point_empty(tile_map, player_right) and
+                tile.is_tile_map_point_empty(tile_map, player_left))
             {
-                if (!tiling.on_same_tile(&game_state.player_p, &new_player_p)) {
-                    const new_tile_value = tiling.get_tile_value_from_pos(
+                if (!tile.on_same_tile(&game_state.player_p, &new_player_p)) {
+                    const new_tile_value = tile.get_tile_value_from_pos(
                         tile_map,
                         new_player_p,
                     );
@@ -656,21 +657,21 @@ pub export fn update_and_render(
 
             game_state.camera_p.abs_tile_z = game_state.player_p.abs_tile_z;
 
-            const diff = tiling.subtract(tile_map, game_state.player_p, game_state.camera_p);
+            const diff = tile.subtract(tile_map, game_state.player_p, game_state.camera_p);
 
-            if (diff.dx > (9.0 * tile_map.tile_side_in_meters)) {
+            if (diff.dxy.x > (9.0 * tile_map.tile_side_in_meters)) {
                 game_state.camera_p.abs_tile_x += 17;
             }
 
-            if (diff.dx < -(9.0 * tile_map.tile_side_in_meters)) {
+            if (diff.dxy.x < -(9.0 * tile_map.tile_side_in_meters)) {
                 game_state.camera_p.abs_tile_x -= 17;
             }
 
-            if (diff.dy > (5.0 * tile_map.tile_side_in_meters)) {
+            if (diff.dxy.y > (5.0 * tile_map.tile_side_in_meters)) {
                 game_state.camera_p.abs_tile_y += 9;
             }
 
-            if (diff.dy < -(5.0 * tile_map.tile_side_in_meters)) {
+            if (diff.dxy.y < -(5.0 * tile_map.tile_side_in_meters)) {
                 game_state.camera_p.abs_tile_y -= 9;
             }
         }
@@ -697,7 +698,7 @@ pub export fn update_and_render(
                     rel_row,
             ));
 
-            const tile_id = tiling.get_tile_value(
+            const tile_id = tile.get_tile_value(
                 tile_map,
                 column,
                 row,
@@ -717,25 +718,27 @@ pub export fn update_and_render(
                     color = 0.0;
                 }
 
-                const cen_x = screen_center_x -
-                    meters_to_pixels * game_state.camera_p.offset_x +
-                    @as(f32, @floatFromInt(rel_column * tile_side_in_pixels));
+                const tile_side = Vec2{
+                    .x = 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels)),
+                    .y = 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels)),
+                };
 
-                const cen_y = screen_center_y +
-                    meters_to_pixels * game_state.camera_p.offset_y -
-                    @as(f32, @floatFromInt(rel_row * tile_side_in_pixels));
+                const cen = Vec2{
+                    .x = screen_center_x -
+                        meters_to_pixels * game_state.camera_p.offset.x +
+                        @as(f32, @floatFromInt(rel_column * tile_side_in_pixels)),
+                    .y = screen_center_y +
+                        meters_to_pixels * game_state.camera_p.offset.y -
+                        @as(f32, @floatFromInt(rel_row * tile_side_in_pixels)),
+                };
 
-                const min_x = cen_x - 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels));
-                const min_y = cen_y - 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels));
-                const max_x = cen_x + 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels));
-                const max_y = cen_y + 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels));
+                const min = math.sub(cen, tile_side);
+                const max = math.add(cen, tile_side);
 
                 draw_rectangle(
                     buffer,
-                    min_x,
-                    min_y,
-                    max_x,
-                    max_y,
+                    min,
+                    max,
                     color,
                     color,
                     color,
@@ -744,22 +747,26 @@ pub export fn update_and_render(
         }
     }
 
-    const diff = tiling.subtract(tile_map, game_state.player_p, game_state.camera_p);
+    const diff = tile.subtract(tile_map, game_state.player_p, game_state.camera_p);
 
     const player_r = 1.0;
     const player_g = 1.0;
     const player_b = 0.0;
-    const player_ground_point_x = screen_center_x + meters_to_pixels * diff.dx;
-    const player_ground_point_y = screen_center_y - meters_to_pixels * diff.dy;
-    const player_left = player_ground_point_x - 0.5 * meters_to_pixels * player_width;
-    const player_top = player_ground_point_y - meters_to_pixels * player_height;
+    const player_ground_point_x = screen_center_x + meters_to_pixels * diff.dxy.x;
+    const player_ground_point_y = screen_center_y - meters_to_pixels * diff.dxy.y;
+    const player_origin = Vec2{
+        .x = player_ground_point_x - 0.5 * meters_to_pixels * player_width,
+        .y = player_ground_point_y - meters_to_pixels * player_height,
+    };
+    const player_dimensions = math.scale(
+        Vec2{ .x = player_width, .y = player_height },
+        meters_to_pixels,
+    );
 
     draw_rectangle(
         buffer,
-        player_left,
-        player_top,
-        player_left + meters_to_pixels * player_width,
-        player_top + meters_to_pixels * player_height,
+        player_origin,
+        math.add(player_origin, player_dimensions),
         player_r,
         player_g,
         player_b,

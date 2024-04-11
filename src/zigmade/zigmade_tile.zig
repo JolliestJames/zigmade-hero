@@ -1,10 +1,11 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const game = @import("zigmade.zig");
+const math = @import("zigmade_math.zig");
+const Vec2 = math.Vec2;
 
 pub const TileMapDifference = struct {
-    dx: f64,
-    dy: f64,
+    dxy: Vec2,
     dz: f64,
 };
 
@@ -16,8 +17,7 @@ pub const TileMapPosition = struct {
     abs_tile_x: usize,
     abs_tile_y: usize,
     abs_tile_z: usize,
-    offset_x: f64,
-    offset_y: f64,
+    offset: Vec2,
 };
 
 const TileChunkPosition = struct {
@@ -288,17 +288,20 @@ pub inline fn subtract(
 ) TileMapDifference {
     var result: TileMapDifference = undefined;
 
-    const d_tile_x = @as(f64, @floatFromInt(a.abs_tile_x)) -
-        @as(f64, @floatFromInt(b.abs_tile_x));
-    const d_tile_y = @as(f64, @floatFromInt(a.abs_tile_y)) -
-        @as(f64, @floatFromInt(b.abs_tile_y));
+    const d_tile_xy = Vec2{
+        .x = @as(f64, @floatFromInt(a.abs_tile_x)) -
+            @as(f64, @floatFromInt(b.abs_tile_x)),
+        .y = @as(f64, @floatFromInt(a.abs_tile_y)) -
+            @as(f64, @floatFromInt(b.abs_tile_y)),
+    };
+
     const d_tile_z = @as(f64, @floatFromInt(a.abs_tile_z)) -
         @as(f64, @floatFromInt(b.abs_tile_z));
 
-    result.dx = tile_map.tile_side_in_meters * d_tile_x +
-        (a.offset_x - b.offset_x);
-    result.dy = tile_map.tile_side_in_meters * d_tile_y +
-        (a.offset_y - b.offset_y);
+    result.dxy.x = tile_map.tile_side_in_meters * d_tile_xy.x +
+        (a.offset.x - b.offset.x);
+    result.dxy.y = tile_map.tile_side_in_meters * d_tile_xy.y +
+        (a.offset.y - b.offset.y);
     // TODO: Think about what we want to do with z
     result.dz = tile_map.tile_side_in_meters * d_tile_z;
 
@@ -338,13 +341,13 @@ pub inline fn recanonicalize_position(
     recanonicalize_coordinate(
         tile_map,
         &result.abs_tile_x,
-        &result.offset_x,
+        &result.offset.x,
     );
 
     recanonicalize_coordinate(
         tile_map,
         &result.abs_tile_y,
-        &result.offset_y,
+        &result.offset.y,
     );
 
     return result;
