@@ -620,7 +620,6 @@ pub export fn update_and_render(
                 player_speed = 50.0; // m/s^2
             }
 
-            // player's acceleration
             dd_player = math.scale(dd_player, player_speed);
 
             // TODO: ODE here
@@ -630,7 +629,7 @@ pub export fn update_and_render(
             );
 
             var new_player_p = game_state.player_p;
-            // calculate new player position from current velocity
+
             new_player_p.offset = math.add(
                 math.add(
                     math.scale(dd_player, 0.5 * math.square(input.dt_for_frame)),
@@ -638,14 +637,14 @@ pub export fn update_and_render(
                 ),
                 new_player_p.offset,
             );
-            // calculate new player velocity
+
             game_state.d_player_p = math.add(
                 math.scale(dd_player, input.dt_for_frame),
                 game_state.d_player_p,
             );
 
             new_player_p = tile.recanonicalize_position(tile_map, new_player_p);
-            //// TODO: delta function to auto-recanonicalize
+            // TODO: delta function to auto-recanonicalize
 
             var player_left = new_player_p;
             player_left.offset.x -= 0.5 * player_width;
@@ -655,10 +654,51 @@ pub export fn update_and_render(
             player_right.offset.x += 0.5 * player_width;
             player_right = tile.recanonicalize_position(tile_map, player_right);
 
-            if (tile.is_tile_map_point_empty(tile_map, new_player_p) and
-                tile.is_tile_map_point_empty(tile_map, player_right) and
-                tile.is_tile_map_point_empty(tile_map, player_left))
-            {
+            var collided = false;
+            var col_p: tile.TileMapPosition = undefined;
+
+            if (!tile.is_tile_map_point_empty(tile_map, new_player_p)) {
+                col_p = new_player_p;
+                collided = true;
+            }
+
+            if (!tile.is_tile_map_point_empty(tile_map, player_right)) {
+                col_p = player_right;
+                collided = true;
+            }
+
+            if (!tile.is_tile_map_point_empty(tile_map, player_left)) {
+                col_p = player_left;
+                collided = true;
+            }
+
+            if (collided) {
+                var r = Vec2{};
+
+                if (col_p.abs_tile_x < game_state.player_p.abs_tile_x) {
+                    r = Vec2{ .x = 1 };
+                }
+
+                if (col_p.abs_tile_x > game_state.player_p.abs_tile_x) {
+                    r = Vec2{ .x = -1 };
+                }
+
+                if (col_p.abs_tile_y < game_state.player_p.abs_tile_y) {
+                    r = Vec2{ .y = 1 };
+                }
+
+                if (col_p.abs_tile_y > game_state.player_p.abs_tile_y) {
+                    r = Vec2{ .y = -1 };
+                }
+
+                game_state.d_player_p = math.sub(
+                    game_state.d_player_p,
+                    math.scale(
+                        r,
+                        1 * math.inner(game_state.d_player_p, r),
+                    ),
+                );
+            } else {
                 if (!tile.on_same_tile(&game_state.player_p, &new_player_p)) {
                     const new_tile_value = tile.get_tile_value_from_pos(
                         tile_map,

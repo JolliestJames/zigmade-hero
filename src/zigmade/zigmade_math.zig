@@ -52,3 +52,9 @@ pub inline fn square(f: f64) f64 {
 
     return result;
 }
+
+pub inline fn inner(v1: Vec2, v2: Vec2) f64 {
+    const result = v1.x * v2.x + v1.y * v2.y;
+
+    return result;
+}
