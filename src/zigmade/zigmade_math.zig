@@ -58,3 +58,9 @@ pub inline fn inner(v1: Vec2, v2: Vec2) f64 {
 
     return result;
 }
+
+pub inline fn length_squared(vec: Vec2) f64 {
+    const result = inner(vec, vec);
+
+    return result;
+}

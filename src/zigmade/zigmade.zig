@@ -315,6 +315,16 @@ fn debug_load_bmp(
     return result;
 }
 
+fn closest_point_in_rect(
+    min: Vec2,
+    max: Vec2,
+    pos: tile.TileMapPosition,
+) tile.TileMapPosition {
+    _ = min;
+    _ = max;
+    _ = pos;
+}
+
 fn initialize_arena(
     arena: *MemoryArena,
     size: usize,
@@ -577,6 +587,12 @@ pub export fn update_and_render(
     const lower_left_y: f32 = @floatFromInt(buffer.height);
     _ = lower_left_y;
 
+    //
+    // NOTE: Movement
+    //
+    var old_player_p = game_state.player_p;
+    old_player_p.abs_tile_x += 0;
+
     for (0..input.controllers.len) |controller_index| {
         const controller: *platform.GameControllerInput =
             try platform.get_controller(input, controller_index);
@@ -630,12 +646,14 @@ pub export fn update_and_render(
 
             var new_player_p = game_state.player_p;
 
+            const player_delta = math.add(
+                math.scale(dd_player, 0.5 * math.square(input.dt_for_frame)),
+                math.scale(game_state.d_player_p, input.dt_for_frame),
+            );
+
             new_player_p.offset = math.add(
-                math.add(
-                    math.scale(dd_player, 0.5 * math.square(input.dt_for_frame)),
-                    math.scale(game_state.d_player_p, input.dt_for_frame),
-                ),
                 new_player_p.offset,
+                player_delta,
             );
 
             game_state.d_player_p = math.add(
@@ -646,97 +664,146 @@ pub export fn update_and_render(
             new_player_p = tile.recanonicalize_position(tile_map, new_player_p);
             // TODO: delta function to auto-recanonicalize
 
-            var player_left = new_player_p;
-            player_left.offset.x -= 0.5 * player_width;
-            player_left = tile.recanonicalize_position(tile_map, player_left);
+            if (true) {
+                var player_left = new_player_p;
+                player_left.offset.x -= 0.5 * player_width;
+                player_left = tile.recanonicalize_position(tile_map, player_left);
 
-            var player_right = new_player_p;
-            player_right.offset.x += 0.5 * player_width;
-            player_right = tile.recanonicalize_position(tile_map, player_right);
+                var player_right = new_player_p;
+                player_right.offset.x += 0.5 * player_width;
+                player_right = tile.recanonicalize_position(tile_map, player_right);
 
-            var collided = false;
-            var col_p: tile.TileMapPosition = undefined;
+                var collided = false;
+                var col_p: tile.TileMapPosition = undefined;
 
-            if (!tile.is_tile_map_point_empty(tile_map, new_player_p)) {
-                col_p = new_player_p;
-                collided = true;
-            }
-
-            if (!tile.is_tile_map_point_empty(tile_map, player_right)) {
-                col_p = player_right;
-                collided = true;
-            }
-
-            if (!tile.is_tile_map_point_empty(tile_map, player_left)) {
-                col_p = player_left;
-                collided = true;
-            }
-
-            if (collided) {
-                var r = Vec2{};
-
-                if (col_p.abs_tile_x < game_state.player_p.abs_tile_x) {
-                    r = Vec2{ .x = 1 };
+                if (!tile.is_tile_map_point_empty(tile_map, new_player_p)) {
+                    col_p = new_player_p;
+                    collided = true;
                 }
 
-                if (col_p.abs_tile_x > game_state.player_p.abs_tile_x) {
-                    r = Vec2{ .x = -1 };
+                if (!tile.is_tile_map_point_empty(tile_map, player_right)) {
+                    col_p = player_right;
+                    collided = true;
                 }
 
-                if (col_p.abs_tile_y < game_state.player_p.abs_tile_y) {
-                    r = Vec2{ .y = 1 };
+                if (!tile.is_tile_map_point_empty(tile_map, player_left)) {
+                    col_p = player_left;
+                    collided = true;
                 }
 
-                if (col_p.abs_tile_y > game_state.player_p.abs_tile_y) {
-                    r = Vec2{ .y = -1 };
-                }
+                if (collided) {
+                    var r = Vec2{};
 
-                game_state.d_player_p = math.sub(
-                    game_state.d_player_p,
-                    math.scale(
-                        r,
-                        1 * math.inner(game_state.d_player_p, r),
-                    ),
-                );
-            } else {
-                if (!tile.on_same_tile(&game_state.player_p, &new_player_p)) {
-                    const new_tile_value = tile.get_tile_value_from_pos(
-                        tile_map,
-                        new_player_p,
+                    if (col_p.abs_tile_x < game_state.player_p.abs_tile_x) {
+                        r = Vec2{ .x = 1 };
+                    }
+
+                    if (col_p.abs_tile_x > game_state.player_p.abs_tile_x) {
+                        r = Vec2{ .x = -1 };
+                    }
+
+                    if (col_p.abs_tile_y < game_state.player_p.abs_tile_y) {
+                        r = Vec2{ .y = 1 };
+                    }
+
+                    if (col_p.abs_tile_y > game_state.player_p.abs_tile_y) {
+                        r = Vec2{ .y = -1 };
+                    }
+
+                    game_state.d_player_p = math.sub(
+                        game_state.d_player_p,
+                        math.scale(
+                            r,
+                            1 * math.inner(game_state.d_player_p, r),
+                        ),
                     );
+                } else {
+                    game_state.player_p = new_player_p;
+                }
+            } else {
+                const min_tile_y: usize = 0;
+                const min_tile_x: usize = 0;
+                const one_past_max_tile_x: usize = 0;
+                const one_past_max_tile_y: usize = 0;
+                const abs_tile_z = game_state.player_p.abs_tile_z;
+                var best_player_p = game_state.player_p;
+                var best_distance_squared = math.length_squared(player_delta);
 
-                    if (new_tile_value == 3) {
-                        new_player_p.abs_tile_z += 1;
-                    } else if (new_tile_value == 4) {
-                        new_player_p.abs_tile_z -= 1;
+                var abs_tile_y = min_tile_y;
+
+                while (min_tile_y != one_past_max_tile_y) : (abs_tile_y += 1) {
+                    var abs_tile_x = min_tile_x;
+
+                    while (min_tile_x != one_past_max_tile_x) : (abs_tile_x += 1) {
+                        const test_tile_p = tile.centered_tile_point(abs_tile_x, abs_tile_y, abs_tile_z);
+                        const tile_value = tile.get_tile_value_from_pos(tile_map, test_tile_p);
+
+                        if (tile.is_tile_value_empty(tile_value)) {
+                            const min_corner = math.scale(Vec2{
+                                .x = tile_map.tile_side_in_meters,
+                                .y = tile_map.tile_side_in_meters,
+                            }, -0.5);
+
+                            const max_corner = math.scale(Vec2{
+                                .x = tile_map.tile_side_in_meters,
+                                .y = tile_map.tile_side_in_meters,
+                            }, 0.5);
+
+                            const rel_new_player_p = tile.subtract(tile_map, &test_tile_p, &new_player_p);
+                            const test_p = closest_point_in_rect(min_corner, max_corner, rel_new_player_p);
+                            _ = test_p;
+                            const test_distance_squared = 0;
+
+                            if (best_distance_squared > test_distance_squared) {
+                                best_player_p = best_player_p;
+                                best_distance_squared = best_distance_squared;
+                            }
+                        }
                     }
                 }
-
-                game_state.player_p = new_player_p;
-            }
-
-            game_state.camera_p.abs_tile_z = game_state.player_p.abs_tile_z;
-
-            const diff = tile.subtract(tile_map, game_state.player_p, game_state.camera_p);
-
-            if (diff.dxy.x > (9.0 * tile_map.tile_side_in_meters)) {
-                game_state.camera_p.abs_tile_x += 17;
-            }
-
-            if (diff.dxy.x < -(9.0 * tile_map.tile_side_in_meters)) {
-                game_state.camera_p.abs_tile_x -= 17;
-            }
-
-            if (diff.dxy.y > (5.0 * tile_map.tile_side_in_meters)) {
-                game_state.camera_p.abs_tile_y += 9;
-            }
-
-            if (diff.dxy.y < -(5.0 * tile_map.tile_side_in_meters)) {
-                game_state.camera_p.abs_tile_y -= 9;
             }
         }
     }
 
+    //
+    // NOTE: Update camera/player Z based on last movement
+    //
+    if (!tile.on_same_tile(&old_player_p, &game_state.player_p)) {
+        const new_tile_value = tile.get_tile_value_from_pos(
+            tile_map,
+            game_state.player_p,
+        );
+
+        if (new_tile_value == 3) {
+            game_state.player_p.abs_tile_z += 1;
+        } else if (new_tile_value == 4) {
+            game_state.player_p.abs_tile_z -= 1;
+        }
+    }
+
+    game_state.camera_p.abs_tile_z = game_state.player_p.abs_tile_z;
+
+    var diff = tile.subtract(tile_map, &game_state.player_p, &game_state.camera_p);
+
+    if (diff.dxy.x > (9.0 * tile_map.tile_side_in_meters)) {
+        game_state.camera_p.abs_tile_x += 17;
+    }
+
+    if (diff.dxy.x < -(9.0 * tile_map.tile_side_in_meters)) {
+        game_state.camera_p.abs_tile_x -= 17;
+    }
+
+    if (diff.dxy.y > (5.0 * tile_map.tile_side_in_meters)) {
+        game_state.camera_p.abs_tile_y += 9;
+    }
+
+    if (diff.dxy.y < -(5.0 * tile_map.tile_side_in_meters)) {
+        game_state.camera_p.abs_tile_y -= 9;
+    }
+
+    //
+    // NOTE: Render
+    //
     draw_bitmap(buffer, &game_state.backdrop, 0.0, 0.0, 0.0, 0.0);
 
     const screen_center_x = 0.5 * @as(f32, @floatFromInt(buffer.width));
@@ -807,7 +874,7 @@ pub export fn update_and_render(
         }
     }
 
-    const diff = tile.subtract(tile_map, game_state.player_p, game_state.camera_p);
+    diff = tile.subtract(tile_map, &game_state.player_p, &game_state.camera_p);
 
     const player_r = 1.0;
     const player_g = 1.0;

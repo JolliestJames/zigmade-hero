@@ -176,6 +176,15 @@ inline fn get_tile_chunk_value(
     return tile_chunk_value;
 }
 
+pub inline fn is_tile_value_empty(value: usize) bool {
+    const empty =
+        (value == 1) or
+        (value == 3) or
+        (value == 4);
+
+    return empty;
+}
+
 pub inline fn is_tile_map_point_empty(
     tile_map: *TileMap,
     tile_map_pos: TileMapPosition,
@@ -187,9 +196,7 @@ pub inline fn is_tile_map_point_empty(
         tile_map_pos.abs_tile_z,
     );
 
-    const empty = (tile_chunk_value == 1) or
-        (tile_chunk_value == 3) or
-        (tile_chunk_value == 4);
+    const empty = is_tile_value_empty(tile_chunk_value);
 
     return empty;
 }
@@ -283,8 +290,8 @@ inline fn set_tile_value_unchecked(
 
 pub inline fn subtract(
     tile_map: *TileMap,
-    a: TileMapPosition,
-    b: TileMapPosition,
+    a: *TileMapPosition,
+    b: *TileMapPosition,
 ) TileMapDifference {
     var result: TileMapDifference = undefined;
 
@@ -304,6 +311,20 @@ pub inline fn subtract(
         (a.offset.y - b.offset.y);
     // TODO: Think about what we want to do with z
     result.dz = tile_map.tile_side_in_meters * d_tile_z;
+
+    return result;
+}
+
+pub inline fn centered_tile_point(
+    abs_tile_x: usize,
+    abs_tile_y: usize,
+    abs_tile_z: usize,
+) TileMapPosition {
+    var result: TileMapPosition = undefined;
+
+    result.abs_tile_x = abs_tile_x;
+    result.abs_tile_y = abs_tile_y;
+    result.abs_tile_z = abs_tile_z;
 
     return result;
 }
