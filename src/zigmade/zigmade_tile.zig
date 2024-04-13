@@ -4,6 +4,7 @@ const game = @import("zigmade.zig");
 const math = @import("zigmade_math.zig");
 const Vec2 = math.Vec2;
 
+// TODO: Replace this with a Vec3 once we get to Vec3
 pub const TileMapDifference = struct {
     dxy: Vec2,
     dz: f64,

@@ -97,10 +97,10 @@ pub const GameControllerInput = struct {
 
 pub const GameInput = struct {
     mouse_buttons: [5]GameButtonState,
-    mouse_x: i32,
-    mouse_y: i32,
-    mouse_z: i32,
-    dt_for_frame: f32,
+    mouse_x: i32 = 0,
+    mouse_y: i32 = 0,
+    mouse_z: i32 = 0,
+    dt_for_frame: f32 = 0,
     controllers: [5]GameControllerInput,
 };
 

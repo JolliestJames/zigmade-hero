@@ -1,4 +1,5 @@
 const std = @import("std");
+const math = std.math;
 
 const BitScanResult = struct {
     found: bool = false,

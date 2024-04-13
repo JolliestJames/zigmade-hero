@@ -909,11 +909,11 @@ fn win32_process_pending_messages(
                             is_down,
                         ),
                         win32.VK_ESCAPE => win32_process_keyboard_message(
-                            &keyboard_controller.buttons.map.start,
+                            &keyboard_controller.buttons.map.back,
                             is_down,
                         ),
                         win32.VK_SPACE => win32_process_keyboard_message(
-                            &keyboard_controller.buttons.map.back,
+                            &keyboard_controller.buttons.map.start,
                             is_down,
                         ),
                         win32.VK_P => {
