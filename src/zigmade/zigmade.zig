@@ -381,27 +381,32 @@ pub fn push_array(
     return @as([*]T, @alignCast(@ptrCast(result)));
 }
 
+fn test_wall(_: usize, _: usize, _: usize, _: usize) void {
+    // TODO
+}
+
 fn move_player(
     game_state: *GameState,
     entity: *Entity,
     dt: f64,
-    acceleration: Vec2,
+    dd_pos: Vec2,
 ) void {
     const tile_map = game_state.world.?.tile_map;
 
-    var dd_pos = acceleration;
+    var acceleration = dd_pos;
 
-    if (dd_pos.x != 0 and dd_pos.y != 0) {
-        dd_pos = math.scale(dd_pos, 0.707106781187);
+    const acc_length = math.length_squared(acceleration);
+
+    if (acc_length > 1.0) {
+        acceleration = math.scale(acceleration, 1.0 / @sqrt(acc_length));
     }
 
     const player_speed: f32 = 50.0; // m/s^2
-
-    dd_pos = math.scale(dd_pos, player_speed);
+    acceleration = math.scale(acceleration, player_speed);
 
     // TODO: ODE here
-    dd_pos = math.add(
-        dd_pos,
+    acceleration = math.add(
+        acceleration,
         math.scale(entity.d_pos, -8.0),
     );
 
@@ -409,7 +414,7 @@ fn move_player(
     var new_player_p = old_player_p;
 
     const player_delta = math.add(
-        math.scale(dd_pos, 0.5 * math.square(dt)),
+        math.scale(acceleration, 0.5 * math.square(dt)),
         math.scale(entity.d_pos, dt),
     );
 
@@ -419,7 +424,7 @@ fn move_player(
     );
 
     entity.d_pos = math.add(
-        math.scale(dd_pos, dt),
+        math.scale(acceleration, dt),
         entity.d_pos,
     );
 
@@ -483,19 +488,17 @@ fn move_player(
             entity.pos = new_player_p;
         }
     } else {
-        const min_tile_y: usize = 0;
-        const min_tile_x: usize = 0;
-        const one_past_max_tile_x: usize = 0;
-        const one_past_max_tile_y: usize = 0;
-        const abs_tile_z = game_state.player_p.abs_tile_z;
-        var best_player_p = game_state.player_p;
-        var best_distance_squared = math.length_squared(player_delta);
+        const min_tile_x: usize = @min(old_player_p.abs_tile_x, new_player_p.abs_tile_x);
+        const min_tile_y: usize = @min(old_player_p.abs_tile_y, new_player_p.abs_tile_y);
+        const one_past_max_tile_x: usize = @max(old_player_p.abs_tile_x, new_player_p.abs_tile_x) + 1;
+        const one_past_max_tile_y: usize = @max(old_player_p.abs_tile_y, new_player_p.abs_tile_y) + 1;
+
+        const abs_tile_z = entity.pos.abs_tile_z;
+        var t_min = 1.0;
 
         var abs_tile_y = min_tile_y;
-
         while (min_tile_y != one_past_max_tile_y) : (abs_tile_y += 1) {
             var abs_tile_x = min_tile_x;
-
             while (min_tile_x != one_past_max_tile_x) : (abs_tile_x += 1) {
                 const test_tile_p = tile.centered_tile_point(abs_tile_x, abs_tile_y, abs_tile_z);
                 const tile_value = tile.get_tile_value_from_pos(tile_map, test_tile_p);
@@ -512,14 +515,16 @@ fn move_player(
                     }, 0.5);
 
                     const rel_new_player_p = tile.subtract(tile_map, &test_tile_p, &new_player_p);
-                    const test_p = closest_point_in_rect(min_corner, max_corner, rel_new_player_p);
-                    _ = test_p;
-                    const test_distance_squared = 0;
+                    const rel = rel_new_player_p.dxy;
 
-                    if (best_distance_squared > test_distance_squared) {
-                        best_player_p = best_player_p;
-                        best_distance_squared = best_distance_squared;
-                    }
+                    t_min += 0;
+                    _ = min_corner;
+                    _ = max_corner;
+                    _ = rel;
+
+                    // TODO: Test all four walls and take minimum z
+                    //const t_result = (wall_x - rel_new_player_p.x) / player_delta.x;
+                    //test_wall(min_corner.x, min_corner.y, max_corner.y, rel_new_player_p.x);
                 }
             }
         }
