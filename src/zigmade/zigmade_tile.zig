@@ -348,10 +348,11 @@ inline fn recanonicalize_coordinate(
     tile.* +%= @as(usize, @bitCast(offset));
     tile_rel.* -= @as(f64, @floatFromInt(offset)) * tile_map.tile_side_in_meters;
 
-    assert(tile_rel.* >= -0.5 * tile_map.tile_side_in_meters);
-    // TODO: Fix floating point math so this can be <
-    // NOTE: With <, this assert only seems to trip with Casey's code
-    assert(tile_rel.* <= 0.5 * tile_map.tile_side_in_meters);
+    assert(tile_rel.* > -0.5001 * tile_map.tile_side_in_meters);
+    // TODO: Fix floating point math so this can be exact
+    // NOTE: This assert only seems to trip with Casey's code
+    // maybe this would trip if we swapped to f32
+    assert(tile_rel.* < 0.5001 * tile_map.tile_side_in_meters);
 }
 
 pub inline fn recanonicalize_position(

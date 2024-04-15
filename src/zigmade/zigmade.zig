@@ -381,8 +381,28 @@ pub fn push_array(
     return @as([*]T, @alignCast(@ptrCast(result)));
 }
 
-fn test_wall(_: usize, _: usize, _: usize, _: usize) void {
-    // TODO
+fn test_wall(
+    wall: f64,
+    rel_x: f64,
+    rel_y: f64,
+    player_delta_x: f64,
+    player_delta_y: f64,
+    t_min: *f64,
+    min_y: f64,
+    max_y: f64,
+) void {
+    const t_epsilon = 0.0001;
+
+    if (player_delta_x != 0) {
+        const t_result = (wall - rel_x) / player_delta_x;
+        const y = rel_y + t_result * player_delta_y;
+
+        if (t_result >= 0.0 and t_min.* > t_result) {
+            if (y >= min_y and y <= max_y) {
+                t_min.* = @max(0.0, t_result - t_epsilon);
+            }
+        }
+    }
 }
 
 fn move_player(
@@ -411,16 +431,10 @@ fn move_player(
     );
 
     var old_player_p = entity.pos;
-    var new_player_p = old_player_p;
 
     const player_delta = math.add(
         math.scale(acceleration, 0.5 * math.square(dt)),
         math.scale(entity.d_pos, dt),
-    );
-
-    new_player_p.offset = math.add(
-        new_player_p.offset,
-        player_delta,
     );
 
     entity.d_pos = math.add(
@@ -428,10 +442,13 @@ fn move_player(
         entity.d_pos,
     );
 
+    var new_player_p = old_player_p;
+    new_player_p.offset = math.add(new_player_p.offset, player_delta);
     new_player_p = tile.recanonicalize_position(tile_map, new_player_p);
-    // TODO: delta function to auto-recanonicalize
 
-    if (true) {
+    if (false) {
+        // TODO: delta function to auto-recanonicalize
+
         var player_left = new_player_p;
         player_left.offset.x -= 0.5 * entity.width;
         player_left = tile.recanonicalize_position(tile_map, player_left);
@@ -494,40 +511,39 @@ fn move_player(
         const one_past_max_tile_y: usize = @max(old_player_p.abs_tile_y, new_player_p.abs_tile_y) + 1;
 
         const abs_tile_z = entity.pos.abs_tile_z;
-        var t_min = 1.0;
+        var t_min: f64 = 1.0;
 
-        var abs_tile_y = min_tile_y;
-        while (min_tile_y != one_past_max_tile_y) : (abs_tile_y += 1) {
-            var abs_tile_x = min_tile_x;
-            while (min_tile_x != one_past_max_tile_x) : (abs_tile_x += 1) {
-                const test_tile_p = tile.centered_tile_point(abs_tile_x, abs_tile_y, abs_tile_z);
+        for (min_tile_y..(one_past_max_tile_y + 1)) |abs_tile_y| {
+            for (min_tile_x..(one_past_max_tile_x + 1)) |abs_tile_x| {
+                var test_tile_p = tile.centered_tile_point(abs_tile_x, abs_tile_y, abs_tile_z);
                 const tile_value = tile.get_tile_value_from_pos(tile_map, test_tile_p);
 
-                if (tile.is_tile_value_empty(tile_value)) {
-                    const min_corner = math.scale(Vec2{
-                        .x = tile_map.tile_side_in_meters,
-                        .y = tile_map.tile_side_in_meters,
-                    }, -0.5);
+                if (!tile.is_tile_value_empty(tile_value)) {
+                    const min_corner = math.scale(Vec2{ .x = tile_map.tile_side_in_meters, .y = tile_map.tile_side_in_meters }, -0.5);
 
-                    const max_corner = math.scale(Vec2{
-                        .x = tile_map.tile_side_in_meters,
-                        .y = tile_map.tile_side_in_meters,
-                    }, 0.5);
+                    const max_corner = math.scale(Vec2{ .x = tile_map.tile_side_in_meters, .y = tile_map.tile_side_in_meters }, 0.5);
 
-                    const rel_new_player_p = tile.subtract(tile_map, &test_tile_p, &new_player_p);
-                    const rel = rel_new_player_p.dxy;
+                    const rel_old_player_p = tile.subtract(tile_map, &old_player_p, &test_tile_p);
+                    const rel = rel_old_player_p.dxy;
 
-                    t_min += 0;
-                    _ = min_corner;
-                    _ = max_corner;
-                    _ = rel;
-
-                    // TODO: Test all four walls and take minimum z
-                    //const t_result = (wall_x - rel_new_player_p.x) / player_delta.x;
-                    //test_wall(min_corner.x, min_corner.y, max_corner.y, rel_new_player_p.x);
+                    // TODO: Test all four walls and take minimum t
+                    test_wall(min_corner.x, rel.x, rel.y, player_delta.x, player_delta.y, &t_min, min_corner.y, max_corner.y);
+                    test_wall(max_corner.x, rel.x, rel.y, player_delta.x, player_delta.y, &t_min, min_corner.y, max_corner.y);
+                    test_wall(min_corner.y, rel.y, rel.x, player_delta.y, player_delta.x, &t_min, min_corner.x, max_corner.x);
+                    test_wall(max_corner.y, rel.y, rel.x, player_delta.y, player_delta.x, &t_min, min_corner.x, max_corner.x);
                 }
             }
         }
+
+        new_player_p = old_player_p;
+
+        new_player_p.offset = math.add(
+            new_player_p.offset,
+            math.scale(player_delta, t_min),
+        );
+
+        entity.pos = new_player_p;
+        new_player_p = tile.recanonicalize_position(tile_map, new_player_p);
     }
 
     //
@@ -956,8 +972,8 @@ pub export fn update_and_render(
                         @as(f32, @floatFromInt(rel_row * tile_side_in_pixels)),
                 };
 
-                const min = math.sub(cen, tile_side);
-                const max = math.add(cen, tile_side);
+                const min = math.sub(cen, math.scale(tile_side, 0.9));
+                const max = math.add(cen, math.scale(tile_side, 0.9));
 
                 draw_rectangle(
                     buffer,
