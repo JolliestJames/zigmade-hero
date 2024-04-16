@@ -18,3 +18,11 @@ pub fn find_least_sig_set_bit(value: u32) BitScanResult {
 
     return result;
 }
+
+pub fn sign_of(value: i64) i64 {
+    var result = std.math.sign(value);
+
+    if (result == 0) result = 1;
+
+    return result;
+}

@@ -18,7 +18,7 @@ pub const TileMapPosition = struct {
     abs_tile_x: usize,
     abs_tile_y: usize,
     abs_tile_z: usize,
-    offset: Vec2,
+    offset_: Vec2,
 };
 
 const TileChunkPosition = struct {
@@ -307,9 +307,9 @@ pub inline fn subtract(
         @as(f64, @floatFromInt(b.abs_tile_z));
 
     result.dxy.x = tile_map.tile_side_in_meters * d_tile_xy.x +
-        (a.offset.x - b.offset.x);
+        (a.offset_.x - b.offset_.x);
     result.dxy.y = tile_map.tile_side_in_meters * d_tile_xy.y +
-        (a.offset.y - b.offset.y);
+        (a.offset_.y - b.offset_.y);
     // TODO: Think about what we want to do with z
     result.dz = tile_map.tile_side_in_meters * d_tile_z;
 
@@ -326,6 +326,19 @@ pub inline fn centered_tile_point(
     result.abs_tile_x = abs_tile_x;
     result.abs_tile_y = abs_tile_y;
     result.abs_tile_z = abs_tile_z;
+
+    return result;
+}
+
+pub inline fn offset_pos(
+    tile_map: *TileMap,
+    pos: TileMapPosition,
+    offset: Vec2,
+) TileMapPosition {
+    var result = pos;
+
+    result.offset_ = math.add(pos.offset_, offset);
+    result = recanonicalize_position(tile_map, result);
 
     return result;
 }
@@ -364,13 +377,13 @@ pub inline fn recanonicalize_position(
     recanonicalize_coordinate(
         tile_map,
         &result.abs_tile_x,
-        &result.offset.x,
+        &result.offset_.x,
     );
 
     recanonicalize_coordinate(
         tile_map,
         &result.abs_tile_y,
-        &result.offset.y,
+        &result.offset_.y,
     );
 
     return result;
