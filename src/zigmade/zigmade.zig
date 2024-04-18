@@ -16,13 +16,33 @@ const HeroBitmaps = struct {
     align_y: i32,
 };
 
-const Entity = struct {
+const HighEntity = struct {
     exists: bool,
-    pos: tile.TileMapPosition,
+    pos: Vec2, // NOTE: Relative to the camera!
     d_pos: Vec2,
     facing_direction: usize = 0,
+};
+
+const LowEntity = struct {};
+
+const DormantEntity = struct {
+    pos: tile.TileMapPosition,
     width: f64,
     height: f64,
+};
+
+const Entity = struct {
+    residence: EntityResidence = EntityResidence.none,
+    low: ?*LowEntity = null,
+    dormant: ?*DormantEntity = null,
+    high: ?*HighEntity = null,
+};
+
+const EntityResidence = enum {
+    none,
+    dormant,
+    low,
+    high,
 };
 
 const GameState = struct {
@@ -34,7 +54,10 @@ const GameState = struct {
     camera_p: tile.TileMapPosition,
 
     entity_count: usize,
-    entities: [256]Entity,
+    entity_residence: [256]EntityResidence,
+    high_entities: [256]HighEntity,
+    low_entities: [256]LowEntity,
+    dormant_entities: [256]DormantEntity,
     player_controller_index: [5]usize,
     backdrop: Bitmap,
     hero_bitmaps: [4]HeroBitmaps,
@@ -384,7 +407,7 @@ fn test_wall(
 
 fn move_player(
     game_state: *GameState,
-    entity: *Entity,
+    entity: Entity,
     dt: f64,
     dd_pos: Vec2,
 ) void {
@@ -401,82 +424,28 @@ fn move_player(
     const player_speed: f32 = 50.0; // m/s^2
     acceleration = math.scale(acceleration, player_speed);
 
+    const high = entity.high.?;
+
     // TODO: ODE here
     acceleration = math.add(
         acceleration,
-        math.scale(entity.d_pos, -8.0),
+        math.scale(high.d_pos, -8.0),
     );
 
-    var old_player_p = entity.pos;
+    var old_player_p = high.pos;
     var player_delta = math.add(
         math.scale(acceleration, 0.5 * math.square(dt)),
-        math.scale(entity.d_pos, dt),
+        math.scale(high.d_pos, dt),
     );
 
-    entity.d_pos = math.add(
+    high.d_pos = math.add(
         math.scale(acceleration, dt),
-        entity.d_pos,
+        high.d_pos,
     );
 
-    const new_player_p = tile.offset_pos(tile_map, old_player_p, player_delta);
+    const new_player_p = math.add(old_player_p, player_delta);
 
     if (false) {
-        var player_left = new_player_p;
-        player_left.offset_.x -= 0.5 * entity.width;
-        player_left = tile.recanonicalize_position(tile_map, player_left);
-
-        var player_right = new_player_p;
-        player_right.offset_.x += 0.5 * entity.width;
-        player_right = tile.recanonicalize_position(tile_map, player_right);
-
-        var collided = false;
-        var col_p: tile.TileMapPosition = undefined;
-
-        if (!tile.is_tile_map_point_empty(tile_map, new_player_p)) {
-            col_p = new_player_p;
-            collided = true;
-        }
-
-        if (!tile.is_tile_map_point_empty(tile_map, player_right)) {
-            col_p = player_right;
-            collided = true;
-        }
-
-        if (!tile.is_tile_map_point_empty(tile_map, player_left)) {
-            col_p = player_left;
-            collided = true;
-        }
-
-        if (collided) {
-            var r = Vec2{};
-
-            if (col_p.abs_tile_x < entity.pos.abs_tile_x) {
-                r = Vec2{ .x = 1 };
-            }
-
-            if (col_p.abs_tile_x > entity.pos.abs_tile_x) {
-                r = Vec2{ .x = -1 };
-            }
-
-            if (col_p.abs_tile_y < entity.pos.abs_tile_y) {
-                r = Vec2{ .y = 1 };
-            }
-
-            if (col_p.abs_tile_y > entity.pos.abs_tile_y) {
-                r = Vec2{ .y = -1 };
-            }
-
-            entity.d_pos = math.sub(
-                entity.d_pos,
-                math.scale(
-                    r,
-                    1 * math.inner(entity.d_pos, r),
-                ),
-            );
-        } else {
-            entity.pos = new_player_p;
-        }
-    } else {
         var min_tile_x: usize = @min(old_player_p.abs_tile_x, new_player_p.abs_tile_x);
         var min_tile_y: usize = @min(old_player_p.abs_tile_y, new_player_p.abs_tile_y);
         var max_tile_x: usize = @max(old_player_p.abs_tile_x, new_player_p.abs_tile_x);
@@ -567,74 +536,81 @@ fn move_player(
                         }
                     }
                 }
-            }
 
-            entity.pos = tile.offset_pos(
+                entity.pos = tile.offset_pos(
+                    tile_map,
+                    entity.pos,
+                    math.scale(player_delta, t_min),
+                );
+
+                entity.d_pos = math.sub(
+                    entity.d_pos,
+                    math.scale(
+                        wall_normal,
+                        1 * math.inner(entity.d_pos, wall_normal),
+                    ),
+                );
+
+                player_delta = math.sub(
+                    player_delta,
+                    math.scale(
+                        wall_normal,
+                        1 * math.inner(entity.d_pos, wall_normal),
+                    ),
+                );
+
+                t_rem -= t_min * t_rem;
+
+                if (t_rem <= 0.0) break;
+            }
+        }
+
+        //
+        // NOTE: Update camera/player Z based on last movement
+        //
+        if (!tile.on_same_tile(&old_player_p, &entity.pos)) {
+            const new_tile_value = tile.get_tile_value_from_pos(
                 tile_map,
                 entity.pos,
-                math.scale(player_delta, t_min),
             );
 
-            entity.d_pos = math.sub(
-                entity.d_pos,
-                math.scale(
-                    wall_normal,
-                    1 * math.inner(entity.d_pos, wall_normal),
-                ),
-            );
-
-            player_delta = math.sub(
-                player_delta,
-                math.scale(
-                    wall_normal,
-                    1 * math.inner(entity.d_pos, wall_normal),
-                ),
-            );
-
-            t_rem -= t_min * t_rem;
-
-            if (t_rem <= 0.0) break;
+            if (new_tile_value == 3) {
+                entity.pos.abs_tile_z += 1;
+            } else if (new_tile_value == 4) {
+                entity.pos.abs_tile_z -= 1;
+            }
         }
-    }
 
-    //
-    // NOTE: Update camera/player Z based on last movement
-    //
-    if (!tile.on_same_tile(&old_player_p, &entity.pos)) {
-        const new_tile_value = tile.get_tile_value_from_pos(
-            tile_map,
-            entity.pos,
-        );
-
-        if (new_tile_value == 3) {
-            entity.pos.abs_tile_z += 1;
-        } else if (new_tile_value == 4) {
-            entity.pos.abs_tile_z -= 1;
-        }
-    }
-
-    if (entity.d_pos.x == 0.0 and entity.d_pos.y == 0.0) {
-        // Leave facing_direction alone
-    } else if (@abs(entity.d_pos.x) > @abs(entity.d_pos.y)) {
-        if (entity.d_pos.x > 0) {
-            entity.facing_direction = 0;
-        } else {
-            entity.facing_direction = 2;
-        }
-    } else if (@abs(entity.d_pos.x) < @abs(entity.d_pos.y)) {
-        if (entity.d_pos.y > 0) {
-            entity.facing_direction = 1;
-        } else {
-            entity.facing_direction = 3;
+        if (entity.d_pos.x == 0.0 and entity.d_pos.y == 0.0) {
+            // Leave facing_direction alone
+        } else if (@abs(entity.d_pos.x) > @abs(entity.d_pos.y)) {
+            if (entity.d_pos.x > 0) {
+                entity.facing_direction = 0;
+            } else {
+                entity.facing_direction = 2;
+            }
+        } else if (@abs(entity.d_pos.x) < @abs(entity.d_pos.y)) {
+            if (entity.d_pos.y > 0) {
+                entity.facing_direction = 1;
+            } else {
+                entity.facing_direction = 3;
+            }
         }
     }
 }
 
-inline fn get_entity(game_state: *GameState, index: usize) ?*Entity {
-    var entity: ?*Entity = null;
+inline fn get_entity(
+    game_state: *GameState,
+    residence: EntityResidence,
+    index: usize,
+) Entity {
+    var entity = Entity{};
 
-    if (index > 0 and index < game_state.entities.len) {
-        entity = &game_state.entities[index];
+    if (index > 0 and index < game_state.entity_count) {
+        entity.residence = residence;
+        entity.dormant = &game_state.dormant_entities[index];
+        entity.low = &game_state.low_entities[index];
+        entity.high = &game_state.high_entities[index];
     }
 
     return entity;
@@ -644,27 +620,43 @@ fn add_entity(game_state: *GameState) usize {
     const entity_index = game_state.entity_count;
     game_state.entity_count += 1;
 
-    assert(game_state.entity_count < game_state.entities.len);
-    const entity = &game_state.entities[entity_index];
-    entity.* = std.mem.zeroInit(Entity, .{});
+    assert(game_state.entity_count < game_state.dormant_entities.len);
+    assert(game_state.entity_count < game_state.low_entities.len);
+    assert(game_state.entity_count < game_state.high_entities.len);
+
+    game_state.entity_residence[entity_index] = EntityResidence.dormant;
+    game_state.dormant_entities[entity_index] = std.mem.zeroInit(DormantEntity, .{});
+    game_state.low_entities[entity_index] = std.mem.zeroInit(LowEntity, .{});
+    game_state.high_entities[entity_index] = std.mem.zeroInit(HighEntity, .{});
 
     return entity_index;
 }
 
+fn change_entity_residence(
+    game_state: *GameState,
+    entity: Entity,
+    entity_residence: EntityResidence,
+) void {
+    _ = game_state;
+    _ = entity;
+    _ = entity_residence;
+    // TODO: implement this
+}
+
 fn initialize_player(game_state: *GameState, entity_index: usize) void {
-    const entity = get_entity(game_state, entity_index);
+    const entity = get_entity(game_state, EntityResidence.high, entity_index);
+    const dormant = entity.dormant.?;
 
-    if (entity) |e| {
-        e.exists = true;
-        e.pos.abs_tile_x = 1;
-        e.pos.abs_tile_y = 3;
-        e.pos.offset_.x = 0.0;
-        e.pos.offset_.y = 0.0;
-        e.height = 0.5; // 1.4;
-        e.width = 1.0;
-    }
+    dormant.pos.abs_tile_x = 1;
+    dormant.pos.abs_tile_y = 3;
+    dormant.pos.offset_.x = 0.0;
+    dormant.pos.offset_.y = 0.0;
+    dormant.height = 0.5; // 1.4;
+    dormant.width = 1.0;
 
-    if (get_entity(game_state, game_state.camera_entity_index) == null) {
+    change_entity_residence(game_state, entity, EntityResidence.high);
+
+    if (get_entity(game_state, EntityResidence.dormant, game_state.camera_entity_index).residence == EntityResidence.none) {
         game_state.camera_entity_index = entity_index;
     }
 }
@@ -902,10 +894,11 @@ pub export fn update_and_render(
 
         const controlling_entity = get_entity(
             game_state,
+            EntityResidence.high,
             game_state.player_controller_index[controller_index],
         );
 
-        if (controlling_entity) |entity| {
+        if (controlling_entity.residence != EntityResidence.none) {
             var dd_pos = Vec2{};
 
             if (controller.is_analog) {
@@ -934,7 +927,7 @@ pub export fn update_and_render(
                 }
             }
 
-            move_player(game_state, entity, input.dt_for_frame, dd_pos);
+            move_player(game_state, controlling_entity, input.dt_for_frame, dd_pos);
         } else {
             if (controller.buttons.map.start.ended_down) {
                 const entity_index = add_entity(game_state);
@@ -944,27 +937,33 @@ pub export fn update_and_render(
         }
     }
 
-    const camera_following_entity = get_entity(game_state, game_state.camera_entity_index);
+    const camera_following_entity = get_entity(game_state, EntityResidence.high, game_state.camera_entity_index);
 
-    if (camera_following_entity) |entity| {
-        game_state.camera_p.abs_tile_z = entity.pos.abs_tile_z;
+    if (camera_following_entity.residence != EntityResidence.none) {
+        // TODO Fix this to work in camera space
 
-        const diff = tile.subtract(tile_map, &entity.pos, &game_state.camera_p);
+        if (false) {
+            const dormant = camera_following_entity.dormant.?;
 
-        if (diff.dxy.x > (9.0 * tile_map.tile_side_in_meters)) {
-            game_state.camera_p.abs_tile_x += 17;
-        }
+            game_state.camera_p.abs_tile_z = dormant.pos.abs_tile_z;
 
-        if (diff.dxy.x < -(9.0 * tile_map.tile_side_in_meters)) {
-            game_state.camera_p.abs_tile_x -= 17;
-        }
+            const diff = tile.subtract(tile_map, &camera_following_entity.pos, &game_state.camera_p);
 
-        if (diff.dxy.y > (5.0 * tile_map.tile_side_in_meters)) {
-            game_state.camera_p.abs_tile_y += 9;
-        }
+            if (diff.dxy.x > (9.0 * tile_map.tile_side_in_meters)) {
+                game_state.camera_p.abs_tile_x += 17;
+            }
 
-        if (diff.dxy.y < -(5.0 * tile_map.tile_side_in_meters)) {
-            game_state.camera_p.abs_tile_y -= 9;
+            if (diff.dxy.x < -(9.0 * tile_map.tile_side_in_meters)) {
+                game_state.camera_p.abs_tile_x -= 17;
+            }
+
+            if (diff.dxy.y > (5.0 * tile_map.tile_side_in_meters)) {
+                game_state.camera_p.abs_tile_y += 9;
+            }
+
+            if (diff.dxy.y < -(5.0 * tile_map.tile_side_in_meters)) {
+                game_state.camera_p.abs_tile_y -= 9;
+            }
         }
     }
 
@@ -1041,25 +1040,24 @@ pub export fn update_and_render(
         }
     }
 
-    const entities = game_state.entities;
     for (0..game_state.entity_count) |entity_index| {
-        var entity = entities[entity_index];
-
-        // TODO: Culling of entities based on z/camera view
-        if (entity.exists) {
-            const diff = tile.subtract(tile_map, &entity.pos, &game_state.camera_p);
+        if (game_state.entity_residence[entity_index] == EntityResidence.high) {
+            const high_entity = &game_state.high_entities[entity_index];
+            const low_entity = &game_state.low_entities[entity_index];
+            _ = low_entity;
+            const dormant_entity = &game_state.dormant_entities[entity_index];
 
             const player_r = 1.0;
             const player_g = 1.0;
             const player_b = 0.0;
-            const player_ground_point_x = screen_center_x + meters_to_pixels * diff.dxy.x;
-            const player_ground_point_y = screen_center_y - meters_to_pixels * diff.dxy.y;
+            const player_ground_point_x = screen_center_x + meters_to_pixels * high_entity.pos.x;
+            const player_ground_point_y = screen_center_y - meters_to_pixels * high_entity.pos.y;
             const player_origin = Vec2{
-                .x = player_ground_point_x - 0.5 * meters_to_pixels * entity.width,
-                .y = player_ground_point_y - 0.5 * meters_to_pixels * entity.height,
+                .x = player_ground_point_x - 0.5 * meters_to_pixels * dormant_entity.width,
+                .y = player_ground_point_y - 0.5 * meters_to_pixels * dormant_entity.height,
             };
             const entity_dimensions = math.scale(
-                Vec2{ .x = entity.width, .y = entity.height },
+                Vec2{ .x = dormant_entity.width, .y = dormant_entity.height },
                 meters_to_pixels,
             );
 
@@ -1072,7 +1070,7 @@ pub export fn update_and_render(
                 player_b,
             );
 
-            var hero_bitmaps = game_state.hero_bitmaps[entity.facing_direction];
+            var hero_bitmaps = game_state.hero_bitmaps[high_entity.facing_direction];
 
             draw_bitmap(
                 buffer,

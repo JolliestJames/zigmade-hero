@@ -18,6 +18,7 @@ pub const TileMapPosition = struct {
     abs_tile_x: usize,
     abs_tile_y: usize,
     abs_tile_z: usize,
+    // NOTE: Offset from tile center
     offset_: Vec2,
 };
 
