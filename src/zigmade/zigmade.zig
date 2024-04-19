@@ -112,7 +112,7 @@ const BitmapHeader = packed struct {
 
 var rand = std.rand.DefaultPrng.init(4096);
 
-fn game_output_sound(
+fn gameOutputSound(
     sound_buffer: *platform.GameSoundBuffer,
     game_state: *GameState,
 ) !void {
@@ -151,7 +151,7 @@ fn game_output_sound(
     }
 }
 
-fn draw_rectangle(
+fn drawRectangle(
     buffer: *platform.GameOffscreenBuffer,
     min: Vec2,
     max: Vec2,
@@ -193,7 +193,7 @@ fn draw_rectangle(
     }
 }
 
-fn draw_bitmap(
+fn drawBitmap(
     buffer: *platform.GameOffscreenBuffer,
     bitmap: *Bitmap,
     unaligned_real_x: f64,
@@ -271,14 +271,14 @@ fn draw_bitmap(
     }
 }
 
-fn debug_load_bmp(
+fn debugLoadBmp(
     thread: *platform.ThreadContext,
-    read_entire_file: platform.debug_platform_read_entire_file,
+    readEntireFile: platform.debugPlatformReadEntireFile,
     file_name: [*:0]const u8,
 ) Bitmap {
     var result: Bitmap = undefined;
 
-    const read_result = read_entire_file(thread, file_name);
+    const read_result = readEntireFile(thread, file_name);
 
     if (read_result.size != 0) {
         const header: *BitmapHeader = @alignCast(@ptrCast(read_result.contents));
@@ -308,10 +308,10 @@ fn debug_load_bmp(
         const blue_mask = header.blue_mask;
         const alpha_mask = ~(red_mask | green_mask | blue_mask);
 
-        const red_scan = intrinsics.find_least_sig_set_bit(red_mask);
-        const green_scan = intrinsics.find_least_sig_set_bit(green_mask);
-        const blue_scan = intrinsics.find_least_sig_set_bit(blue_mask);
-        const alpha_scan = intrinsics.find_least_sig_set_bit(alpha_mask);
+        const red_scan = intrinsics.findLeastSigSetBit(red_mask);
+        const green_scan = intrinsics.findLeastSigSetBit(green_mask);
+        const blue_scan = intrinsics.findLeastSigSetBit(blue_mask);
+        const alpha_scan = intrinsics.findLeastSigSetBit(alpha_mask);
 
         const red_shift = 16 - @as(i32, @intCast(red_scan.index));
         const green_shift = 8 - @as(i32, @intCast(green_scan.index));
@@ -339,7 +339,7 @@ fn debug_load_bmp(
     return result;
 }
 
-fn closest_point_in_rect(
+fn closestPointInRect(
     min: Vec2,
     max: Vec2,
     pos: tile.TileMapPosition,
@@ -349,7 +349,7 @@ fn closest_point_in_rect(
     _ = pos;
 }
 
-fn initialize_arena(
+fn initializeArena(
     arena: *MemoryArena,
     size: usize,
     base: [*]u8,
@@ -359,7 +359,7 @@ fn initialize_arena(
     arena.used = 0;
 }
 
-fn push_size(
+fn pushSize(
     arena: *MemoryArena,
     size: usize,
 ) [*]u8 {
@@ -369,24 +369,24 @@ fn push_size(
     return result;
 }
 
-fn push_struct(
+fn pushStruct(
     arena: *MemoryArena,
     comptime T: type,
 ) *T {
-    const result = push_size(arena, @sizeOf(T));
+    const result = pushSize(arena, @sizeOf(T));
     return @as(*T, @alignCast(@ptrCast(result)));
 }
 
-pub fn push_array(
+pub fn pushArray(
     arena: *MemoryArena,
     count: usize,
     comptime T: type,
 ) [*]T {
-    const result = push_size(arena, count * @sizeOf(T));
+    const result = pushSize(arena, count * @sizeOf(T));
     return @as([*]T, @alignCast(@ptrCast(result)));
 }
 
-fn test_wall(
+fn testWall(
     wall: f64,
     rel_x: f64,
     rel_y: f64,
@@ -414,7 +414,7 @@ fn test_wall(
     return hit;
 }
 
-fn move_player(
+fn movePlayer(
     game_state: *GameState,
     entity: Entity,
     dt: f64,
@@ -424,7 +424,7 @@ fn move_player(
 
     var acceleration = dd_pos;
 
-    const acc_length = math.length_squared(acceleration);
+    const acc_length = math.lengthSquared(acceleration);
 
     if (acc_length > 1.0) {
         acceleration = math.scale(acceleration, 1.0 / @sqrt(acc_length));
@@ -459,7 +459,7 @@ fn move_player(
         var hit_entity_index: usize = 0;
 
         for (1..game_state.entity_count) |entity_index| {
-            const test_entity = get_entity(game_state, EntityResidence.high, entity_index);
+            const test_entity = getEntity(game_state, EntityResidence.high, entity_index);
 
             if (test_entity.high != entity.high) {
                 if (test_entity.dormant.collides) {
@@ -469,22 +469,22 @@ fn move_player(
                     const max_corner = math.scale(Vec2{ .x = diameter_w, .y = diameter_h }, 0.5);
                     const rel = math.sub(entity.high.pos, test_entity.high.pos);
 
-                    if (test_wall(min_corner.x, rel.x, rel.y, player_delta.x, player_delta.y, &t_min, min_corner.y, max_corner.y)) {
+                    if (testWall(min_corner.x, rel.x, rel.y, player_delta.x, player_delta.y, &t_min, min_corner.y, max_corner.y)) {
                         wall_normal = Vec2{ .x = -1, .y = 0 };
                         hit_entity_index = entity_index;
                     }
 
-                    if (test_wall(max_corner.x, rel.x, rel.y, player_delta.x, player_delta.y, &t_min, min_corner.y, max_corner.y)) {
+                    if (testWall(max_corner.x, rel.x, rel.y, player_delta.x, player_delta.y, &t_min, min_corner.y, max_corner.y)) {
                         wall_normal = Vec2{ .x = 1, .y = 0 };
                         hit_entity_index = entity_index;
                     }
 
-                    if (test_wall(min_corner.y, rel.y, rel.x, player_delta.y, player_delta.x, &t_min, min_corner.x, max_corner.x)) {
+                    if (testWall(min_corner.y, rel.y, rel.x, player_delta.y, player_delta.x, &t_min, min_corner.x, max_corner.x)) {
                         wall_normal = Vec2{ .x = 0, .y = -1 };
                         hit_entity_index = entity_index;
                     }
 
-                    if (test_wall(max_corner.y, rel.y, rel.x, player_delta.y, player_delta.x, &t_min, min_corner.x, max_corner.x)) {
+                    if (testWall(max_corner.y, rel.y, rel.x, player_delta.y, player_delta.x, &t_min, min_corner.x, max_corner.x)) {
                         wall_normal = Vec2{ .x = 0, .y = 1 };
                         hit_entity_index = entity_index;
                     }
@@ -516,7 +516,7 @@ fn move_player(
 
             t_rem -= t_min * t_rem;
 
-            const hit_entity = get_entity(game_state, .dormant, hit_entity_index);
+            const hit_entity = getEntity(game_state, .dormant, hit_entity_index);
             entity.high.abs_tile_z += @bitCast(hit_entity.dormant.d_abs_tile_z);
         } else {
             break;
@@ -541,10 +541,10 @@ fn move_player(
     }
 
     // TODO: Always write back a valid tile position
-    entity.dormant.pos = tile.map_into_tile_space(tile_map, game_state.camera_p, entity.high.pos);
+    entity.dormant.pos = tile.mapIntoTileSpace(tile_map, game_state.camera_p, entity.high.pos);
 }
 
-fn add_entity(game_state: *GameState) usize {
+fn addEntity(game_state: *GameState) usize {
     const entity_index = game_state.entity_count;
     game_state.entity_count += 1;
 
@@ -560,7 +560,7 @@ fn add_entity(game_state: *GameState) usize {
     return entity_index;
 }
 
-fn change_entity_residence(
+fn changeEntityResidence(
     game_state: *GameState,
     entity_index: usize,
     residence: EntityResidence,
@@ -587,7 +587,7 @@ fn change_entity_residence(
     game_state.entity_residence[entity_index] = residence;
 }
 
-inline fn get_entity(
+inline fn getEntity(
     game_state: *GameState,
     residence: EntityResidence,
     index: usize,
@@ -596,7 +596,7 @@ inline fn get_entity(
 
     if (index > 0 and index < game_state.entity_count) {
         if (@intFromEnum(game_state.entity_residence[index]) < @intFromEnum(residence)) {
-            change_entity_residence(game_state, index, residence);
+            changeEntityResidence(game_state, index, residence);
             assert(@intFromEnum(game_state.entity_residence[index]) >= @intFromEnum(residence));
         }
 
@@ -609,8 +609,8 @@ inline fn get_entity(
     return entity;
 }
 
-fn initialize_player(game_state: *GameState, entity_index: usize) void {
-    const entity = get_entity(game_state, .dormant, entity_index);
+fn initializePlayer(game_state: *GameState, entity_index: usize) void {
+    const entity = getEntity(game_state, .dormant, entity_index);
 
     entity.dormant.pos.abs_tile_x = 1;
     entity.dormant.pos.abs_tile_y = 3;
@@ -620,9 +620,9 @@ fn initialize_player(game_state: *GameState, entity_index: usize) void {
     entity.dormant.width = 1.0;
     entity.dormant.collides = true;
 
-    change_entity_residence(game_state, entity_index, .high);
+    changeEntityResidence(game_state, entity_index, .high);
 
-    if (get_entity(game_state, .dormant, game_state.camera_entity_index).residence == .none) {
+    if (getEntity(game_state, .dormant, game_state.camera_entity_index).residence == .none) {
         game_state.camera_entity_index = entity_index;
     }
 }
@@ -632,7 +632,7 @@ fn initialize_player(game_state: *GameState, entity_index: usize) void {
 // - controller/keyboard input
 // - bitmap buffer
 // - sound buffer
-pub export fn update_and_render(
+pub export fn updateAndRender(
     thread: *platform.ThreadContext,
     memory: *platform.GameMemory,
     input: *platform.GameInput,
@@ -649,33 +649,33 @@ pub export fn update_and_render(
 
     if (!memory.is_initialized) {
         // NOTE: Reserve entity slot 0 as the null entity
-        _ = add_entity(game_state);
+        _ = addEntity(game_state);
 
-        game_state.backdrop = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_background.bmp");
-        game_state.shadow = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_shadow.bmp");
+        game_state.backdrop = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_background.bmp");
+        game_state.shadow = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_shadow.bmp");
 
         var bitmaps = &game_state.hero_bitmaps;
-        bitmaps[0].head = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_right_head.bmp");
-        bitmaps[0].cape = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_right_cape.bmp");
-        bitmaps[0].torso = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_right_torso.bmp");
+        bitmaps[0].head = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_head.bmp");
+        bitmaps[0].cape = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_cape.bmp");
+        bitmaps[0].torso = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_torso.bmp");
         bitmaps[0].align_x = 72;
         bitmaps[0].align_y = 182;
 
-        bitmaps[1].head = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_back_head.bmp");
-        bitmaps[1].cape = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_back_cape.bmp");
-        bitmaps[1].torso = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_back_torso.bmp");
+        bitmaps[1].head = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_head.bmp");
+        bitmaps[1].cape = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_cape.bmp");
+        bitmaps[1].torso = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_torso.bmp");
         bitmaps[1].align_x = 72;
         bitmaps[1].align_y = 182;
 
-        bitmaps[2].head = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_left_head.bmp");
-        bitmaps[2].cape = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_left_cape.bmp");
-        bitmaps[2].torso = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_left_torso.bmp");
+        bitmaps[2].head = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_head.bmp");
+        bitmaps[2].cape = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_cape.bmp");
+        bitmaps[2].torso = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_torso.bmp");
         bitmaps[2].align_x = 72;
         bitmaps[2].align_y = 182;
 
-        bitmaps[3].head = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_front_head.bmp");
-        bitmaps[3].cape = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_front_cape.bmp");
-        bitmaps[3].torso = debug_load_bmp(thread, memory.debug_platform_read_entire_file, "data/test/test_hero_front_torso.bmp");
+        bitmaps[3].head = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_head.bmp");
+        bitmaps[3].cape = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_cape.bmp");
+        bitmaps[3].torso = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_torso.bmp");
         bitmaps[3].align_x = 72;
         bitmaps[3].align_y = 182;
 
@@ -683,15 +683,15 @@ pub export fn update_and_render(
         game_state.camera_p.abs_tile_y = 9 / 2;
 
         // TODO: Can we just use Zig's own arena allocator?
-        initialize_arena(
+        initializeArena(
             &game_state.world_arena,
             memory.permanent_storage_size - @sizeOf(GameState),
             memory.permanent_storage + @sizeOf(GameState),
         );
 
-        game_state.world = push_struct(&game_state.world_arena, World);
+        game_state.world = pushStruct(&game_state.world_arena, World);
         var world = game_state.world.?;
-        world.tile_map = push_struct(&game_state.world_arena, tile.TileMap);
+        world.tile_map = pushStruct(&game_state.world_arena, tile.TileMap);
 
         var tile_map = world.tile_map;
 
@@ -704,7 +704,7 @@ pub export fn update_and_render(
         tile_map.tile_chunk_count_y = 128;
         tile_map.tile_chunk_count_z = 2;
 
-        tile_map.tile_chunks = push_array(
+        tile_map.tile_chunks = pushArray(
             &game_state.world_arena,
             tile_map.tile_chunk_count_x *
                 tile_map.tile_chunk_count_y *
@@ -794,7 +794,7 @@ pub export fn update_and_render(
                         }
                     }
 
-                    tile.set_tile_value(
+                    tile.setTileValue(
                         &game_state.world_arena,
                         tile_map,
                         abs_tile_x,
@@ -853,9 +853,9 @@ pub export fn update_and_render(
 
     for (0..input.controllers.len) |controller_index| {
         const controller: *platform.GameControllerInput =
-            try platform.get_controller(input, controller_index);
+            try platform.getController(input, controller_index);
 
-        const controlling_entity = get_entity(
+        const controlling_entity = getEntity(
             game_state,
             .high,
             game_state.player_controller_index[controller_index],
@@ -894,18 +894,18 @@ pub export fn update_and_render(
                 controlling_entity.high.dz = 3.0;
             }
 
-            move_player(game_state, controlling_entity, input.dt_for_frame, dd_pos);
+            movePlayer(game_state, controlling_entity, input.dt_for_frame, dd_pos);
         } else {
             if (controller.buttons.map.start.ended_down) {
-                const entity_index = add_entity(game_state);
-                initialize_player(game_state, entity_index);
+                const entity_index = addEntity(game_state);
+                initializePlayer(game_state, entity_index);
                 game_state.player_controller_index[controller_index] = entity_index;
             }
         }
     }
 
     var entity_offset_for_frame = Vec2{};
-    const camera_following_entity = get_entity(game_state, .high, game_state.camera_entity_index);
+    const camera_following_entity = getEntity(game_state, .high, game_state.camera_entity_index);
 
     if (camera_following_entity.residence != .none) {
         const dormant = camera_following_entity.dormant;
@@ -942,7 +942,7 @@ pub export fn update_and_render(
     //
     // NOTE: Render
     //
-    draw_bitmap(buffer, &game_state.backdrop, 0.0, 0.0, 0.0, 0.0, 1.0);
+    drawBitmap(buffer, &game_state.backdrop, 0.0, 0.0, 0.0, 0.0, 1.0);
 
     const screen_center_x = 0.5 * @as(f32, @floatFromInt(buffer.width));
     const screen_center_y = 0.5 * @as(f32, @floatFromInt(buffer.height));
@@ -963,7 +963,7 @@ pub export fn update_and_render(
                     rel_row,
             ));
 
-            const tile_id = tile.get_tile_value(
+            const tile_id = tile.getTileValue(
                 tile_map,
                 column,
                 row,
@@ -1000,7 +1000,7 @@ pub export fn update_and_render(
                 const min = math.sub(cen, math.scale(tile_side, 0.9));
                 const max = math.add(cen, math.scale(tile_side, 0.9));
 
-                draw_rectangle(
+                drawRectangle(
                     buffer,
                     min,
                     max,
@@ -1054,14 +1054,14 @@ pub export fn update_and_render(
             );
 
             if (false)
-                draw_rectangle(buffer, player_origin, math.add(player_origin, entity_dimensions), player_r, player_g, player_b);
+                drawRectangle(buffer, player_origin, math.add(player_origin, entity_dimensions), player_r, player_g, player_b);
 
             var hero_bitmaps = game_state.hero_bitmaps[high_entity.facing_direction];
 
-            draw_bitmap(buffer, &game_state.shadow, pg_x, pg_y, hero_bitmaps.align_x, hero_bitmaps.align_y, c_alpha);
-            draw_bitmap(buffer, &hero_bitmaps.torso, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
-            draw_bitmap(buffer, &hero_bitmaps.cape, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
-            draw_bitmap(buffer, &hero_bitmaps.head, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
+            drawBitmap(buffer, &game_state.shadow, pg_x, pg_y, hero_bitmaps.align_x, hero_bitmaps.align_y, c_alpha);
+            drawBitmap(buffer, &hero_bitmaps.torso, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
+            drawBitmap(buffer, &hero_bitmaps.cape, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
+            drawBitmap(buffer, &hero_bitmaps.head, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
         }
     }
 }
@@ -1070,7 +1070,7 @@ pub export fn update_and_render(
 // It cannot be greater than ~1ms
 // TODO: Reduce the pressure on this function's performance
 // by measuring it or asking about it, etc.
-pub export fn get_sound_samples(
+pub export fn getSoundSamples(
     thread: *platform.ThreadContext,
     memory: *platform.GameMemory,
     sound_buffer: *platform.GameSoundBuffer,
@@ -1081,7 +1081,7 @@ pub export fn get_sound_samples(
         @alignCast(@ptrCast(memory.permanent_storage)),
     );
 
-    try game_output_sound(
+    try gameOutputSound(
         sound_buffer,
         game_state,
     );

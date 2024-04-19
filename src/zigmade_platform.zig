@@ -16,7 +16,7 @@ pub inline fn Terabytes(comptime value: comptime_int) comptime_int {
     return Gigabytes(value) * 1024;
 }
 
-pub inline fn safe_truncate_u64(value: u64) u32 {
+pub inline fn safeTruncateu64(value: u64) u32 {
     // TODO: consts for maximum values
     std.debug.assert(value <= 0xffffffff);
     return @as(u32, @truncate(value));
@@ -39,7 +39,7 @@ pub const DebugReadFileResult = struct {
 // NOTE: Services that the game provides to the platform layer
 // maybe expand in the future - sound on separate thread
 
-pub inline fn get_controller(
+pub inline fn getController(
     input: *GameInput,
     index: usize,
 ) !*GameControllerInput {
@@ -104,17 +104,17 @@ pub const GameInput = struct {
     controllers: [5]GameControllerInput,
 };
 
-pub const debug_platform_read_entire_file = *const fn (
+pub const debugPlatformReadEntireFile = *const fn (
     *ThreadContext,
     [*:0]const u8,
 ) DebugReadFileResult;
 
-const debug_platform_free_file_memory = *const fn (
+const debugPlatformFreeFileMemory = *const fn (
     *ThreadContext,
     ?*anyopaque,
 ) void;
 
-const debug_platform_write_entire_file = *const fn (
+const debugPlatformWriteEntireFile = *const fn (
     *ThreadContext,
     [*:0]const u8,
     u32,
@@ -128,19 +128,19 @@ pub const GameMemory = struct {
     permanent_storage: [*]u8 = undefined,
     transient_storage_size: usize = 0,
     transient_storage: [*]u8 = undefined,
-    debug_platform_read_entire_file: debug_platform_read_entire_file,
-    debug_platform_free_file_memory: debug_platform_free_file_memory,
-    debug_platform_write_entire_file: debug_platform_write_entire_file,
+    debugPlatformReadEntireFile: debugPlatformReadEntireFile,
+    debugPlatformFreeFileMemory: debugPlatformFreeFileMemory,
+    debugPlatformWriteEntireFile: debugPlatformWriteEntireFile,
 };
 
-pub const update_and_render_type = *const fn (
+pub const updateAndRender = *const fn (
     *ThreadContext,
     *GameMemory,
     *GameInput,
     *GameOffscreenBuffer,
 ) callconv(.C) void;
 
-pub const get_sound_samples_type = *const fn (
+pub const getSoundSamples = *const fn (
     *ThreadContext,
     *GameMemory,
     *GameSoundBuffer,

@@ -48,7 +48,7 @@ pub const TileMap = struct {
     tile_chunk_count_z: usize,
 };
 
-inline fn get_tile_chunk(
+inline fn getTileChunk(
     tile_map: *TileMap,
     tile_chunk_x: usize,
     tile_chunk_y: usize,
@@ -79,7 +79,7 @@ inline fn get_tile_chunk(
     return tile_chunk;
 }
 
-inline fn get_tile_value_unchecked(
+inline fn getTileValueUnchecked(
     tile_map: *TileMap,
     tile_chunk: ?*TileChunk,
     tile_x: usize,
@@ -95,7 +95,7 @@ inline fn get_tile_value_unchecked(
     return tile_chunk_value;
 }
 
-inline fn get_chunk_position(
+inline fn getChunkPosition(
     tile_map: *TileMap,
     abs_tile_x: usize,
     abs_tile_y: usize,
@@ -112,27 +112,27 @@ inline fn get_chunk_position(
     return result;
 }
 
-pub inline fn get_tile_value(
+pub inline fn getTileValue(
     tile_map: *TileMap,
     abs_tile_x: usize,
     abs_tile_y: usize,
     abs_tile_z: usize,
 ) usize {
-    const chunk_pos = get_chunk_position(
+    const chunk_pos = getChunkPosition(
         tile_map,
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
     );
 
-    const tile_chunk = get_tile_chunk(
+    const tile_chunk = getTileChunk(
         tile_map,
         chunk_pos.tile_chunk_x,
         chunk_pos.tile_chunk_y,
         chunk_pos.tile_chunk_z,
     );
 
-    const tile_chunk_value = get_tile_chunk_value(
+    const tile_chunk_value = getTileChunkValue(
         tile_map,
         tile_chunk,
         chunk_pos.rel_tile_x,
@@ -142,11 +142,11 @@ pub inline fn get_tile_value(
     return tile_chunk_value;
 }
 
-pub inline fn get_tile_value_from_pos(
+pub inline fn getTileValueFromPos(
     tile_map: *TileMap,
     pos: TileMapPosition,
 ) usize {
-    const tile_chunk_value = get_tile_value(
+    const tile_chunk_value = getTileValue(
         tile_map,
         pos.abs_tile_x,
         pos.abs_tile_y,
@@ -156,7 +156,7 @@ pub inline fn get_tile_value_from_pos(
     return tile_chunk_value;
 }
 
-inline fn get_tile_chunk_value(
+inline fn getTileChunkValue(
     tile_map: *TileMap,
     tile_chunk: ?*TileChunk,
     test_tile_x: usize,
@@ -166,7 +166,7 @@ inline fn get_tile_chunk_value(
 
     if (tile_chunk) |chunk| {
         if (chunk.tiles != null) {
-            tile_chunk_value = get_tile_value_unchecked(
+            tile_chunk_value = getTileValueUnchecked(
                 tile_map,
                 chunk,
                 test_tile_x,
@@ -178,7 +178,7 @@ inline fn get_tile_chunk_value(
     return tile_chunk_value;
 }
 
-pub inline fn is_tile_value_empty(value: usize) bool {
+pub inline fn isTileValueEmpty(value: usize) bool {
     const empty =
         (value == 1) or
         (value == 3) or
@@ -187,23 +187,23 @@ pub inline fn is_tile_value_empty(value: usize) bool {
     return empty;
 }
 
-pub inline fn is_tile_map_point_empty(
+pub inline fn isTileMapPointEmpty(
     tile_map: *TileMap,
     tile_map_pos: TileMapPosition,
 ) bool {
-    const tile_chunk_value = get_tile_value(
+    const tile_chunk_value = getTileValue(
         tile_map,
         tile_map_pos.abs_tile_x,
         tile_map_pos.abs_tile_y,
         tile_map_pos.abs_tile_z,
     );
 
-    const empty = is_tile_value_empty(tile_chunk_value);
+    const empty = isTileValueEmpty(tile_chunk_value);
 
     return empty;
 }
 
-pub inline fn set_tile_value(
+pub inline fn setTileValue(
     arena: *game.MemoryArena,
     tile_map: *TileMap,
     abs_tile_x: usize,
@@ -211,14 +211,14 @@ pub inline fn set_tile_value(
     abs_tile_z: usize,
     tile_value: usize,
 ) void {
-    const chunk_pos = get_chunk_position(
+    const chunk_pos = getChunkPosition(
         tile_map,
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
     );
 
-    const tile_chunk = get_tile_chunk(
+    const tile_chunk = getTileChunk(
         tile_map,
         chunk_pos.tile_chunk_x,
         chunk_pos.tile_chunk_y,
@@ -231,7 +231,7 @@ pub inline fn set_tile_value(
         if (chunk.tiles == null) {
             const tile_count = tile_map.chunk_dim * tile_map.chunk_dim;
 
-            chunk.tiles = game.push_array(
+            chunk.tiles = game.pushArray(
                 arena,
                 tile_count,
                 usize,
@@ -245,7 +245,7 @@ pub inline fn set_tile_value(
         }
     }
 
-    set_tile_chunk_value(
+    setTileChunkValue(
         tile_map,
         tile_chunk,
         chunk_pos.rel_tile_x,
@@ -254,7 +254,7 @@ pub inline fn set_tile_value(
     );
 }
 
-pub inline fn set_tile_chunk_value(
+pub inline fn setTileChunkValue(
     tile_map: *TileMap,
     tile_chunk: ?*TileChunk,
     test_tile_x: usize,
@@ -263,7 +263,7 @@ pub inline fn set_tile_chunk_value(
 ) void {
     if (tile_chunk) |chunk| {
         if (chunk.tiles) |_| {
-            set_tile_value_unchecked(
+            setTileValueUnchecked(
                 tile_map,
                 chunk,
                 test_tile_x,
@@ -274,7 +274,7 @@ pub inline fn set_tile_chunk_value(
     }
 }
 
-inline fn set_tile_value_unchecked(
+inline fn setTileValueUnchecked(
     tile_map: *TileMap,
     tile_chunk: ?*TileChunk,
     tile_x: usize,
@@ -317,7 +317,7 @@ pub inline fn subtract(
     return result;
 }
 
-pub inline fn centered_tile_point(
+pub inline fn centeredTilePoint(
     abs_tile_x: usize,
     abs_tile_y: usize,
     abs_tile_z: usize,
@@ -333,7 +333,7 @@ pub inline fn centered_tile_point(
 
 // TODO: Do these functions below belong in a "positioning" or "geometry" import?
 
-inline fn recanonicalize_coordinate(
+inline fn recanonicalizeCoordinate(
     tile_map: *TileMap,
     tile: *usize,
     tile_rel: *f64,
@@ -356,7 +356,7 @@ inline fn recanonicalize_coordinate(
     assert(tile_rel.* < 0.5 * tile_map.tile_side_in_meters);
 }
 
-pub inline fn map_into_tile_space(
+pub inline fn mapIntoTileSpace(
     tile_map: *TileMap,
     base_pos: TileMapPosition,
     offset: Vec2,
@@ -364,13 +364,13 @@ pub inline fn map_into_tile_space(
     var result = base_pos;
 
     result.offset_ = math.add(result.offset_, offset);
-    recanonicalize_coordinate(tile_map, &result.abs_tile_x, &result.offset_.x);
-    recanonicalize_coordinate(tile_map, &result.abs_tile_y, &result.offset_.y);
+    recanonicalizeCoordinate(tile_map, &result.abs_tile_x, &result.offset_.x);
+    recanonicalizeCoordinate(tile_map, &result.abs_tile_y, &result.offset_.y);
 
     return result;
 }
 
-pub inline fn on_same_tile(
+pub inline fn onSameTile(
     a: *TileMapPosition,
     b: *TileMapPosition,
 ) bool {
