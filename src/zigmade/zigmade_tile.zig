@@ -331,19 +331,6 @@ pub inline fn centered_tile_point(
     return result;
 }
 
-pub inline fn offset_pos(
-    tile_map: *TileMap,
-    pos: TileMapPosition,
-    offset: Vec2,
-) TileMapPosition {
-    var result = pos;
-
-    result.offset_ = math.add(pos.offset_, offset);
-    result = recanonicalize_position(tile_map, result);
-
-    return result;
-}
-
 // TODO: Do these functions below belong in a "positioning" or "geometry" import?
 
 inline fn recanonicalize_coordinate(
@@ -362,30 +349,23 @@ inline fn recanonicalize_coordinate(
     tile.* +%= @as(usize, @bitCast(offset));
     tile_rel.* -= @as(f64, @floatFromInt(offset)) * tile_map.tile_side_in_meters;
 
-    assert(tile_rel.* > -0.5001 * tile_map.tile_side_in_meters);
+    assert(tile_rel.* > -0.5 * tile_map.tile_side_in_meters);
     // TODO: Fix floating point math so this can be exact
     // NOTE: This assert only seems to trip with Casey's code
     // maybe this would trip if we swapped to f32
-    assert(tile_rel.* < 0.5001 * tile_map.tile_side_in_meters);
+    assert(tile_rel.* < 0.5 * tile_map.tile_side_in_meters);
 }
 
-pub inline fn recanonicalize_position(
+pub inline fn map_into_tile_space(
     tile_map: *TileMap,
-    pos: TileMapPosition,
+    base_pos: TileMapPosition,
+    offset: Vec2,
 ) TileMapPosition {
-    var result = pos;
+    var result = base_pos;
 
-    recanonicalize_coordinate(
-        tile_map,
-        &result.abs_tile_x,
-        &result.offset_.x,
-    );
-
-    recanonicalize_coordinate(
-        tile_map,
-        &result.abs_tile_y,
-        &result.offset_.y,
-    );
+    result.offset_ = math.add(result.offset_, offset);
+    recanonicalize_coordinate(tile_map, &result.abs_tile_x, &result.offset_.x);
+    recanonicalize_coordinate(tile_map, &result.abs_tile_y, &result.offset_.y);
 
     return result;
 }
