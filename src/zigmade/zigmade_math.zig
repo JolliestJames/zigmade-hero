@@ -64,3 +64,50 @@ pub inline fn lengthSquared(vec: Vec2) f64 {
 
     return result;
 }
+
+const Rectangle2 = struct {
+    min: Vec2,
+    max: Vec2,
+};
+
+pub inline fn rectMinMax(min: Vec2, max: Vec2) Rectangle2 {
+    var result: Rectangle2 = undefined;
+
+    result.min = min;
+    result.max = max;
+
+    return result;
+}
+
+pub inline fn rectMinDim(min: Vec2, dim: Vec2) Rectangle2 {
+    var result: Rectangle2 = undefined;
+
+    result.min = min;
+    result.max = add(min, dim);
+
+    return result;
+}
+
+pub inline fn rectCenterDim(center: Vec2, dim: Vec2) Rectangle2 {
+    const result = rectCenterHalfDim(center, scale(dim, 0.5));
+
+    return result;
+}
+
+pub inline fn rectCenterHalfDim(center: Vec2, half_dim: Vec2) Rectangle2 {
+    var result: Rectangle2 = undefined;
+
+    result.min = sub(center, half_dim);
+    result.max = add(center, half_dim);
+
+    return result;
+}
+
+pub inline fn isInRectangle(rectangle: Rectangle2, vec: Vec2) bool {
+    const result = (vec.x >= rectangle.min.x and
+        vec.y >= rectangle.min.y and
+        vec.x < rectangle.max.x and
+        vec.y < rectangle.max.y);
+
+    return result;
+}

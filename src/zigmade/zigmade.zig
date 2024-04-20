@@ -19,21 +19,28 @@ const HeroBitmaps = struct {
 const HighEntity = struct {
     pos: Vec2, // NOTE: Relative to the camera!
     d_pos: Vec2,
-    z: f64,
-    dz: f64,
-    abs_tile_z: usize,
+    z: f64 = 0,
+    dz: f64 = 0,
+    abs_tile_z: usize = 0,
     facing_direction: usize = 0,
 };
 
 const LowEntity = struct {};
 
 const DormantEntity = struct {
+    type: EntityType,
     pos: tile.TileMapPosition,
     width: f64,
     height: f64,
     // NOTE: This is for "stairs"
     collides: bool,
     d_abs_tile_z: i64,
+};
+
+const EntityType = enum {
+    none,
+    hero,
+    wall,
 };
 
 const Entity = struct {
@@ -206,8 +213,10 @@ fn drawBitmap(
     const real_y = unaligned_real_y - @as(f64, @floatFromInt(align_y));
     var min_x: i64 = @intFromFloat(@round(real_x));
     var min_y: i64 = @intFromFloat(@round(real_y));
-    var max_x: i64 = @intFromFloat(@round(real_x + @as(f64, @floatFromInt(bitmap.width))));
-    var max_y: i64 = @intFromFloat(@round(real_y + @as(f64, @floatFromInt(bitmap.height))));
+    var max_x: i64 = min_x + @as(i64, @intCast(bitmap.width));
+    var max_y: i64 = min_y + @as(i64, @intCast(bitmap.height));
+    //var max_x: i64 = @intFromFloat(@round(real_x + @as(f64, @floatFromInt(bitmap.width))));
+    //var max_y: i64 = @intFromFloat(@round(real_y + @as(f64, @floatFromInt(bitmap.height))));
 
     var source_offset_x: i64 = 0;
     if (min_x < 0) {
@@ -339,16 +348,6 @@ fn debugLoadBmp(
     return result;
 }
 
-fn closestPointInRect(
-    min: Vec2,
-    max: Vec2,
-    pos: tile.TileMapPosition,
-) tile.TileMapPosition {
-    _ = min;
-    _ = max;
-    _ = pos;
-}
-
 fn initializeArena(
     arena: *MemoryArena,
     size: usize,
@@ -397,7 +396,7 @@ fn testWall(
     max_y: f64,
 ) bool {
     var hit = false;
-    const t_epsilon = 0.00001;
+    const t_epsilon = 0.001;
 
     if (player_delta_x != 0.0) {
         const t_result = (wall - rel_x) / player_delta_x;
@@ -449,22 +448,19 @@ fn movePlayer(
         entity.high.d_pos,
     );
 
-    var t_rem: f64 = 1.0;
-
     for (0..4) |_| {
-        if (t_rem <= 0.0) break;
-
         var t_min: f64 = 1.0;
         var wall_normal = Vec2{};
         var hit_entity_index: usize = 0;
+        const desired_position = math.add(entity.high.pos, player_delta);
 
         for (1..game_state.entity_count) |entity_index| {
             const test_entity = getEntity(game_state, EntityResidence.high, entity_index);
 
             if (test_entity.high != entity.high) {
                 if (test_entity.dormant.collides) {
-                    const diameter_w = test_entity.dormant.width + test_entity.dormant.width;
-                    const diameter_h = test_entity.dormant.height + test_entity.dormant.height;
+                    const diameter_w = test_entity.dormant.width + entity.dormant.width;
+                    const diameter_h = test_entity.dormant.height + entity.dormant.height;
                     const min_corner = math.scale(Vec2{ .x = diameter_w, .y = diameter_h }, -0.5);
                     const max_corner = math.scale(Vec2{ .x = diameter_w, .y = diameter_h }, 0.5);
                     const rel = math.sub(entity.high.pos, test_entity.high.pos);
@@ -506,15 +502,15 @@ fn movePlayer(
                 ),
             );
 
+            player_delta = math.sub(desired_position, entity.high.pos);
+
             player_delta = math.sub(
                 player_delta,
                 math.scale(
                     wall_normal,
-                    1 * math.inner(entity.high.d_pos, wall_normal),
+                    1 * math.inner(player_delta, wall_normal),
                 ),
             );
-
-            t_rem -= t_min * t_rem;
 
             const hit_entity = getEntity(game_state, .dormant, hit_entity_index);
             entity.high.abs_tile_z += @bitCast(hit_entity.dormant.d_abs_tile_z);
@@ -523,7 +519,6 @@ fn movePlayer(
         }
     }
 
-    // TODO: Change to using the acceleration vector
     if (entity.high.d_pos.x == 0.0 and entity.high.d_pos.y == 0.0) {
         // Leave facing_direction alone
     } else if (@abs(entity.high.d_pos.x) > @abs(entity.high.d_pos.y)) {
@@ -540,24 +535,7 @@ fn movePlayer(
         }
     }
 
-    // TODO: Always write back a valid tile position
     entity.dormant.pos = tile.mapIntoTileSpace(tile_map, game_state.camera_p, entity.high.pos);
-}
-
-fn addEntity(game_state: *GameState) usize {
-    const entity_index = game_state.entity_count;
-    game_state.entity_count += 1;
-
-    assert(game_state.entity_count < game_state.dormant_entities.len);
-    assert(game_state.entity_count < game_state.low_entities.len);
-    assert(game_state.entity_count < game_state.high_entities.len);
-
-    game_state.entity_residence[entity_index] = .dormant;
-    game_state.dormant_entities[entity_index] = std.mem.zeroInit(DormantEntity, .{});
-    game_state.low_entities[entity_index] = std.mem.zeroInit(LowEntity, .{});
-    game_state.high_entities[entity_index] = std.mem.zeroInit(HighEntity, .{});
-
-    return entity_index;
 }
 
 fn changeEntityResidence(
@@ -609,13 +587,48 @@ inline fn getEntity(
     return entity;
 }
 
-fn initializePlayer(game_state: *GameState, entity_index: usize) void {
+fn addEntity(game_state: *GameState, entity_type: EntityType) usize {
+    const entity_index = game_state.entity_count;
+    game_state.entity_count += 1;
+
+    assert(game_state.entity_count < game_state.dormant_entities.len);
+    assert(game_state.entity_count < game_state.low_entities.len);
+    assert(game_state.entity_count < game_state.high_entities.len);
+
+    game_state.entity_residence[entity_index] = .dormant;
+    game_state.dormant_entities[entity_index] = std.mem.zeroInit(DormantEntity, .{});
+    game_state.low_entities[entity_index] = std.mem.zeroInit(LowEntity, .{});
+    game_state.high_entities[entity_index] = std.mem.zeroInit(HighEntity, .{});
+    game_state.dormant_entities[entity_index].type = entity_type;
+
+    return entity_index;
+}
+
+fn addWall(
+    game_state: *GameState,
+    abs_tile_x: usize,
+    abs_tile_y: usize,
+    abs_tile_z: usize,
+) usize {
+    const entity_index = addEntity(game_state, .wall);
+    const entity = getEntity(game_state, .dormant, entity_index);
+
+    entity.dormant.pos.abs_tile_x = abs_tile_x;
+    entity.dormant.pos.abs_tile_y = abs_tile_y;
+    entity.dormant.pos.abs_tile_z = abs_tile_z;
+    entity.dormant.height = game_state.world.?.tile_map.tile_side_in_meters;
+    entity.dormant.width = entity.dormant.height;
+    entity.dormant.collides = true;
+
+    return entity_index;
+}
+
+fn addPlayer(game_state: *GameState) usize {
+    const entity_index = addEntity(game_state, .hero);
     const entity = getEntity(game_state, .dormant, entity_index);
 
     entity.dormant.pos.abs_tile_x = 1;
     entity.dormant.pos.abs_tile_y = 3;
-    entity.dormant.pos.offset_.x = 0.0;
-    entity.dormant.pos.offset_.y = 0.0;
     entity.dormant.height = 0.5;
     entity.dormant.width = 1.0;
     entity.dormant.collides = true;
@@ -624,6 +637,61 @@ fn initializePlayer(game_state: *GameState, entity_index: usize) void {
 
     if (getEntity(game_state, .dormant, game_state.camera_entity_index).residence == .none) {
         game_state.camera_entity_index = entity_index;
+    }
+
+    return entity_index;
+}
+
+fn setCamera(
+    game_state: *GameState,
+    new_camera_p: *tile.TileMapPosition,
+) void {
+    const tile_map = game_state.world.?.tile_map;
+    const d_camera_p = tile.subtract(tile_map, new_camera_p, &game_state.camera_p);
+    game_state.camera_p = new_camera_p.*;
+
+    // TODO: Dim is chosen randomly
+    const tile_span_x = 17 * 3;
+    const tile_span_y = 9 * 3;
+    const camera_bounds = math.rectCenterDim(
+        Vec2{},
+        math.scale(
+            Vec2{ .x = tile_span_x, .y = tile_span_y },
+            tile_map.tile_side_in_meters,
+        ),
+    );
+
+    const entity_offset_for_frame = math.negate(d_camera_p.dxy);
+
+    for (1..game_state.high_entities.len) |entity_index| {
+        if (game_state.entity_residence[entity_index] == .high) {
+            var high = &game_state.high_entities[entity_index];
+            high.pos = math.add(high.pos, entity_offset_for_frame);
+
+            if (!math.isInRectangle(camera_bounds, high.pos)) {
+                changeEntityResidence(game_state, entity_index, .dormant);
+            }
+        }
+    }
+
+    const min_tile_x = new_camera_p.abs_tile_x -% tile_span_x / 2;
+    const max_tile_x = new_camera_p.abs_tile_x +% tile_span_x / 2;
+    const min_tile_y = new_camera_p.abs_tile_y -% tile_span_y / 2;
+    const max_tile_y = new_camera_p.abs_tile_y +% tile_span_y / 2;
+
+    for (1..game_state.dormant_entities.len) |entity_index| {
+        if (game_state.entity_residence[entity_index] == .dormant) {
+            const dormant = &game_state.dormant_entities[entity_index];
+
+            if (dormant.pos.abs_tile_z == new_camera_p.abs_tile_z and
+                dormant.pos.abs_tile_x >= min_tile_x and
+                dormant.pos.abs_tile_x <= max_tile_x and
+                dormant.pos.abs_tile_y >= min_tile_y and
+                dormant.pos.abs_tile_y <= max_tile_y)
+            {
+                changeEntityResidence(game_state, entity_index, .high);
+            }
+        }
     }
 }
 
@@ -649,7 +717,7 @@ pub export fn updateAndRender(
 
     if (!memory.is_initialized) {
         // NOTE: Reserve entity slot 0 as the null entity
-        _ = addEntity(game_state);
+        _ = addEntity(game_state, .none);
 
         game_state.backdrop = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_background.bmp");
         game_state.shadow = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_shadow.bmp");
@@ -678,9 +746,6 @@ pub export fn updateAndRender(
         bitmaps[3].torso = debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_torso.bmp");
         bitmaps[3].align_x = 72;
         bitmaps[3].align_y = 182;
-
-        game_state.camera_p.abs_tile_x = 17 / 2;
-        game_state.camera_p.abs_tile_y = 9 / 2;
 
         // TODO: Can we just use Zig's own arena allocator?
         initializeArena(
@@ -732,10 +797,10 @@ pub export fn updateAndRender(
         var door_up = false;
         var door_down = false;
 
-        for (0..100) |_| {
+        for (0..2) |_| {
             var random_choice: usize = undefined;
 
-            if (door_up or door_down) {
+            if (true or door_up or door_down) {
                 random_choice = rand.random().int(usize) % 2;
             } else {
                 random_choice = rand.random().int(usize) % 3;
@@ -794,14 +859,11 @@ pub export fn updateAndRender(
                         }
                     }
 
-                    tile.setTileValue(
-                        &game_state.world_arena,
-                        tile_map,
-                        abs_tile_x,
-                        abs_tile_y,
-                        abs_tile_z,
-                        tile_value,
-                    );
+                    tile.setTileValue(&game_state.world_arena, tile_map, abs_tile_x, abs_tile_y, abs_tile_z, tile_value);
+
+                    if (tile_value == 2) {
+                        _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
+                    }
                 }
             }
 
@@ -830,6 +892,11 @@ pub export fn updateAndRender(
                 screen_y += 1;
             }
         }
+
+        var new_camera_p = tile.TileMapPosition{};
+        new_camera_p.abs_tile_x = 17 / 2;
+        new_camera_p.abs_tile_y = 9 / 2;
+        setCamera(game_state, &new_camera_p);
 
         memory.is_initialized = true;
     }
@@ -897,46 +964,61 @@ pub export fn updateAndRender(
             movePlayer(game_state, controlling_entity, input.dt_for_frame, dd_pos);
         } else {
             if (controller.buttons.map.start.ended_down) {
-                const entity_index = addEntity(game_state);
-                initializePlayer(game_state, entity_index);
+                const entity_index = addPlayer(game_state);
                 game_state.player_controller_index[controller_index] = entity_index;
             }
         }
     }
 
-    var entity_offset_for_frame = Vec2{};
+    const entity_offset_for_frame = Vec2{};
     const camera_following_entity = getEntity(game_state, .high, game_state.camera_entity_index);
 
     if (camera_following_entity.residence != .none) {
         const dormant = camera_following_entity.dormant;
         const high = camera_following_entity.high;
 
-        game_state.camera_p.abs_tile_z = dormant.pos.abs_tile_z;
+        var new_camera_p = game_state.camera_p;
 
-        var old_camera_p = game_state.camera_p;
+        new_camera_p.abs_tile_z = dormant.pos.abs_tile_z;
 
-        if (high.pos.x > (9.0 * tile_map.tile_side_in_meters)) {
-            game_state.camera_p.abs_tile_x +%= 17;
+        if (true) {
+            if (high.pos.x > (9.0 * tile_map.tile_side_in_meters)) {
+                new_camera_p.abs_tile_x +%= 17;
+            }
+
+            if (high.pos.x < -(9.0 * tile_map.tile_side_in_meters)) {
+                new_camera_p.abs_tile_x -%= 17;
+            }
+
+            if (high.pos.y > (5.0 * tile_map.tile_side_in_meters)) {
+                new_camera_p.abs_tile_y +%= 9;
+            }
+
+            if (high.pos.y < -(5.0 * tile_map.tile_side_in_meters)) {
+                new_camera_p.abs_tile_y -%= 9;
+            }
+        } else {
+            if (high.pos.x > (1.0 * tile_map.tile_side_in_meters)) {
+                new_camera_p.abs_tile_x +%= 1;
+            }
+
+            if (high.pos.x < -(1.0 * tile_map.tile_side_in_meters)) {
+                new_camera_p.abs_tile_x -%= 1;
+            }
+
+            if (high.pos.y > (1.0 * tile_map.tile_side_in_meters)) {
+                new_camera_p.abs_tile_y +%= 1;
+            }
+
+            if (high.pos.y < -(1.0 * tile_map.tile_side_in_meters)) {
+                new_camera_p.abs_tile_y -%= 1;
+            }
         }
-
-        if (high.pos.x < -(9.0 * tile_map.tile_side_in_meters)) {
-            game_state.camera_p.abs_tile_x -%= 17;
-        }
-
-        if (high.pos.y > (5.0 * tile_map.tile_side_in_meters)) {
-            game_state.camera_p.abs_tile_y +%= 9;
-        }
-
-        if (high.pos.y < -(5.0 * tile_map.tile_side_in_meters)) {
-            game_state.camera_p.abs_tile_y -%= 9;
-        }
-
-        const d_camera_p = tile.subtract(tile_map, &game_state.camera_p, &old_camera_p);
-
-        entity_offset_for_frame = math.negate(d_camera_p.dxy);
 
         // TODO: Map new entities in and old entities out
         // TODO: Mapping tiles and stairs into the entity set
+
+        setCamera(game_state, &new_camera_p);
     }
 
     //
@@ -947,72 +1029,74 @@ pub export fn updateAndRender(
     const screen_center_x = 0.5 * @as(f32, @floatFromInt(buffer.width));
     const screen_center_y = 0.5 * @as(f32, @floatFromInt(buffer.height));
 
-    var rel_row: i32 = -10;
+    if (false) {
+        var rel_row: i32 = -10;
 
-    while (rel_row < 10) : (rel_row += 1) {
-        var rel_column: i32 = -20;
+        while (rel_row < 10) : (rel_row += 1) {
+            var rel_column: i32 = -20;
 
-        while (rel_column < 20) : (rel_column += 1) {
-            const column = @as(usize, @bitCast(
-                @as(isize, @bitCast(game_state.camera_p.abs_tile_x)) +
-                    rel_column,
-            ));
+            while (rel_column < 20) : (rel_column += 1) {
+                const column = @as(usize, @bitCast(
+                    @as(isize, @bitCast(game_state.camera_p.abs_tile_x)) +
+                        rel_column,
+                ));
 
-            const row = @as(usize, @bitCast(
-                @as(isize, @bitCast(game_state.camera_p.abs_tile_y)) +
-                    rel_row,
-            ));
+                const row = @as(usize, @bitCast(
+                    @as(isize, @bitCast(game_state.camera_p.abs_tile_y)) +
+                        rel_row,
+                ));
 
-            const tile_id = tile.getTileValue(
-                tile_map,
-                column,
-                row,
-                game_state.camera_p.abs_tile_z,
-            );
-
-            if (tile_id > 1) {
-                var color: f32 = 0.5;
-
-                if (tile_id == 2) color = 1.0;
-
-                if (tile_id > 2) color = 0.25;
-
-                if ((column == game_state.camera_p.abs_tile_x) and
-                    (row == game_state.camera_p.abs_tile_y))
-                {
-                    color = 0.0;
-                }
-
-                const tile_side = Vec2{
-                    .x = 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels)),
-                    .y = 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels)),
-                };
-
-                const cen = Vec2{
-                    .x = screen_center_x -
-                        meters_to_pixels * game_state.camera_p.offset_.x +
-                        @as(f32, @floatFromInt(rel_column * tile_side_in_pixels)),
-                    .y = screen_center_y +
-                        meters_to_pixels * game_state.camera_p.offset_.y -
-                        @as(f32, @floatFromInt(rel_row * tile_side_in_pixels)),
-                };
-
-                const min = math.sub(cen, math.scale(tile_side, 0.9));
-                const max = math.add(cen, math.scale(tile_side, 0.9));
-
-                drawRectangle(
-                    buffer,
-                    min,
-                    max,
-                    color,
-                    color,
-                    color,
+                const tile_id = tile.getTileValue(
+                    tile_map,
+                    column,
+                    row,
+                    game_state.camera_p.abs_tile_z,
                 );
+
+                if (tile_id > 1) {
+                    var color: f32 = 0.5;
+
+                    if (tile_id == 2) color = 1.0;
+
+                    if (tile_id > 2) color = 0.25;
+
+                    if ((column == game_state.camera_p.abs_tile_x) and
+                        (row == game_state.camera_p.abs_tile_y))
+                    {
+                        color = 0.0;
+                    }
+
+                    const tile_side = Vec2{
+                        .x = 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels)),
+                        .y = 0.5 * @as(f32, @floatFromInt(tile_side_in_pixels)),
+                    };
+
+                    const cen = Vec2{
+                        .x = screen_center_x -
+                            meters_to_pixels * game_state.camera_p.offset_.x +
+                            @as(f32, @floatFromInt(rel_column * tile_side_in_pixels)),
+                        .y = screen_center_y +
+                            meters_to_pixels * game_state.camera_p.offset_.y -
+                            @as(f32, @floatFromInt(rel_row * tile_side_in_pixels)),
+                    };
+
+                    const min = math.sub(cen, math.scale(tile_side, 0.9));
+                    const max = math.add(cen, math.scale(tile_side, 0.9));
+
+                    drawRectangle(
+                        buffer,
+                        min,
+                        max,
+                        color,
+                        color,
+                        color,
+                    );
+                }
             }
         }
     }
 
-    for (0..game_state.entity_count) |entity_index| {
+    for (1..game_state.entity_count) |entity_index| {
         if (game_state.entity_residence[entity_index] == .high) {
             const high_entity = &game_state.high_entities[entity_index];
             const low_entity = &game_state.low_entities[entity_index];
@@ -1048,20 +1132,31 @@ pub export fn updateAndRender(
                 .y = pg_y - 0.5 * meters_to_pixels * dormant_entity.height,
             };
 
-            const entity_dimensions = math.scale(
-                Vec2{ .x = dormant_entity.width, .y = dormant_entity.height },
-                meters_to_pixels,
-            );
+            const entity_dimensions = Vec2{
+                .x = dormant_entity.width,
+                .y = dormant_entity.height,
+            };
 
-            if (false)
-                drawRectangle(buffer, player_origin, math.add(player_origin, entity_dimensions), player_r, player_g, player_b);
+            if (dormant_entity.type == .hero) {
+                var hero_bitmaps = game_state.hero_bitmaps[high_entity.facing_direction];
 
-            var hero_bitmaps = game_state.hero_bitmaps[high_entity.facing_direction];
-
-            drawBitmap(buffer, &game_state.shadow, pg_x, pg_y, hero_bitmaps.align_x, hero_bitmaps.align_y, c_alpha);
-            drawBitmap(buffer, &hero_bitmaps.torso, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
-            drawBitmap(buffer, &hero_bitmaps.cape, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
-            drawBitmap(buffer, &hero_bitmaps.head, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
+                drawBitmap(buffer, &game_state.shadow, pg_x, pg_y, hero_bitmaps.align_x, hero_bitmaps.align_y, c_alpha);
+                drawBitmap(buffer, &hero_bitmaps.torso, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
+                drawBitmap(buffer, &hero_bitmaps.cape, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
+                drawBitmap(buffer, &hero_bitmaps.head, pg_x, pg_y + z, hero_bitmaps.align_x, hero_bitmaps.align_y, 1.0);
+            } else {
+                drawRectangle(
+                    buffer,
+                    player_origin,
+                    math.add(
+                        player_origin,
+                        math.scale(entity_dimensions, meters_to_pixels),
+                    ),
+                    player_r,
+                    player_g,
+                    player_b,
+                );
+            }
         }
     }
 }

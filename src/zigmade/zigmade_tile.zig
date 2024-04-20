@@ -15,11 +15,11 @@ pub const TileMapPosition = struct {
     // the tile chunk index and the low bits are the tile index in
     // the chunk
     // TODO: Think about what the approach here would be with 3D coordinates
-    abs_tile_x: usize,
-    abs_tile_y: usize,
-    abs_tile_z: usize,
+    abs_tile_x: usize = 0,
+    abs_tile_y: usize = 0,
+    abs_tile_z: usize = 0,
     // NOTE: Offset from tile center
-    offset_: Vec2,
+    offset_: Vec2 = Vec2{},
 };
 
 const TileChunkPosition = struct {
