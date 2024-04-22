@@ -65,7 +65,7 @@ pub inline fn lengthSquared(vec: Vec2) f64 {
     return result;
 }
 
-const Rectangle2 = struct {
+pub const Rectangle2 = struct {
     min: Vec2,
     max: Vec2,
 };
