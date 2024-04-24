@@ -2067,15 +2067,15 @@ pub export fn wWinMain(
 
                             const fps: f32 = 0.0;
                             const mega_cycles_per_frame =
-                                @as(f64, @floatFromInt(cycles_elapsed)) /
-                                @as(f64, @floatFromInt(1000 * 1000));
+                                @as(f32, @floatFromInt(cycles_elapsed)) /
+                                @as(f32, @floatFromInt(1000 * 1000));
 
                             // Trying to print floats with wsprintf does not appear to cause a problem
                             // Including sprintf perhaps not worth it since we can only see messages from
                             // std.debug.print() anyways
                             // Leaving this code here for posterity
                             var fps_buffer = [_]u8{0} ** 255;
-                            var args = [_]f64{ ms_per_frame, fps, mega_cycles_per_frame };
+                            var args = [_]f32{ ms_per_frame, fps, mega_cycles_per_frame };
                             _ = win32.wvsprintfA(
                                 @ptrCast(&fps_buffer),
                                 ",%fms/f, %ff/s, %fmc/f\n",

@@ -3,11 +3,13 @@ const assert = std.debug.assert;
 const game = @import("zigmade.zig");
 const math = @import("zigmade_math.zig");
 const Vec2 = math.Vec2;
+const TILE_CHUNK_SAFE_MARGIN = std.math.maxInt(i32) / 64;
+const TILE_CHUNK_UNINITIALIZED = std.math.maxInt(i32);
 
 // TODO: Replace this with a Vec3 once we get to Vec3
 pub const TileMapDifference = struct {
     dxy: Vec2,
-    dz: f64,
+    dz: f32,
 };
 
 pub const TileMapPosition = struct {
@@ -15,64 +17,105 @@ pub const TileMapPosition = struct {
     // the tile chunk index and the low bits are the tile index in
     // the chunk
     // TODO: Think about what the approach here would be with 3D coordinates
-    abs_tile_x: usize = 0,
-    abs_tile_y: usize = 0,
-    abs_tile_z: usize = 0,
+    abs_tile_x: i32 = 0,
+    abs_tile_y: i32 = 0,
+    abs_tile_z: i32 = 0,
     // NOTE: Offset from tile center
     offset_: Vec2 = Vec2{},
 };
 
 const TileChunkPosition = struct {
-    tile_chunk_x: usize,
-    tile_chunk_y: usize,
-    tile_chunk_z: usize,
-    rel_tile_x: usize,
-    rel_tile_y: usize,
+    tile_chunk_x: i32,
+    tile_chunk_y: i32,
+    tile_chunk_z: i32,
+    rel_tile_x: i32,
+    rel_tile_y: i32,
 };
 
 pub const TileChunk = struct {
+    tile_chunk_x: i32,
+    tile_chunk_y: i32,
+    tile_chunk_z: i32,
     // TODO: Real structure for a tile
     tiles: ?[*]usize = undefined,
+    next_in_hash: ?*TileChunk = null,
 };
 
 pub const TileMap = struct {
-    chunk_shift: usize,
-    chunk_mask: usize,
-    chunk_dim: usize,
-    tile_side_in_meters: f64,
-    // TODO: Real sparseness so anywhere in the world can be represented
-    // without the giant pointer array
-    tile_chunks: ?[*]TileChunk = undefined,
-    tile_chunk_count_x: usize,
-    tile_chunk_count_y: usize,
-    tile_chunk_count_z: usize,
+    chunk_shift: i32,
+    chunk_mask: i32,
+    chunk_dim: i32,
+    tile_side_in_meters: f32,
+    // NOTE: At the moment, this must be a power of two
+    tile_chunk_hash: [4096]TileChunk = undefined,
 };
+
+pub fn initializeTileMap(tile_map: *TileMap, tile_side_in_meters: f32) void {
+    tile_map.chunk_shift = 4;
+    tile_map.chunk_mask = (@as(i32, @intCast(1)) <<
+        @as(u5, @intCast(tile_map.chunk_shift))) - 1;
+    tile_map.chunk_dim = (@as(i32, @intCast(1)) <<
+        @as(u5, @intCast(tile_map.chunk_shift)));
+    tile_map.tile_side_in_meters = tile_side_in_meters;
+
+    for (0..tile_map.tile_chunk_hash.len) |index| {
+        tile_map.tile_chunk_hash[index].tile_chunk_x = TILE_CHUNK_UNINITIALIZED;
+    }
+}
 
 inline fn getTileChunk(
     tile_map: *TileMap,
-    tile_chunk_x: usize,
-    tile_chunk_y: usize,
-    tile_chunk_z: usize,
+    tile_chunk_x: i32,
+    tile_chunk_y: i32,
+    tile_chunk_z: i32,
+    arena: ?*game.MemoryArena,
 ) ?*TileChunk {
     var tile_chunk: ?*TileChunk = null;
 
-    if (tile_chunk_x >= 0 and
-        tile_chunk_x < tile_map.tile_chunk_count_x and
-        tile_chunk_y >= 0 and
-        tile_chunk_y < tile_map.tile_chunk_count_y and
-        tile_chunk_z >= 0 and
-        tile_chunk_z < tile_map.tile_chunk_count_z)
-    {
-        const tile_chunk_index =
-            tile_chunk_z *
-            tile_map.tile_chunk_count_x *
-            tile_map.tile_chunk_count_y +
-            tile_chunk_y *
-            tile_map.tile_chunk_count_x +
-            tile_chunk_x;
+    assert(tile_chunk_x > -TILE_CHUNK_SAFE_MARGIN);
+    assert(tile_chunk_y > -TILE_CHUNK_SAFE_MARGIN);
+    assert(tile_chunk_z > -TILE_CHUNK_SAFE_MARGIN);
+    assert(tile_chunk_x < TILE_CHUNK_SAFE_MARGIN);
+    assert(tile_chunk_y < TILE_CHUNK_SAFE_MARGIN);
+    assert(tile_chunk_z < TILE_CHUNK_SAFE_MARGIN);
 
-        if (tile_map.tile_chunks) |tile_chunks| {
-            tile_chunk = &tile_chunks[tile_chunk_index];
+    // TODO: BETTER HASH FUNCTION
+    const hash_value = 19 * tile_chunk_x + 7 * tile_chunk_y + 3 * tile_chunk_z;
+    const hash_slot = @as(usize, @intCast(hash_value)) & (tile_map.tile_chunk_hash.len - 1);
+    assert(hash_slot < tile_map.tile_chunk_hash.len);
+    tile_chunk = &tile_map.tile_chunk_hash[hash_slot];
+
+    while (tile_chunk) |chunk| : (tile_chunk = tile_chunk.?.next_in_hash) {
+        if ((tile_chunk_x == chunk.tile_chunk_x) and
+            (tile_chunk_y == chunk.tile_chunk_y) and
+            (tile_chunk_z == chunk.tile_chunk_z))
+        {
+            break;
+        }
+
+        if (arena != null and tile_chunk_x != TILE_CHUNK_UNINITIALIZED and chunk.next_in_hash == null) {
+            chunk.next_in_hash = game.pushStruct(arena.?, TileChunk);
+            tile_chunk = chunk.next_in_hash;
+            tile_chunk.?.tile_chunk_x = TILE_CHUNK_UNINITIALIZED;
+        }
+
+        if (arena != null and tile_chunk_x == TILE_CHUNK_UNINITIALIZED) {
+            const tile_count: usize = @intCast(tile_map.chunk_dim * tile_map.chunk_dim);
+            chunk.tile_chunk_x = tile_chunk_x;
+            chunk.tile_chunk_y = tile_chunk_y;
+            chunk.tile_chunk_z = tile_chunk_z;
+            chunk.tiles = game.pushArray(arena.?, tile_count, usize);
+
+            // TODO: Do we always want to initialize?
+            if (chunk.tiles) |tiles| {
+                for (0..tile_count) |tile_index| {
+                    tiles[tile_index] = 1;
+                }
+            }
+
+            chunk.next_in_hash = null;
+
+            break;
         }
     }
 
@@ -82,8 +125,8 @@ inline fn getTileChunk(
 inline fn getTileValueUnchecked(
     tile_map: *TileMap,
     tile_chunk: ?*TileChunk,
-    tile_x: usize,
-    tile_y: usize,
+    tile_x: i32,
+    tile_y: i32,
 ) usize {
     assert(tile_chunk != null);
     assert(tile_x < tile_map.chunk_dim);
@@ -97,9 +140,9 @@ inline fn getTileValueUnchecked(
 
 inline fn getChunkPosition(
     tile_map: *TileMap,
-    abs_tile_x: usize,
-    abs_tile_y: usize,
-    abs_tile_z: usize,
+    abs_tile_x: i32,
+    abs_tile_y: i32,
+    abs_tile_z: i32,
 ) TileChunkPosition {
     var result = std.mem.zeroInit(TileChunkPosition, .{});
 
@@ -206,9 +249,9 @@ pub inline fn isTileMapPointEmpty(
 pub inline fn setTileValue(
     arena: *game.MemoryArena,
     tile_map: *TileMap,
-    abs_tile_x: usize,
-    abs_tile_y: usize,
-    abs_tile_z: usize,
+    abs_tile_x: i32,
+    abs_tile_y: i32,
+    abs_tile_z: i32,
     tile_value: usize,
 ) void {
     const chunk_pos = getChunkPosition(
@@ -223,27 +266,8 @@ pub inline fn setTileValue(
         chunk_pos.tile_chunk_x,
         chunk_pos.tile_chunk_y,
         chunk_pos.tile_chunk_z,
+        arena,
     );
-
-    assert(tile_chunk != null);
-
-    if (tile_chunk) |chunk| {
-        if (chunk.tiles == null) {
-            const tile_count = tile_map.chunk_dim * tile_map.chunk_dim;
-
-            chunk.tiles = game.pushArray(
-                arena,
-                tile_count,
-                usize,
-            );
-
-            if (chunk.tiles) |tiles| {
-                for (0..tile_count) |tile_index| {
-                    tiles[tile_index] = 1;
-                }
-            }
-        }
-    }
 
     setTileChunkValue(
         tile_map,
@@ -257,8 +281,8 @@ pub inline fn setTileValue(
 pub inline fn setTileChunkValue(
     tile_map: *TileMap,
     tile_chunk: ?*TileChunk,
-    test_tile_x: usize,
-    test_tile_y: usize,
+    test_tile_x: i32,
+    test_tile_y: i32,
     tile_value: usize,
 ) void {
     if (tile_chunk) |chunk| {
@@ -277,15 +301,15 @@ pub inline fn setTileChunkValue(
 inline fn setTileValueUnchecked(
     tile_map: *TileMap,
     tile_chunk: ?*TileChunk,
-    tile_x: usize,
-    tile_y: usize,
+    tile_x: i32,
+    tile_y: i32,
     tile_value: usize,
 ) void {
     assert(tile_chunk != null);
     assert(tile_x < tile_map.chunk_dim);
     assert(tile_y < tile_map.chunk_dim);
 
-    const tile_index = tile_y * tile_map.chunk_dim + tile_x;
+    const tile_index: usize = @intCast(tile_y * tile_map.chunk_dim + tile_x);
     var tiles = tile_chunk.?.tiles.?;
     tiles[tile_index] = tile_value;
 }
@@ -298,14 +322,14 @@ pub inline fn subtract(
     var result: TileMapDifference = undefined;
 
     const d_tile_xy = Vec2{
-        .x = @as(f64, @floatFromInt(a.abs_tile_x)) -
-            @as(f64, @floatFromInt(b.abs_tile_x)),
-        .y = @as(f64, @floatFromInt(a.abs_tile_y)) -
-            @as(f64, @floatFromInt(b.abs_tile_y)),
+        .x = @as(f32, @floatFromInt(a.abs_tile_x)) -
+            @as(f32, @floatFromInt(b.abs_tile_x)),
+        .y = @as(f32, @floatFromInt(a.abs_tile_y)) -
+            @as(f32, @floatFromInt(b.abs_tile_y)),
     };
 
-    const d_tile_z = @as(f64, @floatFromInt(a.abs_tile_z)) -
-        @as(f64, @floatFromInt(b.abs_tile_z));
+    const d_tile_z = @as(f32, @floatFromInt(a.abs_tile_z)) -
+        @as(f32, @floatFromInt(b.abs_tile_z));
 
     result.dxy.x = tile_map.tile_side_in_meters * d_tile_xy.x +
         (a.offset_.x - b.offset_.x);
@@ -335,8 +359,8 @@ pub inline fn centeredTilePoint(
 
 inline fn recanonicalizeCoordinate(
     tile_map: *TileMap,
-    tile: *usize,
-    tile_rel: *f64,
+    tile: *i32,
+    tile_rel: *f32,
 ) void {
     // TODO: Don't use the divide/multiply method for recanonicalizing
     // because this can round back onto the previous tile
@@ -344,10 +368,9 @@ inline fn recanonicalizeCoordinate(
 
     // NOTE: TileMap is assumed to be toroidal topology, if you step off
     // one end you wind up on the other
-    const offset: i64 = @intFromFloat(@round(tile_rel.* / tile_map.tile_side_in_meters));
-
-    tile.* +%= @as(usize, @bitCast(offset));
-    tile_rel.* -= @as(f64, @floatFromInt(offset)) * tile_map.tile_side_in_meters;
+    const offset: i32 = @intFromFloat(@round(tile_rel.* / tile_map.tile_side_in_meters));
+    tile.* +%= @as(i32, @bitCast(offset));
+    tile_rel.* -= @as(f32, @floatFromInt(offset)) * tile_map.tile_side_in_meters;
 
     assert(tile_rel.* > -0.5 * tile_map.tile_side_in_meters);
     // TODO: Fix floating point math so this can be exact

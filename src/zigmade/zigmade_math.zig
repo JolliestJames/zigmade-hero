@@ -1,17 +1,17 @@
 // TODO: Should this be extern union instead?
 //pub const vec2 = extern union {
-//    array: [2]f64,
+//    array: [2]f32,
 //    map: extern struct {
-//        x: f64,
-//        y: f64,
+//        x: f32,
+//        y: f32,
 //    },
 //};
 pub const Vec2 = struct {
-    x: f64 = 0.0,
-    y: f64 = 0.0,
+    x: f32 = 0.0,
+    y: f32 = 0.0,
 };
 
-pub inline fn scale(v: Vec2, f: f64) Vec2 {
+pub inline fn scale(v: Vec2, f: f32) Vec2 {
     var result: Vec2 = undefined;
 
     result.x = v.x * f;
@@ -47,19 +47,19 @@ pub inline fn sub(v1: Vec2, v2: Vec2) Vec2 {
     return result;
 }
 
-pub inline fn square(f: f64) f64 {
+pub inline fn square(f: f32) f32 {
     const result = f * f;
 
     return result;
 }
 
-pub inline fn inner(v1: Vec2, v2: Vec2) f64 {
+pub inline fn inner(v1: Vec2, v2: Vec2) f32 {
     const result = v1.x * v2.x + v1.y * v2.y;
 
     return result;
 }
 
-pub inline fn lengthSquared(vec: Vec2) f64 {
+pub inline fn lengthSquared(vec: Vec2) f32 {
     const result = inner(vec, vec);
 
     return result;

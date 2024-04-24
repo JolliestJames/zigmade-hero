@@ -19,21 +19,21 @@ const HeroBitmaps = struct {
 const HighEntity = struct {
     pos: Vec2 = Vec2{}, // NOTE: Relative to the camera!
     d_pos: Vec2 = Vec2{},
-    abs_tile_z: usize = 0,
+    abs_tile_z: u32 = 0,
     facing_direction: usize = 0,
-    z: f64 = 0,
-    dz: f64 = 0,
+    z: f32 = 0,
+    dz: f32 = 0,
     low_entity_index: usize = 0,
 };
 
 const LowEntity = struct {
     type: EntityType = .none,
     pos: tile.TileMapPosition = tile.TileMapPosition{},
-    width: f64 = 0,
-    height: f64 = 0,
+    width: f32 = 0,
+    height: f32 = 0,
     // NOTE: This is for "stairs"
     collides: bool = false,
-    d_abs_tile_z: i64 = 0,
+    d_abs_tile_z: i32 = 0,
     high_entity_index: usize = 0,
 };
 
@@ -157,10 +157,10 @@ fn drawRectangle(
     g: f32,
     b: f32,
 ) void {
-    var min_x: i64 = @intFromFloat(@round(min.x));
-    var min_y: i64 = @intFromFloat(@round(min.y));
-    var max_x: i64 = @intFromFloat(@round(max.x));
-    var max_y: i64 = @intFromFloat(@round(max.y));
+    var min_x: i32 = @intFromFloat(@round(min.x));
+    var min_y: i32 = @intFromFloat(@round(min.y));
+    var max_x: i32 = @intFromFloat(@round(max.x));
+    var max_y: i32 = @intFromFloat(@round(max.y));
 
     if (min_x < 0) min_x = 0;
     if (min_y < 0) min_y = 0;
@@ -175,9 +175,9 @@ fn drawRectangle(
         (@as(u32, (@intFromFloat(@round(b * 255.0)))) << 0);
 
     var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
-        (@as(usize, @intCast(min_x)) *
-        @as(usize, @intCast(buffer.bytes_per_pixel))) +
-        @as(usize, @bitCast(min_y *% buffer.pitch));
+        (@as(u32, @intCast(min_x)) *
+        @as(u32, @intCast(buffer.bytes_per_pixel))) +
+        @as(u32, @bitCast(min_y *% buffer.pitch));
 
     for (@intCast(min_y)..@intCast(max_y)) |_| {
         var pixel: [*]u32 = @alignCast(@ptrCast(row));
@@ -194,28 +194,28 @@ fn drawRectangle(
 fn drawBitmap(
     buffer: *platform.GameOffscreenBuffer,
     bitmap: *Bitmap,
-    unaligned_real_x: f64,
-    unaligned_real_y: f64,
-    align_x: i64,
-    align_y: i64,
-    c_alpha: f64,
+    unaligned_real_x: f32,
+    unaligned_real_y: f32,
+    align_x: i32,
+    align_y: i32,
+    c_alpha: f32,
 ) void {
-    const real_x = unaligned_real_x - @as(f64, @floatFromInt(align_x));
-    const real_y = unaligned_real_y - @as(f64, @floatFromInt(align_y));
-    var min_x: i64 = @intFromFloat(@round(real_x));
-    var min_y: i64 = @intFromFloat(@round(real_y));
-    var max_x: i64 = min_x + @as(i64, @intCast(bitmap.width));
-    var max_y: i64 = min_y + @as(i64, @intCast(bitmap.height));
-    //var max_x: i64 = @intFromFloat(@round(real_x + @as(f64, @floatFromInt(bitmap.width))));
-    //var max_y: i64 = @intFromFloat(@round(real_y + @as(f64, @floatFromInt(bitmap.height))));
+    const real_x = unaligned_real_x - @as(f32, @floatFromInt(align_x));
+    const real_y = unaligned_real_y - @as(f32, @floatFromInt(align_y));
+    var min_x: i32 = @intFromFloat(@round(real_x));
+    var min_y: i32 = @intFromFloat(@round(real_y));
+    var max_x: i32 = min_x + @as(i32, @intCast(bitmap.width));
+    var max_y: i32 = min_y + @as(i32, @intCast(bitmap.height));
+    //var max_x: i32 = @intFromFloat(@round(real_x + @as(f32, @floatFromInt(bitmap.width))));
+    //var max_y: i32 = @intFromFloat(@round(real_y + @as(f32, @floatFromInt(bitmap.height))));
 
-    var source_offset_x: i64 = 0;
+    var source_offset_x: i32 = 0;
     if (min_x < 0) {
         source_offset_x = -min_x;
         min_x = 0;
     }
 
-    var source_offset_y: i64 = 0;
+    var source_offset_y: i32 = 0;
     if (min_y < 0) {
         source_offset_y = -min_y;
         min_y = 0;
@@ -232,9 +232,9 @@ fn drawBitmap(
         @as(usize, @intCast(source_offset_x));
 
     var dest_row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
-        (@as(usize, @intCast(min_x)) *
-        @as(usize, @intCast(buffer.bytes_per_pixel))) +
-        @as(usize, @bitCast(min_y *% buffer.pitch));
+        (@as(u32, @intCast(min_x)) *
+        @as(u32, @intCast(buffer.bytes_per_pixel))) +
+        @as(u32, @bitCast(min_y *% buffer.pitch));
 
     for (@intCast(min_y)..@intCast(max_y)) |_| {
         var dest: [*]u32 = @alignCast(@ptrCast(dest_row));
@@ -359,7 +359,7 @@ fn pushSize(
     return result;
 }
 
-fn pushStruct(
+pub fn pushStruct(
     arena: *MemoryArena,
     comptime T: type,
 ) *T {
@@ -377,14 +377,14 @@ pub fn pushArray(
 }
 
 fn testWall(
-    wall: f64,
-    rel_x: f64,
-    rel_y: f64,
-    player_delta_x: f64,
-    player_delta_y: f64,
-    t_min: *f64,
-    min_y: f64,
-    max_y: f64,
+    wall: f32,
+    rel_x: f32,
+    rel_y: f32,
+    player_delta_x: f32,
+    player_delta_y: f32,
+    t_min: *f32,
+    min_y: f32,
+    max_y: f32,
 ) bool {
     var hit = false;
     const t_epsilon = 0.001;
@@ -407,7 +407,7 @@ fn testWall(
 fn movePlayer(
     game_state: *GameState,
     entity: Entity,
-    dt: f64,
+    dt: f32,
     dd_pos: Vec2,
 ) void {
     const high = entity.high.?;
@@ -443,7 +443,7 @@ fn movePlayer(
     );
 
     for (0..4) |_| {
-        var t_min: f64 = 1.0;
+        var t_min: f32 = 1.0;
         var wall_normal = Vec2{};
         var hit_high_index: usize = 0;
         const desired_position = math.add(high.pos, player_delta);
@@ -585,7 +585,7 @@ inline fn makeEntityHighFrequency(
             const diff = tile.subtract(tile_map, &low.pos, &game_state.camera_p);
             high.pos = diff.dxy;
             high.d_pos = Vec2{};
-            high.abs_tile_z = low.pos.abs_tile_z;
+            high.abs_tile_z = @intCast(low.pos.abs_tile_z);
             high.facing_direction = 0;
             high.low_entity_index = low_index;
 
@@ -655,9 +655,9 @@ fn addLowEntity(game_state: *GameState, entity_type: EntityType) usize {
 
 fn addWall(
     game_state: *GameState,
-    abs_tile_x: usize,
-    abs_tile_y: usize,
-    abs_tile_z: usize,
+    abs_tile_x: i32,
+    abs_tile_y: i32,
+    abs_tile_z: i32,
 ) usize {
     const entity_index = addLowEntity(game_state, .wall);
     const entity = getLowEntity(game_state, entity_index);
@@ -676,8 +676,7 @@ fn addPlayer(game_state: *GameState) usize {
     const entity_index = addLowEntity(game_state, .hero);
     const entity = getLowEntity(game_state, entity_index);
 
-    entity.pos.abs_tile_x = 1;
-    entity.pos.abs_tile_y = 3;
+    entity.pos = game_state.camera_p;
     entity.height = 0.5;
     entity.width = 1.0;
     entity.collides = true;
@@ -796,36 +795,20 @@ pub export fn updateAndRender(
         var world = game_state.world.?;
         world.tile_map = pushStruct(&game_state.world_arena, tile.TileMap);
 
-        var tile_map = world.tile_map;
+        const tile_map = world.tile_map;
 
-        tile_map.chunk_shift = 4;
-        tile_map.chunk_mask = (@as(u32, @intCast(1)) <<
-            @as(u5, @intCast(tile_map.chunk_shift))) - 1;
-        tile_map.chunk_dim = (@as(u32, @intCast(1)) <<
-            @as(u5, @intCast(tile_map.chunk_shift)));
-        tile_map.tile_chunk_count_x = 128;
-        tile_map.tile_chunk_count_y = 128;
-        tile_map.tile_chunk_count_z = 2;
-
-        tile_map.tile_chunks = pushArray(
-            &game_state.world_arena,
-            tile_map.tile_chunk_count_x *
-                tile_map.tile_chunk_count_y *
-                tile_map.tile_chunk_count_z,
-            tile.TileChunk,
-        );
-
-        tile_map.tile_side_in_meters = 1.4;
+        tile.initializeTileMap(tile_map, 1.4);
 
         const tiles_per_width = 17;
         const tiles_per_height = 9;
 
         // TODO: Waiting for full sparseness
-        //var screen_x: usize = std.math.maxInt(i32) / 2;
-        //var screen_y: usize = std.math.maxInt(i32) / 2;
-        var screen_x: usize = 0;
-        var screen_y: usize = 0;
-        var abs_tile_z: usize = 0;
+        const screen_base_x: i32 = 0;
+        const screen_base_y: i32 = 0;
+        const screen_base_z: i32 = 0;
+        var screen_x: i32 = screen_base_x;
+        var screen_y: i32 = screen_base_y;
+        var abs_tile_z: i32 = screen_base_z;
 
         // TODO: Replace with real world generation
         var door_left = false;
@@ -849,7 +832,7 @@ pub export fn updateAndRender(
             if (random_choice == 2) {
                 created_z_door = true;
 
-                if (abs_tile_z == 0) {
+                if (abs_tile_z == screen_base_z) {
                     door_up = true;
                 } else {
                     door_down = true;
@@ -862,8 +845,8 @@ pub export fn updateAndRender(
 
             for (0..tiles_per_height) |tile_y| {
                 for (0..tiles_per_width) |tile_x| {
-                    const abs_tile_x = screen_x * tiles_per_width + tile_x;
-                    const abs_tile_y = screen_y * tiles_per_height + tile_y;
+                    const abs_tile_x = screen_x * tiles_per_width + @as(i32, @intCast(tile_x));
+                    const abs_tile_y = screen_y * tiles_per_height + @as(i32, @intCast(tile_y));
 
                     var tile_value: usize = 1;
 
@@ -920,10 +903,10 @@ pub export fn updateAndRender(
             door_top = false;
 
             if (random_choice == 2) {
-                if (abs_tile_z == 0)
-                    abs_tile_z = 1
+                if (abs_tile_z == screen_base_z)
+                    abs_tile_z = screen_base_z + 1
                 else
-                    abs_tile_z = 0;
+                    abs_tile_z = screen_base_z;
             } else if (random_choice == 1) {
                 screen_x += 1;
             } else {
@@ -932,8 +915,9 @@ pub export fn updateAndRender(
         }
 
         var new_camera_p = tile.TileMapPosition{};
-        new_camera_p.abs_tile_x = 17 / 2;
-        new_camera_p.abs_tile_y = 9 / 2;
+        new_camera_p.abs_tile_x = screen_base_x * tiles_per_width + 17 / 2;
+        new_camera_p.abs_tile_y = screen_base_y * tiles_per_height + 9 / 2;
+        new_camera_p.abs_tile_z = screen_base_z;
         setCamera(game_state, &new_camera_p);
 
         memory.is_initialized = true;
@@ -943,8 +927,8 @@ pub export fn updateAndRender(
     const tile_map = world.tile_map;
 
     const tile_side_in_pixels: i32 = 60;
-    const meters_to_pixels: f64 =
-        @as(f64, @floatFromInt(tile_side_in_pixels)) /
+    const meters_to_pixels: f32 =
+        @as(f32, @floatFromInt(tile_side_in_pixels)) /
         tile_map.tile_side_in_meters;
 
     const lower_left_x: f32 = @floatFromInt(@divFloor(-tile_side_in_pixels, 2));

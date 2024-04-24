@@ -19,7 +19,7 @@ pub fn findLeastSigSetBit(value: u32) BitScanResult {
     return result;
 }
 
-pub fn signOf(value: i64) i64 {
+pub fn signOf(value: i32) i32 {
     var result = std.math.sign(value);
 
     if (result == 0) result = 1;
