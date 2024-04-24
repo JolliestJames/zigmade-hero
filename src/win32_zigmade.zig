@@ -1452,7 +1452,7 @@ pub export fn wWinMain(
                 null;
 
             var game_memory = platform.GameMemory{
-                .permanent_storage_size = platform.Megabytes(64),
+                .permanent_storage_size = platform.Megabytes(256),
                 .transient_storage_size = platform.Gigabytes(1),
                 .debugPlatformReadEntireFile = debugPlatformReadEntireFile,
                 .debugPlatformWriteEntireFile = debugPlatformWriteEntireFile,

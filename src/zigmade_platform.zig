@@ -123,10 +123,10 @@ const debugPlatformWriteEntireFile = *const fn (
 
 pub const GameMemory = struct {
     is_initialized: bool = false,
-    permanent_storage_size: usize = 0,
+    permanent_storage_size: u32 = 0,
     // NOTE: Required to be cleared to zero at startup
     permanent_storage: [*]u8 = undefined,
-    transient_storage_size: usize = 0,
+    transient_storage_size: u32 = 0,
     transient_storage: [*]u8 = undefined,
     debugPlatformReadEntireFile: debugPlatformReadEntireFile,
     debugPlatformFreeFileMemory: debugPlatformFreeFileMemory,

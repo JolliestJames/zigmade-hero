@@ -2,7 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const rotl = std.math.rotl;
 const platform = @import("zigmade_platform");
-const tile = @import("zigmade_tile.zig");
+const world = @import("zigmade_world.zig");
 const math = @import("zigmade_math.zig");
 const Vec2 = math.Vec2;
 const intrinsics = @import("zigmade_intrinsics.zig");
@@ -20,21 +20,21 @@ const HighEntity = struct {
     pos: Vec2 = Vec2{}, // NOTE: Relative to the camera!
     d_pos: Vec2 = Vec2{},
     abs_tile_z: u32 = 0,
-    facing_direction: usize = 0,
+    facing_direction: u32 = 0,
     z: f32 = 0,
     dz: f32 = 0,
-    low_entity_index: usize = 0,
+    low_entity_index: u32 = 0,
 };
 
-const LowEntity = struct {
+pub const LowEntity = struct {
     type: EntityType = .none,
-    pos: tile.TileMapPosition = tile.TileMapPosition{},
+    pos: world.WorldPosition = world.WorldPosition{},
     width: f32 = 0,
     height: f32 = 0,
     // NOTE: This is for "stairs"
     collides: bool = false,
     d_abs_tile_z: i32 = 0,
-    high_entity_index: usize = 0,
+    high_entity_index: u32 = 0,
 };
 
 const EntityType = enum {
@@ -44,42 +44,36 @@ const EntityType = enum {
 };
 
 const Entity = struct {
-    low_index: usize = 0,
+    low_index: u32 = 0,
     low: ?*LowEntity = null,
     high: ?*HighEntity = null,
 };
 
 const GameState = struct {
-    world: ?*World = null,
+    world: ?*world.World = null,
     world_arena: MemoryArena,
-
     // TODO: Should we allow split-screen?
-    camera_entity_index: usize,
-    camera_p: tile.TileMapPosition,
-
-    low_entity_count: usize = 0,
-    low_entities: [4096]LowEntity,
-    high_entity_count: usize = 0,
+    camera_entity_index: u32,
+    camera_p: world.WorldPosition,
+    low_entity_count: u32 = 0,
+    low_entities: [100000]LowEntity,
+    high_entity_count: u32 = 0,
     high_entities_: [256]HighEntity,
-    player_controller_index: [5]usize,
+    player_controller_index: [5]u32,
     backdrop: Bitmap,
     shadow: Bitmap,
     hero_bitmaps: [4]HeroBitmaps,
 };
 
-const World = struct {
-    tile_map: *tile.TileMap,
-};
-
 pub const MemoryArena = struct {
-    size: usize,
+    size: u32,
     base: [*]u8,
-    used: usize,
+    used: u32,
 };
 
 const Bitmap = struct {
-    width: usize,
-    height: usize,
+    width: u32,
+    height: u32,
     content: extern union {
         bytes: [*]u8,
         pixels: [*]u32,
@@ -187,7 +181,7 @@ fn drawRectangle(
             pixel += 1;
         }
 
-        row += @as(usize, @intCast(buffer.pitch));
+        row += @as(u32, @intCast(buffer.pitch));
     }
 }
 
@@ -341,7 +335,7 @@ fn debugLoadBmp(
 
 fn initializeArena(
     arena: *MemoryArena,
-    size: usize,
+    size: u32,
     base: [*]u8,
 ) void {
     arena.size = size;
@@ -351,7 +345,7 @@ fn initializeArena(
 
 fn pushSize(
     arena: *MemoryArena,
-    size: usize,
+    size: u32,
 ) [*]u8 {
     assert((arena.used + size) <= arena.size);
     const result = arena.base + arena.used;
@@ -413,7 +407,7 @@ fn movePlayer(
     const high = entity.high.?;
     const low = entity.low.?;
 
-    const tile_map = game_state.world.?.tile_map;
+    const game_world = game_state.world.?;
 
     var acceleration = dd_pos;
 
@@ -533,12 +527,12 @@ fn movePlayer(
         }
     }
 
-    low.pos = tile.mapIntoTileSpace(tile_map, game_state.camera_p, high.pos);
+    low.pos = world.mapIntoTileSpace(game_world, game_state.camera_p, high.pos);
 }
 
 inline fn getLowEntity(
     game_state: *GameState,
-    index: usize,
+    index: u32,
 ) *LowEntity {
     var result: *LowEntity = undefined;
 
@@ -551,7 +545,7 @@ inline fn getLowEntity(
 
 inline fn getHighEntity(
     game_state: *GameState,
-    low_index: usize,
+    low_index: u32,
 ) Entity {
     var result = Entity{};
 
@@ -567,10 +561,10 @@ inline fn getHighEntity(
 
 inline fn makeEntityHighFrequency(
     game_state: *GameState,
-    low_index: usize,
+    low_index: u32,
 ) *HighEntity {
     var high: *HighEntity = undefined;
-    const tile_map = game_state.world.?.tile_map;
+    const game_world = game_state.world.?;
     var low = &game_state.low_entities[low_index];
 
     if (low.high_entity_index > 0) {
@@ -582,7 +576,7 @@ inline fn makeEntityHighFrequency(
             high = &game_state.high_entities_[high_index];
 
             // NOTE: Map entity into camera space
-            const diff = tile.subtract(tile_map, &low.pos, &game_state.camera_p);
+            const diff = world.subtract(game_world, &low.pos, &game_state.camera_p);
             high.pos = diff.dxy;
             high.d_pos = Vec2{};
             high.abs_tile_z = @intCast(low.pos.abs_tile_z);
@@ -601,7 +595,7 @@ inline fn makeEntityHighFrequency(
 
 inline fn makeEntityLowFrequency(
     game_state: *GameState,
-    low_index: usize,
+    low_index: u32,
 ) void {
     const low = &game_state.low_entities[low_index];
     const high_index = low.high_entity_index;
@@ -625,7 +619,7 @@ inline fn makeEntityLowFrequency(
 inline fn offsetAndCheckFrequencyByArea(
     game_state: *GameState,
     offset: Vec2,
-    camera_bounds: math.Rectangle2,
+    high_frequency_bounds: math.Rectangle2,
 ) void {
     var entity_index: usize = 1;
 
@@ -633,7 +627,7 @@ inline fn offsetAndCheckFrequencyByArea(
         var high = &game_state.high_entities_[entity_index];
         high.pos = math.add(high.pos, offset);
 
-        if (math.isInRectangle(camera_bounds, high.pos)) {
+        if (math.isInRectangle(high_frequency_bounds, high.pos)) {
             entity_index += 1;
         } else {
             makeEntityLowFrequency(game_state, high.low_entity_index);
@@ -641,7 +635,7 @@ inline fn offsetAndCheckFrequencyByArea(
     }
 }
 
-fn addLowEntity(game_state: *GameState, entity_type: EntityType) usize {
+fn addLowEntity(game_state: *GameState, entity_type: EntityType) u32 {
     assert(game_state.low_entity_count < game_state.low_entities.len);
 
     const entity_index = game_state.low_entity_count;
@@ -655,24 +649,24 @@ fn addLowEntity(game_state: *GameState, entity_type: EntityType) usize {
 
 fn addWall(
     game_state: *GameState,
-    abs_tile_x: i32,
-    abs_tile_y: i32,
-    abs_tile_z: i32,
+    abs_tile_x: u32,
+    abs_tile_y: u32,
+    abs_tile_z: u32,
 ) usize {
     const entity_index = addLowEntity(game_state, .wall);
     const entity = getLowEntity(game_state, entity_index);
 
-    entity.pos.abs_tile_x = abs_tile_x;
-    entity.pos.abs_tile_y = abs_tile_y;
-    entity.pos.abs_tile_z = abs_tile_z;
-    entity.height = game_state.world.?.tile_map.tile_side_in_meters;
+    entity.pos.abs_tile_x = @intCast(abs_tile_x);
+    entity.pos.abs_tile_y = @intCast(abs_tile_y);
+    entity.pos.abs_tile_z = @intCast(abs_tile_z);
+    entity.height = game_state.world.?.tile_side_in_meters;
     entity.width = entity.height;
     entity.collides = true;
 
     return entity_index;
 }
 
-fn addPlayer(game_state: *GameState) usize {
+fn addPlayer(game_state: *GameState) u32 {
     const entity_index = addLowEntity(game_state, .hero);
     const entity = getLowEntity(game_state, entity_index);
 
@@ -690,10 +684,10 @@ fn addPlayer(game_state: *GameState) usize {
 
 fn setCamera(
     game_state: *GameState,
-    new_camera_p: *tile.TileMapPosition,
+    new_camera_p: *world.WorldPosition,
 ) void {
-    const tile_map = game_state.world.?.tile_map;
-    const d_camera_p = tile.subtract(tile_map, new_camera_p, &game_state.camera_p);
+    const game_world = game_state.world.?;
+    const d_camera_p = world.subtract(game_world, new_camera_p, &game_state.camera_p);
     game_state.camera_p = new_camera_p.*;
 
     // TODO: Dim is chosen randomly
@@ -703,13 +697,14 @@ fn setCamera(
         Vec2{},
         math.scale(
             Vec2{ .x = tile_span_x, .y = tile_span_y },
-            tile_map.tile_side_in_meters,
+            game_world.tile_side_in_meters,
         ),
     );
 
     const entity_offset_for_frame = math.negate(d_camera_p.dxy);
     offsetAndCheckFrequencyByArea(game_state, entity_offset_for_frame, camera_bounds);
 
+    // TODO: This needs to be accelerated
     const min_tile_x = new_camera_p.abs_tile_x -% tile_span_x / 2;
     const max_tile_x = new_camera_p.abs_tile_x +% tile_span_x / 2;
     const min_tile_y = new_camera_p.abs_tile_y -% tile_span_y / 2;
@@ -725,7 +720,7 @@ fn setCamera(
                 low.pos.abs_tile_y >= min_tile_y and
                 low.pos.abs_tile_y <= max_tile_y)
             {
-                _ = makeEntityHighFrequency(game_state, entity_index);
+                _ = makeEntityHighFrequency(game_state, @intCast(entity_index));
             }
         }
     }
@@ -791,24 +786,21 @@ pub export fn updateAndRender(
             memory.permanent_storage + @sizeOf(GameState),
         );
 
-        game_state.world = pushStruct(&game_state.world_arena, World);
-        var world = game_state.world.?;
-        world.tile_map = pushStruct(&game_state.world_arena, tile.TileMap);
+        game_state.world = pushStruct(&game_state.world_arena, world.World);
+        const game_world = game_state.world.?;
 
-        const tile_map = world.tile_map;
-
-        tile.initializeTileMap(tile_map, 1.4);
+        world.initializeWorld(game_world, 1.4);
 
         const tiles_per_width = 17;
         const tiles_per_height = 9;
 
         // TODO: Waiting for full sparseness
-        const screen_base_x: i32 = 0;
-        const screen_base_y: i32 = 0;
-        const screen_base_z: i32 = 0;
-        var screen_x: i32 = screen_base_x;
-        var screen_y: i32 = screen_base_y;
-        var abs_tile_z: i32 = screen_base_z;
+        const screen_base_x: u32 = 0;
+        const screen_base_y: u32 = 0;
+        const screen_base_z: u32 = 0;
+        var screen_x: u32 = screen_base_x;
+        var screen_y: u32 = screen_base_y;
+        var abs_tile_z: u32 = screen_base_z;
 
         // TODO: Replace with real world generation
         var door_left = false;
@@ -845,10 +837,10 @@ pub export fn updateAndRender(
 
             for (0..tiles_per_height) |tile_y| {
                 for (0..tiles_per_width) |tile_x| {
-                    const abs_tile_x = screen_x * tiles_per_width + @as(i32, @intCast(tile_x));
-                    const abs_tile_y = screen_y * tiles_per_height + @as(i32, @intCast(tile_y));
+                    const abs_tile_x = screen_x * tiles_per_width + @as(u32, @intCast(tile_x));
+                    const abs_tile_y = screen_y * tiles_per_height + @as(u32, @intCast(tile_y));
 
-                    var tile_value: usize = 1;
+                    var tile_value: u32 = 1;
 
                     if (tile_x == 0 and (!door_left or (tile_y != tiles_per_height / 2))) {
                         tile_value = 2;
@@ -879,8 +871,6 @@ pub export fn updateAndRender(
                             tile_value = 4;
                         }
                     }
-
-                    tile.setTileValue(&game_state.world_arena, tile_map, abs_tile_x, abs_tile_y, abs_tile_z, tile_value);
 
                     if (tile_value == 2) {
                         _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
@@ -914,7 +904,12 @@ pub export fn updateAndRender(
             }
         }
 
-        var new_camera_p = tile.TileMapPosition{};
+        //while (game_state.low_entity_count < game_state.low_entities.len - 16) {
+        //    const coordinate: u32 = @intCast(1024 + game_state.low_entity_count);
+        //    _ = addWall(game_state, coordinate, coordinate, coordinate);
+        //}
+
+        var new_camera_p = world.WorldPosition{};
         new_camera_p.abs_tile_x = screen_base_x * tiles_per_width + 17 / 2;
         new_camera_p.abs_tile_y = screen_base_y * tiles_per_height + 9 / 2;
         new_camera_p.abs_tile_z = screen_base_z;
@@ -923,13 +918,12 @@ pub export fn updateAndRender(
         memory.is_initialized = true;
     }
 
-    const world = game_state.world.?;
-    const tile_map = world.tile_map;
+    const game_world = game_state.world.?;
 
     const tile_side_in_pixels: i32 = 60;
     const meters_to_pixels: f32 =
         @as(f32, @floatFromInt(tile_side_in_pixels)) /
-        tile_map.tile_side_in_meters;
+        game_world.tile_side_in_meters;
 
     const lower_left_x: f32 = @floatFromInt(@divFloor(-tile_side_in_pixels, 2));
     _ = lower_left_x;
@@ -1002,36 +996,38 @@ pub export fn updateAndRender(
 
         new_camera_p.abs_tile_z = low.pos.abs_tile_z;
 
-        if (true) {
-            if (high.pos.x > (9.0 * tile_map.tile_side_in_meters)) {
+        if (false) {
+            if (high.pos.x > (9.0 * game_world.tile_side_in_meters)) {
                 new_camera_p.abs_tile_x +%= 17;
             }
 
-            if (high.pos.x < -(9.0 * tile_map.tile_side_in_meters)) {
+            if (high.pos.x < -(9.0 * game_world.tile_side_in_meters)) {
                 new_camera_p.abs_tile_x -%= 17;
             }
 
-            if (high.pos.y > (5.0 * tile_map.tile_side_in_meters)) {
+            if (high.pos.y > (5.0 * game_world.tile_side_in_meters)) {
                 new_camera_p.abs_tile_y +%= 9;
             }
 
-            if (high.pos.y < -(5.0 * tile_map.tile_side_in_meters)) {
+            if (high.pos.y < -(5.0 * game_world.tile_side_in_meters)) {
                 new_camera_p.abs_tile_y -%= 9;
             }
         } else {
-            if (high.pos.x > (1.0 * tile_map.tile_side_in_meters)) {
+            new_camera_p = camera_following_entity.low.?.pos;
+
+            if (high.pos.x > (1.0 * game_world.tile_side_in_meters)) {
                 new_camera_p.abs_tile_x +%= 1;
             }
 
-            if (high.pos.x < -(1.0 * tile_map.tile_side_in_meters)) {
+            if (high.pos.x < -(1.0 * game_world.tile_side_in_meters)) {
                 new_camera_p.abs_tile_x -%= 1;
             }
 
-            if (high.pos.y > (1.0 * tile_map.tile_side_in_meters)) {
+            if (high.pos.y > (1.0 * game_world.tile_side_in_meters)) {
                 new_camera_p.abs_tile_y +%= 1;
             }
 
-            if (high.pos.y < -(1.0 * tile_map.tile_side_in_meters)) {
+            if (high.pos.y < -(1.0 * game_world.tile_side_in_meters)) {
                 new_camera_p.abs_tile_y -%= 1;
             }
         }
@@ -1067,8 +1063,8 @@ pub export fn updateAndRender(
                         rel_row,
                 ));
 
-                const tile_id = tile.getTileValue(
-                    tile_map,
+                const tile_id = world.getTileValue(
+                    game_world,
                     column,
                     row,
                     game_state.camera_p.abs_tile_z,
