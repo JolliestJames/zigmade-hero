@@ -5,6 +5,7 @@ const math = @import("zigmade_math.zig");
 const Vec2 = math.Vec2;
 const TILE_CHUNK_SAFE_MARGIN = std.math.maxInt(i32) / 64;
 const TILE_CHUNK_UNINITIALIZED = std.math.maxInt(i32);
+const TILES_PER_CHUNK = 16.0;
 
 // TODO: Replace this with a Vec3 once we get to Vec3
 pub const WorldDifference = struct {
@@ -16,16 +17,10 @@ pub const WorldPosition = struct {
     // TODO: How can we get rid of abs_tile_* here,
     // and still allow references to entities to be able to figure out
     // where they are/which world chunk they are in?
-    //
-    // NOTE: These are fixed point tile locations. The high bits are
-    // the tile chunk index and the low bits are the tile index in
-    // the chunk
-    //
-    // TODO: Think about what the approach here would be with 3D coordinates
-    abs_tile_x: i32 = 0,
-    abs_tile_y: i32 = 0,
-    abs_tile_z: i32 = 0,
-    // NOTE: Offset from tile center
+    chunk_x: i32 = 0,
+    chunk_y: i32 = 0,
+    chunk_z: i32 = 0,
+    // NOTE: Offset from chunk center
     offset_: Vec2 = Vec2{},
 };
 
@@ -40,53 +35,34 @@ pub const WorldChunk = struct {
     chunk_x: i32,
     chunk_y: i32,
     chunk_z: i32,
+    // TODO: Profile this to determine if a pointer would be better here
     first_block: WorldEntityBlock,
     next_in_hash: ?*WorldChunk = null,
 };
 
 pub const World = struct {
-    chunk_shift: i32,
-    chunk_mask: i32,
-    chunk_dim: i32,
     tile_side_in_meters: f32,
+    chunk_side_in_meters: f32,
     // TODO: tile_chunk_hash should probably switch to pointers if
     // tile entity blocks continue to be store en masse directly
     // inside the tile chunk
     // NOTE: At the moment, this must be a power of two
     chunk_hash: [4096]WorldChunk = undefined,
+    first_free: ?*WorldEntityBlock = null,
 };
 
-//pub fn getChunkPositionFor(
-//    world: *World,
-//    abs_tile_x: u32,
-//    abs_tile_y: u32,
-//    abs_tile_z: u32,
-//) WorldPosition {
-//    var result = WorldChunk{};
-//
-//    result.chunk_x = abs_tile_x >> world.chunk_shift;
-//    result.chunk_y = abs_tile_y >> world.chunk_shift;
-//    result.chunk_z = abs_tile_z;
-//    result.rel_tile_x = abs_tile_x & world.chunk_mask;
-//    result.rel_tile_y = abs_tile_y & world.chunk_mask;
-//
-//    return result;
-//}
-
 pub fn initializeWorld(world: *World, tile_side_in_meters: f32) void {
-    world.chunk_shift = 4;
-    world.chunk_mask = (@as(i32, @intCast(1)) <<
-        @as(u5, @intCast(world.chunk_shift))) - 1;
-    world.chunk_dim = (@as(i32, @intCast(1)) <<
-        @as(u5, @intCast(world.chunk_shift)));
     world.tile_side_in_meters = tile_side_in_meters;
+    world.chunk_side_in_meters = TILES_PER_CHUNK * tile_side_in_meters;
+    world.first_free = null;
 
     for (0..world.chunk_hash.len) |index| {
         world.chunk_hash[index].chunk_x = TILE_CHUNK_UNINITIALIZED;
+        world.chunk_hash[index].first_block.entity_count = 0;
     }
 }
 
-inline fn getTileChunk(
+inline fn getWorldChunk(
     world: *World,
     chunk_x: i32,
     chunk_y: i32,
@@ -144,40 +120,151 @@ pub inline fn subtract(
     var result: WorldDifference = undefined;
 
     const d_tile_xy = Vec2{
-        .x = @as(f32, @floatFromInt(a.abs_tile_x)) -
-            @as(f32, @floatFromInt(b.abs_tile_x)),
-        .y = @as(f32, @floatFromInt(a.abs_tile_y)) -
-            @as(f32, @floatFromInt(b.abs_tile_y)),
+        .x = @as(f32, @floatFromInt(a.chunk_x)) -
+            @as(f32, @floatFromInt(b.chunk_x)),
+        .y = @as(f32, @floatFromInt(a.chunk_y)) -
+            @as(f32, @floatFromInt(b.chunk_y)),
     };
 
-    const d_tile_z = @as(f32, @floatFromInt(a.abs_tile_z)) -
-        @as(f32, @floatFromInt(b.abs_tile_z));
+    const d_tile_z = @as(f32, @floatFromInt(a.chunk_z)) -
+        @as(f32, @floatFromInt(b.chunk_z));
 
-    result.dxy.x = world.tile_side_in_meters * d_tile_xy.x +
+    result.dxy.x = world.chunk_side_in_meters * d_tile_xy.x +
         (a.offset_.x - b.offset_.x);
-    result.dxy.y = world.tile_side_in_meters * d_tile_xy.y +
+    result.dxy.y = world.chunk_side_in_meters * d_tile_xy.y +
         (a.offset_.y - b.offset_.y);
     // TODO: Think about what we want to do with z
-    result.dz = world.tile_side_in_meters * d_tile_z;
+    result.dz = world.chunk_side_in_meters * d_tile_z;
 
     return result;
 }
 
-pub inline fn centeredTilePoint(
-    abs_tile_x: u32,
-    abs_tile_y: u32,
-    abs_tile_z: u32,
+pub inline fn centeredChunkPoint(
+    chunk_x: u32,
+    chunk_y: u32,
+    chunk_z: u32,
 ) WorldPosition {
     var result: WorldPosition = undefined;
 
-    result.abs_tile_x = abs_tile_x;
-    result.abs_tile_y = abs_tile_y;
-    result.abs_tile_z = abs_tile_z;
+    result.chunk_x = chunk_x;
+    result.chunk_y = chunk_y;
+    result.chunk_z = chunk_z;
 
     return result;
 }
 
-// TODO: Do these functions below belong in a "positioning" or "geometry" import?
+pub inline fn changeEntityLocation(
+    world: *World,
+    arena: *game.MemoryArena,
+    low_entity_index: u32,
+    maybe_old_p: ?*WorldPosition,
+    maybe_new_p: ?*WorldPosition,
+) void {
+    if (maybe_old_p != null and inSameChunk(world, maybe_old_p.?, maybe_new_p.?)) {
+        // NOTE: Leave entity where it is
+    } else {
+        if (maybe_old_p) |old_p| {
+            // NOTE: Pull entity out of its old entity block
+            const chunk = getWorldChunk(
+                world,
+                old_p.chunk_x,
+                old_p.chunk_y,
+                old_p.chunk_z,
+                arena,
+            );
+
+            assert(chunk != null);
+
+            if (chunk) |c| {
+                const first_block = &c.first_block;
+                var block = first_block.next;
+
+                while (block) |b| : (block = block.next) {
+                    for (0..b.entity_count) |index| {
+                        if (b.low_entity_index[index] == low_entity_index) {
+                            assert(first_block.entity_count > 0);
+
+                            first_block.entity_count -= 1;
+                            first_block.low_entity_index[index] =
+                                first_block.low_entity_index[first_block.entity_count];
+
+                            if (first_block.entity_count == 0) {
+                                if (first_block.next) |next| {
+                                    const next_block = next;
+                                    first_block.* = next_block.*;
+
+                                    next_block.next = world.first_free;
+                                    world.first_free = next_block;
+                                }
+                            }
+
+                            block = null;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // NOTE: Insert entity  into its new entity block
+        if (maybe_new_p) |new_p| {
+            const chunk = getWorldChunk(
+                world,
+                new_p.chunk_x,
+                new_p.chunk_y,
+                new_p.chunk_z,
+                arena,
+            );
+
+            assert(chunk != null);
+
+            const block = &chunk.?.first_block;
+
+            if (block.entity_count == block.low_entity_index.len) {
+                // NOTE: We're out of room, get a new block
+                var old_block = world.first_free;
+
+                if (old_block) |old| {
+                    world.first_free = old.next;
+                } else {
+                    old_block = game.pushStruct(arena, WorldEntityBlock);
+                }
+
+                old_block.* = block.*;
+                block.next = old_block;
+                block.entity_count = 0;
+            }
+
+            assert(block.entity_count < block.low_entity_index.len);
+            block.low_entity_index[block.entity_count] = low_entity_index;
+            block.entity_count += 1;
+        }
+    }
+}
+
+inline fn tileRelIsCanonical(
+    world: *World,
+    tile_rel: f32,
+) bool {
+    const result =
+        tile_rel >= -0.5 * world.chunk_side_in_meters and
+        tile_rel <= 0.5 * world.chunk_side_in_meters;
+
+    // TODO: Fix floating point math so this can be exact
+
+    return result;
+}
+
+inline fn vecIsCanonical(
+    world: *World,
+    offset: Vec2,
+) bool {
+    const result =
+        tileRelIsCanonical(world, offset.x) and
+        tileRelIsCanonical(world, offset.y);
+
+    return result;
+}
 
 inline fn recanonicalizeCoordinate(
     world: *World,
@@ -188,17 +275,14 @@ inline fn recanonicalizeCoordinate(
     // because this can round back onto the previous tile
     // TODO: Add bounds checking to prevent wrapping
 
-    // NOTE: World is assumed to be toroidal topology, if you step off
-    // one end you wind up on the other
-    const offset: i32 = @intFromFloat(@round(tile_rel.* / world.tile_side_in_meters));
+    // NOTE: Wrapping is not allowed, all coordinates are assumed to be within
+    // the safe margin
+    // TODO: Assert that we are nowhere near the edges of the world
+    const offset: i32 = @intFromFloat(@round(tile_rel.* / world.chunk_side_in_meters));
     tile.* +%= @as(i32, @bitCast(offset));
-    tile_rel.* -= @as(f32, @floatFromInt(offset)) * world.tile_side_in_meters;
+    tile_rel.* -= @as(f32, @floatFromInt(offset)) * world.chunk_side_in_meters;
 
-    assert(tile_rel.* > -0.5 * world.tile_side_in_meters);
-    // TODO: Fix floating point math so this can be exact
-    // NOTE: This assert only seems to trip with Casey's code
-    // maybe this would trip if we swapped to f32
-    assert(tile_rel.* < 0.5 * world.tile_side_in_meters);
+    assert(tileRelIsCanonical(world, tile_rel.*));
 }
 
 pub inline fn mapIntoTileSpace(
@@ -209,19 +293,47 @@ pub inline fn mapIntoTileSpace(
     var result = base_pos;
 
     result.offset_ = math.add(result.offset_, offset);
-    recanonicalizeCoordinate(world, &result.abs_tile_x, &result.offset_.x);
-    recanonicalizeCoordinate(world, &result.abs_tile_y, &result.offset_.y);
+    recanonicalizeCoordinate(world, &result.chunk_x, &result.offset_.x);
+    recanonicalizeCoordinate(world, &result.chunk_y, &result.offset_.y);
 
     return result;
 }
 
-pub inline fn onSameTile(
+pub fn chunkPosFromTilePos(
+    world: *World,
+    abs_tile_x: i32,
+    abs_tile_y: i32,
+    abs_tile_z: i32,
+) WorldPosition {
+    var result = WorldPosition{};
+
+    result.chunk_x = @divFloor(abs_tile_x, @as(i32, @intFromFloat(TILES_PER_CHUNK)));
+    result.chunk_y = @divFloor(abs_tile_y, @as(i32, @intFromFloat(TILES_PER_CHUNK)));
+    result.chunk_z = @divFloor(abs_tile_z, @as(i32, @intFromFloat(TILES_PER_CHUNK)));
+
+    result.offset_.x = (@as(f32, @floatFromInt(abs_tile_x)) -
+        (@as(f32, @floatFromInt(result.chunk_x)) * TILES_PER_CHUNK)) *
+        world.tile_side_in_meters;
+
+    result.offset_.y = (@as(f32, @floatFromInt(abs_tile_y)) -
+        (@as(f32, @floatFromInt(result.chunk_y)) * TILES_PER_CHUNK)) *
+        world.tile_side_in_meters;
+    // TODO: Move to 3D z
+
+    return result;
+}
+
+pub inline fn inSameChunk(
+    world: *World,
     a: *WorldPosition,
     b: *WorldPosition,
 ) bool {
-    const result = (a.abs_tile_x == b.abs_tile_x and
-        a.abs_tile_y == b.abs_tile_y and
-        a.abs_tile_z == b.abs_tile_z);
+    assert(vecIsCanonical(world, a.offset_));
+    assert(vecIsCanonical(world, b.offset_));
+
+    const result = (a.chunk_x == b.chunk_x and
+        a.chunk_y == b.chunk_y and
+        a.chunk_z == b.chunk_z);
 
     return result;
 }
