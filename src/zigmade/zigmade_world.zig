@@ -25,7 +25,7 @@ pub const WorldPosition = struct {
 };
 
 // TODO: Could make this just TileChunk and allow multiple chunks per x/y/z
-const WorldEntityBlock = struct {
+pub const WorldEntityBlock = struct {
     entity_count: u32,
     low_entity_index: [16]u32,
     next: ?*WorldEntityBlock,
@@ -62,7 +62,7 @@ pub fn initializeWorld(world: *World, tile_side_in_meters: f32) void {
     }
 }
 
-inline fn getWorldChunk(
+pub inline fn getWorldChunk(
     world: *World,
     chunk_x: i32,
     chunk_y: i32,
@@ -80,7 +80,7 @@ inline fn getWorldChunk(
 
     // TODO: BETTER HASH FUNCTION
     const hash_value = 19 * chunk_x + 7 * chunk_y + 3 * chunk_z;
-    const hash_slot = @as(usize, @intCast(hash_value)) & (world.chunk_hash.len - 1);
+    const hash_slot = @as(u32, @bitCast(hash_value)) & (world.chunk_hash.len - 1);
     assert(hash_slot < world.chunk_hash.len);
     world_chunk = &world.chunk_hash[hash_slot];
 
@@ -92,16 +92,19 @@ inline fn getWorldChunk(
             break;
         }
 
-        if (arena != null and chunk_x != TILE_CHUNK_UNINITIALIZED and chunk.next_in_hash == null) {
+        if (arena != null and
+            chunk.chunk_x != TILE_CHUNK_UNINITIALIZED and
+            chunk.next_in_hash == null)
+        {
             chunk.next_in_hash = game.pushStruct(arena.?, WorldChunk);
+            chunk.chunk_x = TILE_CHUNK_UNINITIALIZED;
             world_chunk = chunk.next_in_hash;
-            world_chunk.?.chunk_x = TILE_CHUNK_UNINITIALIZED;
         }
 
-        if (arena != null and chunk_x == TILE_CHUNK_UNINITIALIZED) {
-            chunk.tile_chunk_x = chunk_x;
-            chunk.tile_chunk_y = chunk_y;
-            chunk.tile_chunk_z = chunk_z;
+        if (arena != null and chunk.chunk_x == TILE_CHUNK_UNINITIALIZED) {
+            chunk.chunk_x = chunk_x;
+            chunk.chunk_y = chunk_y;
+            chunk.chunk_z = chunk_z;
 
             chunk.next_in_hash = null;
 
@@ -170,36 +173,39 @@ pub inline fn changeEntityLocation(
                 old_p.chunk_x,
                 old_p.chunk_y,
                 old_p.chunk_z,
-                arena,
+                null,
             );
 
             assert(chunk != null);
 
             if (chunk) |c| {
                 const first_block = &c.first_block;
-                var block = first_block.next;
+                var block: ?*WorldEntityBlock = first_block;
+                var not_found = true;
 
-                while (block) |b| : (block = block.next) {
-                    for (0..b.entity_count) |index| {
-                        if (b.low_entity_index[index] == low_entity_index) {
-                            assert(first_block.entity_count > 0);
+                while (not_found and block != null) : (block = block.?.next) {
+                    if (block) |b| {
+                        for (0..b.entity_count) |index| {
+                            if (b.low_entity_index[index] == low_entity_index) {
+                                assert(first_block.entity_count > 0);
 
-                            first_block.entity_count -= 1;
-                            first_block.low_entity_index[index] =
-                                first_block.low_entity_index[first_block.entity_count];
+                                first_block.entity_count -= 1;
+                                first_block.low_entity_index[index] =
+                                    first_block.low_entity_index[first_block.entity_count];
 
-                            if (first_block.entity_count == 0) {
-                                if (first_block.next) |next| {
-                                    const next_block = next;
-                                    first_block.* = next_block.*;
+                                if (first_block.entity_count == 0) {
+                                    if (first_block.next) |next| {
+                                        const next_block = next;
+                                        first_block.* = next_block.*;
 
-                                    next_block.next = world.first_free;
-                                    world.first_free = next_block;
+                                        next_block.next = world.first_free;
+                                        world.first_free = next_block;
+                                    }
                                 }
-                            }
 
-                            block = null;
-                            break;
+                                not_found = false;
+                                break;
+                            }
                         }
                     }
                 }
@@ -230,7 +236,7 @@ pub inline fn changeEntityLocation(
                     old_block = game.pushStruct(arena, WorldEntityBlock);
                 }
 
-                old_block.* = block.*;
+                old_block.?.* = block.*;
                 block.next = old_block;
                 block.entity_count = 0;
             }
@@ -285,7 +291,7 @@ inline fn recanonicalizeCoordinate(
     assert(tileRelIsCanonical(world, tile_rel.*));
 }
 
-pub inline fn mapIntoTileSpace(
+pub inline fn mapIntoChunkSpace(
     world: *World,
     base_pos: WorldPosition,
     offset: Vec2,
@@ -311,6 +317,7 @@ pub fn chunkPosFromTilePos(
     result.chunk_y = @divFloor(abs_tile_y, @as(i32, @intFromFloat(TILES_PER_CHUNK)));
     result.chunk_z = @divFloor(abs_tile_z, @as(i32, @intFromFloat(TILES_PER_CHUNK)));
 
+    // TODO: Decide on tile alignment in chunks
     result.offset_.x = (@as(f32, @floatFromInt(abs_tile_x)) -
         (@as(f32, @floatFromInt(result.chunk_x)) * TILES_PER_CHUNK)) *
         world.tile_side_in_meters;

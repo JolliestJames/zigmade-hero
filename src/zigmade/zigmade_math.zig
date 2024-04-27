@@ -70,6 +70,21 @@ pub const Rectangle2 = struct {
     max: Vec2,
 };
 
+pub inline fn getMinCorner(rect: Rectangle2) Vec2 {
+    const result = rect.min;
+    return result;
+}
+
+pub inline fn getMaxCorner(rect: Rectangle2) Vec2 {
+    const result = rect.max;
+    return result;
+}
+
+pub inline fn getCenter(rect: Rectangle2) Vec2 {
+    const result = scale(add(rect.min, rect.max), 0.5);
+    return result;
+}
+
 pub inline fn rectMinMax(min: Vec2, max: Vec2) Rectangle2 {
     var result: Rectangle2 = undefined;
 
