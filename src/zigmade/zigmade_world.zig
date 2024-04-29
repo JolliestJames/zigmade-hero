@@ -5,7 +5,7 @@ const math = @import("zigmade_math.zig");
 const Vec2 = math.Vec2;
 const TILE_CHUNK_SAFE_MARGIN = std.math.maxInt(i32) / 64;
 const TILE_CHUNK_UNINITIALIZED = std.math.maxInt(i32);
-const TILES_PER_CHUNK = 16.0;
+const TILES_PER_CHUNK = 16;
 
 // TODO: Replace this with a Vec3 once we get to Vec3
 pub const WorldDifference = struct {
@@ -313,19 +313,24 @@ pub fn chunkPosFromTilePos(
 ) WorldPosition {
     var result = WorldPosition{};
 
-    result.chunk_x = @divFloor(abs_tile_x, @as(i32, @intFromFloat(TILES_PER_CHUNK)));
-    result.chunk_y = @divFloor(abs_tile_y, @as(i32, @intFromFloat(TILES_PER_CHUNK)));
-    result.chunk_z = @divFloor(abs_tile_z, @as(i32, @intFromFloat(TILES_PER_CHUNK)));
+    result.chunk_x = @divFloor(abs_tile_x, TILES_PER_CHUNK);
+    result.chunk_y = @divFloor(abs_tile_y, TILES_PER_CHUNK);
+    result.chunk_z = @divFloor(abs_tile_z, TILES_PER_CHUNK);
+
+    // TODO: Think this through and actually work out the math
+    if (abs_tile_x < 0) result.chunk_x -= 1;
+    if (abs_tile_y < 0) result.chunk_y -= 1;
+    if (abs_tile_z < 0) result.chunk_z -= 1;
 
     // TODO: Decide on tile alignment in chunks
-    result.offset_.x = (@as(f32, @floatFromInt(abs_tile_x)) -
-        (@as(f32, @floatFromInt(result.chunk_x)) * TILES_PER_CHUNK)) *
-        world.tile_side_in_meters;
+    result.offset_.x = @as(f32, @floatFromInt((abs_tile_x - TILES_PER_CHUNK / 2) -
+        (result.chunk_x * TILES_PER_CHUNK))) * world.tile_side_in_meters;
 
-    result.offset_.y = (@as(f32, @floatFromInt(abs_tile_y)) -
-        (@as(f32, @floatFromInt(result.chunk_y)) * TILES_PER_CHUNK)) *
-        world.tile_side_in_meters;
+    result.offset_.y = @as(f32, @floatFromInt((abs_tile_y - TILES_PER_CHUNK / 2) -
+        (result.chunk_y * TILES_PER_CHUNK))) * world.tile_side_in_meters;
     // TODO: Move to 3D z
+
+    assert(vecIsCanonical(world, result.offset_));
 
     return result;
 }
