@@ -122,9 +122,6 @@ const BitmapHeader = packed struct {
     blue_mask: u32,
 };
 
-// TODO: The seed value affects whether all entities spawn in the correct frequency or not
-// and after some amount of navigation, entities are encountered in the incorrect frequency within
-// the bounds of the camera no matter what the seed is
 var rand = std.rand.DefaultPrng.init(8192);
 
 fn gameOutputSound(
@@ -771,8 +768,7 @@ fn addLowEntity(
     game_state.low_entity_count += 1;
 
     var low = &game_state.low_entities[entity_index];
-    low.* = LowEntity{};
-    low.type = t;
+    low.* = LowEntity{ .type = t };
 
     if (pos) |p| {
         low.pos = p.*;
@@ -782,13 +778,14 @@ fn addLowEntity(
             &game_state.world_arena,
             entity_index,
             null,
-            pos,
+            p,
         );
     }
 
-    var result: AddLowEntityResult = undefined;
-    result.low = low;
-    result.low_index = entity_index;
+    const result = AddLowEntityResult{
+        .low = low,
+        .low_index = entity_index,
+    };
 
     // TODO: Do we need a begin/end paradigm for adding
     // entities so that they can be brought into the high set
@@ -887,6 +884,9 @@ fn setCamera(
     new_camera_p: *world.WorldPosition,
 ) void {
     const game_world = game_state.world.?;
+
+    assert(validateEntityPairs(game_state));
+
     const d_camera_p = world.subtract(game_world, new_camera_p, &game_state.camera_p);
     game_state.camera_p = new_camera_p.*;
 
@@ -941,7 +941,7 @@ fn setCamera(
             if (chunk) |c| {
                 var block: ?*world.WorldEntityBlock = &c.first_block;
 
-                while (block) |b| : (block = block.?.next) {
+                while (block) |b| : (block = b.next) {
                     for (0..b.entity_count) |entity_index| {
                         const low_index = b.low_entity_index[entity_index];
                         const low = &game_state.low_entities[low_index];
@@ -1416,7 +1416,7 @@ pub export fn updateAndRender(
                 new_camera_p.abs_tile_y -%= 9;
             }
         } else {
-            new_camera_p = camera_following_entity.low.?.pos;
+            new_camera_p = low.pos;
         }
 
         // TODO: Map new entities in and old entities out

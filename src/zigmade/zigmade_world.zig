@@ -69,8 +69,6 @@ pub inline fn getWorldChunk(
     chunk_z: i32,
     arena: ?*game.MemoryArena,
 ) ?*WorldChunk {
-    var world_chunk: ?*WorldChunk = null;
-
     assert(chunk_x > -TILE_CHUNK_SAFE_MARGIN);
     assert(chunk_y > -TILE_CHUNK_SAFE_MARGIN);
     assert(chunk_z > -TILE_CHUNK_SAFE_MARGIN);
@@ -82,31 +80,34 @@ pub inline fn getWorldChunk(
     const hash_value = 19 * chunk_x + 7 * chunk_y + 3 * chunk_z;
     const hash_slot = @as(u32, @bitCast(hash_value)) & (world.chunk_hash.len - 1);
     assert(hash_slot < world.chunk_hash.len);
-    world_chunk = &world.chunk_hash[hash_slot];
+    var world_chunk: ?*WorldChunk = &world.chunk_hash[hash_slot];
 
-    while (world_chunk) |chunk| : (world_chunk = world_chunk.?.next_in_hash) {
-        if ((chunk_x == chunk.chunk_x) and
-            (chunk_y == chunk.chunk_y) and
-            (chunk_z == chunk.chunk_z))
+    // NOTE: Without the doule indirection to world chunks,
+    // chunk fetching will not behave correctly
+    while (world_chunk) |*chunk| : (world_chunk = chunk.*.next_in_hash) {
+        if ((chunk_x == chunk.*.chunk_x) and
+            (chunk_y == chunk.*.chunk_y) and
+            (chunk_z == chunk.*.chunk_z))
         {
             break;
         }
 
-        if (arena != null and
-            chunk.chunk_x != TILE_CHUNK_UNINITIALIZED and
-            chunk.next_in_hash == null)
-        {
-            chunk.next_in_hash = game.pushStruct(arena.?, WorldChunk);
-            chunk.chunk_x = TILE_CHUNK_UNINITIALIZED;
-            world_chunk = chunk.next_in_hash;
+        if (arena) |a| {
+            if (chunk.*.chunk_x != TILE_CHUNK_UNINITIALIZED and
+                chunk.*.next_in_hash == null)
+            {
+                chunk.*.next_in_hash = game.pushStruct(a, WorldChunk);
+                world_chunk = chunk.*.next_in_hash;
+                chunk.*.chunk_x = TILE_CHUNK_UNINITIALIZED;
+            }
         }
 
-        if (arena != null and chunk.chunk_x == TILE_CHUNK_UNINITIALIZED) {
-            chunk.chunk_x = chunk_x;
-            chunk.chunk_y = chunk_y;
-            chunk.chunk_z = chunk_z;
+        if (arena != null and chunk.*.chunk_x == TILE_CHUNK_UNINITIALIZED) {
+            chunk.*.chunk_x = chunk_x;
+            chunk.*.chunk_y = chunk_y;
+            chunk.*.chunk_z = chunk_z;
 
-            chunk.next_in_hash = null;
+            chunk.*.next_in_hash = null;
 
             break;
         }
@@ -161,9 +162,9 @@ pub inline fn changeEntityLocation(
     arena: *game.MemoryArena,
     low_entity_index: u32,
     maybe_old_p: ?*WorldPosition,
-    maybe_new_p: ?*WorldPosition,
+    new_p: *WorldPosition,
 ) void {
-    if (maybe_old_p != null and inSameChunk(world, maybe_old_p.?, maybe_new_p.?)) {
+    if (maybe_old_p != null and inSameChunk(world, maybe_old_p.?, new_p)) {
         // NOTE: Leave entity where it is
     } else {
         if (maybe_old_p) |old_p| {
@@ -181,31 +182,31 @@ pub inline fn changeEntityLocation(
             if (chunk) |c| {
                 const first_block = &c.first_block;
                 var block: ?*WorldEntityBlock = first_block;
-                var not_found = true;
+                var found = false;
 
-                while (not_found and block != null) : (block = block.?.next) {
-                    if (block) |b| {
-                        for (0..b.entity_count) |index| {
-                            if (b.low_entity_index[index] == low_entity_index) {
-                                assert(first_block.entity_count > 0);
+                while (block) |b| : (block = b.next) {
+                    if (found) break;
 
-                                first_block.entity_count -= 1;
-                                first_block.low_entity_index[index] =
-                                    first_block.low_entity_index[first_block.entity_count];
+                    for (0..b.entity_count) |index| {
+                        if (b.low_entity_index[index] == low_entity_index) {
+                            assert(first_block.entity_count > 0);
 
-                                if (first_block.entity_count == 0) {
-                                    if (first_block.next) |next| {
-                                        const next_block = next;
-                                        first_block.* = next_block.*;
+                            first_block.entity_count -= 1;
+                            b.low_entity_index[index] =
+                                first_block.low_entity_index[first_block.entity_count];
 
-                                        next_block.next = world.first_free;
-                                        world.first_free = next_block;
-                                    }
+                            if (first_block.entity_count == 0) {
+                                if (first_block.next) |next| {
+                                    var next_block = next;
+                                    first_block.* = next_block.*;
+
+                                    next_block.next = world.first_free;
+                                    world.first_free = next_block;
                                 }
-
-                                not_found = false;
-                                break;
                             }
+
+                            found = true;
+                            break;
                         }
                     }
                 }
@@ -213,21 +214,20 @@ pub inline fn changeEntityLocation(
         }
 
         // NOTE: Insert entity  into its new entity block
-        if (maybe_new_p) |new_p| {
-            const chunk = getWorldChunk(
-                world,
-                new_p.chunk_x,
-                new_p.chunk_y,
-                new_p.chunk_z,
-                arena,
-            );
+        const chunk = getWorldChunk(
+            world,
+            new_p.chunk_x,
+            new_p.chunk_y,
+            new_p.chunk_z,
+            arena,
+        );
 
-            assert(chunk != null);
+        assert(chunk != null);
 
-            const block = &chunk.?.first_block;
+        if (chunk) |c| {
+            var block = &c.first_block;
 
             if (block.entity_count == block.low_entity_index.len) {
-                // NOTE: We're out of room, get a new block
                 var old_block = world.first_free;
 
                 if (old_block) |old| {
@@ -285,7 +285,7 @@ inline fn recanonicalizeCoordinate(
     // the safe margin
     // TODO: Assert that we are nowhere near the edges of the world
     const offset: i32 = @intFromFloat(@round(tile_rel.* / world.chunk_side_in_meters));
-    tile.* +%= @as(i32, @bitCast(offset));
+    tile.* += offset;
     tile_rel.* -= @as(f32, @floatFromInt(offset)) * world.chunk_side_in_meters;
 
     assert(tileRelIsCanonical(world, tile_rel.*));
@@ -313,9 +313,9 @@ pub fn chunkPosFromTilePos(
 ) WorldPosition {
     var result = WorldPosition{};
 
-    result.chunk_x = @divFloor(abs_tile_x, TILES_PER_CHUNK);
-    result.chunk_y = @divFloor(abs_tile_y, TILES_PER_CHUNK);
-    result.chunk_z = @divFloor(abs_tile_z, TILES_PER_CHUNK);
+    result.chunk_x = @divTrunc(abs_tile_x, TILES_PER_CHUNK);
+    result.chunk_y = @divTrunc(abs_tile_y, TILES_PER_CHUNK);
+    result.chunk_z = @divTrunc(abs_tile_z, TILES_PER_CHUNK);
 
     // TODO: Think this through and actually work out the math
     if (abs_tile_x < 0) result.chunk_x -= 1;
