@@ -11,6 +11,27 @@ pub const Vec2 = struct {
     y: f32 = 0.0,
 };
 
+pub const Vec3 = struct {
+    x: f32 = 0.0,
+    y: f32 = 0.0,
+    z: f32 = 0.0,
+};
+
+pub const Vec4 = struct {
+    x: f32 = 0.0,
+    y: f32 = 0.0,
+    z: f32 = 0.0,
+    w: f32 = 0.0,
+};
+
+// TODO: Consider using comptime to make dynamic Vec types similar
+// to Mach's VecN
+//pub fn VecN(comptime n: usize, comptime t: type) type {
+//    return extern struct {
+//        v: @Vector(n, t),
+//    };
+//}
+
 pub inline fn scale(v: Vec2, f: f32) Vec2 {
     var result: Vec2 = undefined;
 

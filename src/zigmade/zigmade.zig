@@ -5,6 +5,8 @@ const platform = @import("zigmade_platform");
 const world = @import("zigmade_world.zig");
 const math = @import("zigmade_math.zig");
 const Vec2 = math.Vec2;
+const Vec3 = math.Vec3;
+const Vec4 = math.Vec4;
 const intrinsics = @import("zigmade_intrinsics.zig");
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
@@ -26,6 +28,13 @@ const HighEntity = struct {
     low_entity_index: u32 = 0,
 };
 
+const HIT_POINT_SUB_COUNT = 4;
+const HitPoint = struct {
+    // TODO: Bake this down into one variable (packed struct?)
+    flags: u8,
+    filled_amount: u8,
+};
+
 pub const LowEntity = struct {
     type: EntityType = .none,
     pos: world.WorldPosition = world.WorldPosition{},
@@ -35,6 +44,9 @@ pub const LowEntity = struct {
     collides: bool = false,
     d_abs_tile_z: i32 = 0,
     high_entity_index: u32 = 0,
+    // TODO: Should hit points themselves be entities?
+    hit_point_max: u32 = 0,
+    hit_points: [16]HitPoint = undefined,
 };
 
 const EntityType = enum {
@@ -52,15 +64,24 @@ const Entity = struct {
 };
 
 const EntityVisiblePiece = struct {
-    bitmap: *Bitmap,
+    bitmap: ?*Bitmap = null,
     offset: Vec2,
     offset_z: f32,
-    alpha: f32,
+    entity_zc: f32,
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+    dim: Vec2,
 };
 
+// TODO: This is dumb, this should just be part of
+// the renderer pushbuffer. Add correction of coordinates
+// in there and be done with it
 const EntityVisiblePieceGroup = struct {
     piece_count: u32 = 0,
-    pieces: [8]EntityVisiblePiece,
+    pieces: [32]EntityVisiblePiece,
+    game_state: *GameState,
 };
 
 const AddLowEntityResult = struct {
@@ -83,6 +104,7 @@ const GameState = struct {
     shadow: Bitmap,
     hero_bitmaps: [4]HeroBitmaps,
     tree: Bitmap,
+    meters_to_pixels: f32,
 };
 
 pub const MemoryArena = struct {
@@ -822,6 +844,10 @@ fn addPlayer(game_state: *GameState) AddLowEntityResult {
     var pos = game_state.camera_p;
     const entity = addLowEntity(game_state, .hero, &pos);
 
+    entity.low.hit_point_max = 3;
+    entity.low.hit_points[0].filled_amount = HIT_POINT_SUB_COUNT;
+    entity.low.hit_points[1] = entity.low.hit_points[0];
+    entity.low.hit_points[2] = entity.low.hit_points[1];
     entity.low.height = 0.5;
     entity.low.width = 1.0;
     entity.low.collides = true;
@@ -969,21 +995,67 @@ fn setCamera(
 
 fn pushPiece(
     group: *EntityVisiblePieceGroup,
-    bitmap: *Bitmap,
+    bitmap: ?*Bitmap,
     offset: Vec2,
     offset_z: f32,
     alignment: Vec2,
-    alpha: f32,
+    dim: Vec2,
+    color: Vec4,
+    entity_zc: f32,
 ) void {
     assert(group.piece_count < group.pieces.len);
 
     var piece = &group.pieces[group.piece_count];
     group.piece_count += 1;
-
     piece.bitmap = bitmap;
-    piece.offset = math.sub(offset, alignment);
-    piece.offset_z = offset_z;
-    piece.alpha = alpha;
+
+    piece.offset = math.sub(
+        math.scale(
+            .{ .x = offset.x, .y = -offset.y },
+            group.game_state.meters_to_pixels,
+        ),
+        alignment,
+    );
+
+    piece.offset_z = group.game_state.meters_to_pixels * offset_z;
+    piece.entity_zc = entity_zc;
+    piece.r = color.x;
+    piece.g = color.y;
+    piece.b = color.z;
+    piece.a = color.w;
+    piece.dim = dim;
+}
+
+fn pushBitmap(
+    group: *EntityVisiblePieceGroup,
+    bitmap: *Bitmap,
+    offset: Vec2,
+    offset_z: f32,
+    alignment: Vec2,
+    alpha: f32,
+    entity_zc: f32,
+) void {
+    pushPiece(
+        group,
+        bitmap,
+        offset,
+        offset_z,
+        alignment,
+        .{},
+        .{ .x = 1, .y = 1, .z = 1, .w = alpha },
+        entity_zc,
+    );
+}
+
+fn pushRect(
+    group: *EntityVisiblePieceGroup,
+    offset: Vec2,
+    offset_z: f32,
+    dim: Vec2,
+    color: Vec4,
+    entity_zc: f32,
+) void {
+    pushPiece(group, null, offset, offset_z, .{}, dim, color, entity_zc);
 }
 
 inline fn entityFromHighIndex(game_state: *GameState, high_index: usize) Entity {
@@ -1023,7 +1095,7 @@ fn updateFamiliar(game_state: *GameState, entity: Entity, dt: f32) void {
     var dd_p = Vec2{};
 
     if (closest_hero.high) |high| {
-        if (closest_hero_d_sq > 0.1) {
+        if (closest_hero_d_sq > math.square(3)) {
             // TODO: Pull speed out of move entity
             const acceleration = 0.5;
             const one_over_length = acceleration / @sqrt(closest_hero_d_sq);
@@ -1164,6 +1236,11 @@ pub export fn updateAndRender(
         const game_world = game_state.world.?;
 
         world.initializeWorld(game_world, 1.4);
+
+        const tile_side_in_pixels: i32 = 60;
+        game_state.meters_to_pixels =
+            @as(f32, @floatFromInt(tile_side_in_pixels)) /
+            game_world.tile_side_in_meters;
 
         const tiles_per_width = 17;
         const tiles_per_height = 9;
@@ -1321,15 +1398,7 @@ pub export fn updateAndRender(
 
     const game_world = game_state.world.?;
 
-    const tile_side_in_pixels: i32 = 60;
-    const meters_to_pixels: f32 =
-        @as(f32, @floatFromInt(tile_side_in_pixels)) /
-        game_world.tile_side_in_meters;
-
-    const lower_left_x: f32 = @floatFromInt(@divFloor(-tile_side_in_pixels, 2));
-    _ = lower_left_x;
-    const lower_left_y: f32 = @floatFromInt(buffer.height);
-    _ = lower_left_y;
+    const meters_to_pixels = game_state.meters_to_pixels;
 
     //
     // NOTE: Movement
@@ -1448,6 +1517,7 @@ pub export fn updateAndRender(
     const screen_center_y = 0.5 * @as(f32, @floatFromInt(buffer.height));
 
     var piece_group: EntityVisiblePieceGroup = undefined;
+    piece_group.game_state = game_state;
 
     for (1..game_state.high_entity_count) |high_index| {
         piece_group.piece_count = 0;
@@ -1474,13 +1544,37 @@ pub export fn updateAndRender(
         switch (low.type) {
             .hero => {
                 // TODO: z
-                pushPiece(&piece_group, &game_state.shadow, Vec2{}, 0, hero_bitmaps.alignment, shadow_alpha);
-                pushPiece(&piece_group, &hero_bitmaps.torso, Vec2{}, 0, hero_bitmaps.alignment, 1);
-                pushPiece(&piece_group, &hero_bitmaps.cape, Vec2{}, 0, hero_bitmaps.alignment, 1);
-                pushPiece(&piece_group, &hero_bitmaps.head, Vec2{}, 0, hero_bitmaps.alignment, 1);
+                pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
+                pushBitmap(&piece_group, &hero_bitmaps.torso, .{}, 0, hero_bitmaps.alignment, 1, 1);
+                pushBitmap(&piece_group, &hero_bitmaps.cape, .{}, 0, hero_bitmaps.alignment, 1, 1);
+                pushBitmap(&piece_group, &hero_bitmaps.head, .{}, 0, hero_bitmaps.alignment, 1, 1);
+
+                if (low.hit_point_max >= 1) {
+                    const health_dim = Vec2{ .x = 0.2, .y = 0.2 };
+                    const spacing_x = 1.5 * health_dim.x;
+                    var hit_p = Vec2{
+                        .x = -0.5 * @as(f32, @floatFromInt(low.hit_point_max - 1)) * spacing_x,
+                        .y = -0.25,
+                    };
+                    const d_hit_p = Vec2{ .x = spacing_x, .y = 0 };
+
+                    for (0..low.hit_point_max) |index| {
+                        const hit_point = low.hit_points[index];
+                        var color = Vec4{ .x = 1, .w = 1 };
+
+                        if (hit_point.filled_amount == 0) {
+                            color.x = 0.2;
+                            color.y = 0.2;
+                            color.z = 0.2;
+                        }
+
+                        pushRect(&piece_group, hit_p, 0, health_dim, color, 0);
+                        hit_p = math.add(hit_p, d_hit_p);
+                    }
+                }
             },
             .wall => {
-                pushPiece(&piece_group, &game_state.tree, Vec2{}, 0, Vec2{ .x = 40, .y = 80 }, 1);
+                pushBitmap(&piece_group, &game_state.tree, .{}, 0, Vec2{ .x = 40, .y = 80 }, 1, 1);
             },
             .familiar => {
                 updateFamiliar(game_state, entity, dt);
@@ -1490,13 +1584,14 @@ pub export fn updateAndRender(
                     high.t_bob -= 2 * std.math.pi;
                 }
 
-                pushPiece(&piece_group, &game_state.shadow, Vec2{}, 0, hero_bitmaps.alignment, shadow_alpha);
-                pushPiece(&piece_group, &hero_bitmaps.head, Vec2{}, 10 * @sin(2 * high.t_bob), hero_bitmaps.alignment, 1);
+                const bob_sin = @sin(2 * high.t_bob);
+                pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, 0.5 * shadow_alpha + 0.2 * bob_sin, 0);
+                pushBitmap(&piece_group, &hero_bitmaps.head, .{}, 0.25 * bob_sin, hero_bitmaps.alignment, 1, 1);
             },
             .monster => {
                 updateMonster(game_state, entity, dt);
-                pushPiece(&piece_group, &game_state.shadow, Vec2{}, 0, hero_bitmaps.alignment, shadow_alpha);
-                pushPiece(&piece_group, &hero_bitmaps.torso, Vec2{}, 0, hero_bitmaps.alignment, 1);
+                pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
+                pushBitmap(&piece_group, &hero_bitmaps.torso, .{}, 0, hero_bitmaps.alignment, 1, 1);
             },
             else => {
                 std.debug.print("Invalid code path\n", .{});
@@ -1516,37 +1611,26 @@ pub export fn updateAndRender(
         const eg_y = screen_center_y - meters_to_pixels * high.pos.y;
         const entity_z = -meters_to_pixels * high.z;
 
-        if (false) {
-            const player_origin = Vec2{
-                .x = eg_x - 0.5 * meters_to_pixels * low.width,
-                .y = eg_y - 0.5 * meters_to_pixels * low.height,
-            };
-
-            const entity_dimensions = Vec2{
-                .x = low.width,
-                .y = low.height,
-            };
-
-            drawRectangle(
-                buffer,
-                player_origin,
-                math.add(player_origin, math.scale(entity_dimensions, 0.9 * meters_to_pixels)),
-                1.0,
-                1.0,
-                0.0,
-            );
-        }
-
         for (0..piece_group.piece_count) |index| {
             const piece = piece_group.pieces[index];
+            const center = Vec2{
+                .x = eg_x + piece.offset.x,
+                .y = eg_y + piece.offset.y + piece.offset_z + piece.entity_zc * entity_z,
+            };
 
-            drawBitmap(
-                buffer,
-                piece.bitmap,
-                eg_x + piece.offset.x,
-                eg_y + piece.offset.y + piece.offset_z + entity_z,
-                piece.alpha,
-            );
+            if (piece.bitmap) |bitmap| {
+                drawBitmap(buffer, bitmap, center.x, center.y, piece.a);
+            } else {
+                const half_dim = math.scale(piece.dim, 0.5 * meters_to_pixels);
+                drawRectangle(
+                    buffer,
+                    math.sub(center, half_dim),
+                    math.add(center, half_dim),
+                    piece.r,
+                    piece.g,
+                    piece.b,
+                );
+            }
         }
     }
 }

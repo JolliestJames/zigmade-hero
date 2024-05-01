@@ -133,10 +133,11 @@ pub inline fn subtract(
     const d_tile_z = @as(f32, @floatFromInt(a.chunk_z)) -
         @as(f32, @floatFromInt(b.chunk_z));
 
-    result.dxy.x = world.chunk_side_in_meters * d_tile_xy.x +
-        (a.offset_.x - b.offset_.x);
-    result.dxy.y = world.chunk_side_in_meters * d_tile_xy.y +
-        (a.offset_.y - b.offset_.y);
+    result.dxy = math.add(
+        math.scale(d_tile_xy, world.chunk_side_in_meters),
+        math.sub(a.offset_, b.offset_),
+    );
+
     // TODO: Think about what we want to do with z
     result.dz = world.chunk_side_in_meters * d_tile_z;
 
