@@ -168,7 +168,7 @@ fn debugPlatformReadEntireFile(
     thread: *platform.ThreadContext,
     file_name: [*:0]const u8,
 ) platform.DebugReadFileResult {
-    var result = platform.DebugReadFileResult{};
+    var result: platform.DebugReadFileResult = .{};
 
     const handle = win32.CreateFileA(
         file_name,
@@ -176,7 +176,7 @@ fn debugPlatformReadEntireFile(
         win32.FILE_SHARE_READ,
         null,
         win32.OPEN_EXISTING,
-        win32.FILE_FLAGS_AND_ATTRIBUTES{},
+        .{},
         null,
     );
 
@@ -189,7 +189,7 @@ fn debugPlatformReadEntireFile(
             result.contents = win32.VirtualAlloc(
                 null,
                 file_size32,
-                win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
+                .{ .RESERVE = 1, .COMMIT = 1 },
                 win32.PAGE_READWRITE,
             );
 
@@ -240,7 +240,7 @@ fn debugPlatformWriteEntireFile(
         win32.FILE_SHARE_NONE,
         null,
         win32.CREATE_ALWAYS,
-        win32.FILE_FLAGS_AND_ATTRIBUTES{},
+        .{},
         null,
     );
 
@@ -301,7 +301,7 @@ fn win32LoadGameCode(
     temp_dll_name: [*:0]const u8,
     lock_file_name: [*:0]const u8,
 ) Win32GameCode {
-    var result = Win32GameCode{};
+    var result: Win32GameCode = .{};
 
     var ignored: win32.WIN32_FILE_ATTRIBUTE_DATA = undefined;
 
@@ -511,7 +511,7 @@ fn win32ResizeDibSection(
     buffer.memory = @ptrCast(win32.VirtualAlloc(
         null,
         @intCast(bitmap_memory_size),
-        win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
+        .{ .RESERVE = 1, .COMMIT = 1 },
         win32.PAGE_READWRITE,
     ));
 
@@ -1186,7 +1186,7 @@ fn win32BeginRecordingInput(
             win32.FILE_SHARE_NONE,
             null,
             win32.CREATE_ALWAYS,
-            win32.FILE_FLAGS_AND_ATTRIBUTES{},
+            .{},
             null,
         );
 
@@ -1219,7 +1219,7 @@ fn win32BeginInputPlayBack(
             win32.FILE_SHARE_NONE,
             null,
             win32.OPEN_EXISTING,
-            win32.FILE_FLAGS_AND_ATTRIBUTES{},
+            .{},
             null,
         );
 
@@ -1363,8 +1363,8 @@ pub export fn wWinMain(
         window_style.VISIBLE = 1;
 
         if (win32.CreateWindowExW(
-            win32.WINDOW_EX_STYLE{},
-            //win32.WINDOW_EX_STYLE{ .TOPMOST = 1, .LAYERED = 1 },
+            .{},
+            //.{ .TOPMOST = 1, .LAYERED = 1 },
             window_class.lpszClassName,
             win32.L("Zigmade Hero"),
             window_style,
@@ -1441,7 +1441,7 @@ pub export fn wWinMain(
             const samples = win32.VirtualAlloc(
                 null,
                 sound_output.secondary_buffer_size,
-                win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
+                .{ .RESERVE = 1, .COMMIT = 1 },
                 win32.PAGE_READWRITE,
             );
 
@@ -1468,7 +1468,7 @@ pub export fn wWinMain(
             win32_state.game_memory_block = @as([*]u8, @ptrCast(win32.VirtualAlloc(
                 base_address,
                 @intCast(win32_state.total_size),
-                win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
+                .{ .RESERVE = 1, .COMMIT = 1 },
                 win32.PAGE_READWRITE,
             )));
 
@@ -1488,7 +1488,7 @@ pub export fn wWinMain(
                     win32.FILE_SHARE_NONE,
                     null,
                     win32.CREATE_ALWAYS,
-                    win32.FILE_FLAGS_AND_ATTRIBUTES{},
+                    .{},
                     null,
                 );
 

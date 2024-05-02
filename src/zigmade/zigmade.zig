@@ -18,8 +18,8 @@ const HeroBitmaps = struct {
 };
 
 const HighEntity = struct {
-    pos: Vec2 = Vec2{}, // NOTE: Relative to the camera!
-    d_pos: Vec2 = Vec2{},
+    pos: Vec2 = .{}, // NOTE: Relative to the camera!
+    d_pos: Vec2 = .{},
     chunk_z: u32 = 0,
     facing_direction: u32 = 0,
     t_bob: f32 = 0,
@@ -37,7 +37,7 @@ const HitPoint = struct {
 
 pub const LowEntity = struct {
     type: EntityType = .none,
-    pos: world.WorldPosition = world.WorldPosition{},
+    pos: world.WorldPosition = .{},
     width: f32 = 0,
     height: f32 = 0,
     // NOTE: This is for "stairs"
@@ -47,6 +47,8 @@ pub const LowEntity = struct {
     // TODO: Should hit points themselves be entities?
     hit_point_max: u32 = 0,
     hit_points: [16]HitPoint = undefined,
+    sword_low_index: u32 = 0,
+    distance_remaining: f32 = 0,
 };
 
 const EntityType = enum {
@@ -55,6 +57,7 @@ const EntityType = enum {
     wall,
     familiar,
     monster,
+    sword,
 };
 
 const Entity = struct {
@@ -104,6 +107,7 @@ const GameState = struct {
     shadow: Bitmap,
     hero_bitmaps: [4]HeroBitmaps,
     tree: Bitmap,
+    sword: Bitmap,
     meters_to_pixels: f32,
 };
 
@@ -476,7 +480,7 @@ fn moveEntity(
 
     for (0..4) |_| {
         var t_min: f32 = 1.0;
-        var wall_normal = Vec2{};
+        var wall_normal: Vec2 = .{};
         var hit_high_index: usize = 0;
         const desired_position = math.add(high.pos, player_delta);
 
@@ -489,8 +493,8 @@ fn moveEntity(
                 if (test_low.collides) {
                     const diameter_w = test_low.width + low.width;
                     const diameter_h = test_low.height + low.height;
-                    const min_corner = math.scale(Vec2{ .x = diameter_w, .y = diameter_h }, -0.5);
-                    const max_corner = math.scale(Vec2{ .x = diameter_w, .y = diameter_h }, 0.5);
+                    const min_corner = math.scale(.{ .x = diameter_w, .y = diameter_h }, -0.5);
+                    const max_corner = math.scale(.{ .x = diameter_w, .y = diameter_h }, 0.5);
                     const rel = math.sub(high.pos, test_high.pos);
 
                     if (testWall(
@@ -503,7 +507,7 @@ fn moveEntity(
                         min_corner.y,
                         max_corner.y,
                     )) {
-                        wall_normal = Vec2{ .x = -1, .y = 0 };
+                        wall_normal = .{ .x = -1, .y = 0 };
                         hit_high_index = high_index;
                     }
 
@@ -517,7 +521,7 @@ fn moveEntity(
                         min_corner.y,
                         max_corner.y,
                     )) {
-                        wall_normal = Vec2{ .x = 1, .y = 0 };
+                        wall_normal = .{ .x = 1, .y = 0 };
                         hit_high_index = high_index;
                     }
 
@@ -531,7 +535,7 @@ fn moveEntity(
                         min_corner.x,
                         max_corner.x,
                     )) {
-                        wall_normal = Vec2{ .x = 0, .y = -1 };
+                        wall_normal = .{ .x = 0, .y = -1 };
                         hit_high_index = high_index;
                     }
 
@@ -545,7 +549,7 @@ fn moveEntity(
                         min_corner.x,
                         max_corner.x,
                     )) {
-                        wall_normal = Vec2{ .x = 0, .y = 1 };
+                        wall_normal = .{ .x = 0, .y = 1 };
                         hit_high_index = high_index;
                     }
                 }
@@ -609,9 +613,10 @@ fn moveEntity(
 
     // TODO: Bundle these together as the position update?
     world.changeEntityLocation(
-        game_world,
         &game_state.world_arena,
+        game_world,
         entity.low_index,
+        entity.low.?,
         &low.pos,
         &new_p,
     );
@@ -622,8 +627,8 @@ fn moveEntity(
 inline fn getLowEntity(
     game_state: *GameState,
     index: u32,
-) *LowEntity {
-    var result: *LowEntity = undefined;
+) ?*LowEntity {
+    var result: ?*LowEntity = null;
 
     if (index > 0 and index < game_state.low_entities.len) {
         result = &game_state.low_entities[index];
@@ -636,7 +641,7 @@ inline fn forceEntityIntoHigh(
     game_state: *GameState,
     low_index: u32,
 ) Entity {
-    var result = Entity{};
+    var result: Entity = .{};
 
     // TODO: Should we allow passing a zero index and return a null pointer?
     if (low_index > 0 and low_index < game_state.low_entity_count) {
@@ -678,7 +683,7 @@ inline fn makeEntityHighFrequencyFromCamera(
             high = &game_state.high_entities_[high_index];
 
             high.pos = camera_space_p;
-            high.d_pos = Vec2{};
+            high.d_pos = .{};
             high.chunk_z = @intCast(low.pos.chunk_z);
             high.facing_direction = 0;
             high.low_entity_index = low_index;
@@ -789,20 +794,17 @@ fn addLowEntity(
     const entity_index = game_state.low_entity_count;
     game_state.low_entity_count += 1;
 
-    var low = &game_state.low_entities[entity_index];
+    const low = &game_state.low_entities[entity_index];
     low.* = LowEntity{ .type = t };
 
-    if (pos) |p| {
-        low.pos = p.*;
-
-        world.changeEntityLocation(
-            game_state.world.?,
-            &game_state.world_arena,
-            entity_index,
-            null,
-            p,
-        );
-    }
+    world.changeEntityLocation(
+        &game_state.world_arena,
+        game_state.world,
+        entity_index,
+        low,
+        null,
+        pos,
+    );
 
     const result = AddLowEntityResult{
         .low = low,
@@ -840,17 +842,28 @@ fn addWall(
     return entity;
 }
 
+fn initHitPoints(low: *LowEntity, count: u32) void {
+    assert(count < low.hit_points.len);
+    low.hit_point_max = count;
+
+    for (0..low.hit_point_max) |index| {
+        var hit_point = &low.hit_points[index];
+        hit_point.flags = 0;
+        hit_point.filled_amount = HIT_POINT_SUB_COUNT;
+    }
+}
+
 fn addPlayer(game_state: *GameState) AddLowEntityResult {
     var pos = game_state.camera_p;
     const entity = addLowEntity(game_state, .hero, &pos);
 
-    entity.low.hit_point_max = 3;
-    entity.low.hit_points[0].filled_amount = HIT_POINT_SUB_COUNT;
-    entity.low.hit_points[1] = entity.low.hit_points[0];
-    entity.low.hit_points[2] = entity.low.hit_points[1];
     entity.low.height = 0.5;
     entity.low.width = 1.0;
     entity.low.collides = true;
+    initHitPoints(entity.low, 3);
+
+    const sword = addSword(game_state);
+    entity.low.sword_low_index = sword.low_index;
 
     if (game_state.camera_entity_index == 0) {
         game_state.camera_entity_index = entity.low_index;
@@ -878,6 +891,17 @@ fn addMonster(
     entity.low.height = 0.5;
     entity.low.width = 1.0;
     entity.low.collides = true;
+    initHitPoints(entity.low, 3);
+
+    return entity;
+}
+
+fn addSword(game_state: *GameState) AddLowEntityResult {
+    const entity = addLowEntity(game_state, .sword, null);
+
+    entity.low.height = 0.5;
+    entity.low.width = 1.0;
+    entity.low.collides = false;
 
     return entity;
 }
@@ -898,6 +922,7 @@ fn addFamiliar(
     );
 
     const entity = addLowEntity(game_state, .familiar, &pos);
+
     entity.low.height = 0.5;
     entity.low.width = 1.0;
     entity.low.collides = true;
@@ -919,13 +944,10 @@ fn setCamera(
     // TODO: Dim is chosen randomly
     const tile_span_x = 17 * 3;
     const tile_span_y = 9 * 3;
-    const camera_bounds = math.rectCenterDim(
-        Vec2{},
-        math.scale(
-            Vec2{ .x = tile_span_x, .y = tile_span_y },
-            game_world.tile_side_in_meters,
-        ),
-    );
+    const camera_bounds = math.rectCenterDim(.{}, math.scale(
+        .{ .x = tile_span_x, .y = tile_span_y },
+        game_world.tile_side_in_meters,
+    ));
 
     const entity_offset_for_frame = math.negate(d_camera_p.dxy);
 
@@ -1059,7 +1081,7 @@ fn pushRect(
 }
 
 inline fn entityFromHighIndex(game_state: *GameState, high_index: usize) Entity {
-    var result = Entity{};
+    var result: Entity = .{};
 
     assert(high_index < game_state.high_entities_.len);
 
@@ -1071,7 +1093,7 @@ inline fn entityFromHighIndex(game_state: *GameState, high_index: usize) Entity 
 }
 
 fn updateFamiliar(game_state: *GameState, entity: Entity, dt: f32) void {
-    var closest_hero = Entity{};
+    var closest_hero: Entity = .{};
     var closest_hero_d_sq = math.square(10); // NOTE: Ten meter max search
 
     for (1..game_state.high_entity_count) |high_index| {
@@ -1092,7 +1114,7 @@ fn updateFamiliar(game_state: *GameState, entity: Entity, dt: f32) void {
         }
     }
 
-    var dd_p = Vec2{};
+    var dd_p: Vec2 = .{};
 
     if (closest_hero.high) |high| {
         if (closest_hero_d_sq > math.square(3)) {
@@ -1115,6 +1137,35 @@ fn updateFamiliar(game_state: *GameState, entity: Entity, dt: f32) void {
 
 fn updateMonster(_: *GameState, _: Entity, _: f32) void {}
 
+fn drawHitPoints(
+    low: *LowEntity,
+    piece_group: *EntityVisiblePieceGroup,
+) void {
+    if (low.hit_point_max >= 1) {
+        const health_dim: Vec2 = .{ .x = 0.2, .y = 0.2 };
+        const spacing_x = 1.5 * health_dim.x;
+        var hit_p: Vec2 = .{
+            .x = -0.5 * @as(f32, @floatFromInt(low.hit_point_max - 1)) * spacing_x,
+            .y = -0.25,
+        };
+        const d_hit_p: Vec2 = .{ .x = spacing_x, .y = 0 };
+
+        for (0..low.hit_point_max) |index| {
+            const hit_point = low.hit_points[index];
+            var color: Vec4 = .{ .x = 1, .w = 1 };
+
+            if (hit_point.filled_amount == 0) {
+                color.x = 0.2;
+                color.y = 0.2;
+                color.z = 0.2;
+            }
+
+            pushRect(piece_group, hit_p, 0, health_dim, color, 0);
+            hit_p = math.add(hit_p, d_hit_p);
+        }
+    }
+}
+
 // GAME NEEDS FOUR THINGS
 // - timing
 // - controller/keyboard input
@@ -1130,10 +1181,7 @@ pub export fn updateAndRender(
         @sizeOf(platform.GameButtonState) * input.controllers[0].buttons.array.len);
     assert(@sizeOf(GameState) <= memory.permanent_storage_size);
 
-    var game_state: *GameState = @as(
-        *GameState,
-        @alignCast(@ptrCast(memory.permanent_storage)),
-    );
+    var game_state: *GameState = @alignCast(@ptrCast(memory.permanent_storage));
 
     if (!memory.is_initialized) {
         // NOTE: Reserve entity slot 0 as the null entity
@@ -1155,6 +1203,11 @@ pub export fn updateAndRender(
             memory.debugPlatformReadEntireFile,
             "data/test2/tree00.bmp",
         );
+        game_state.sword = debugLoadBmp(
+            thread,
+            memory.debugPlatformReadEntireFile,
+            "data/test2/rock03.bmp",
+        );
 
         var bitmaps = &game_state.hero_bitmaps;
         bitmaps[0].head = debugLoadBmp(
@@ -1172,7 +1225,7 @@ pub export fn updateAndRender(
             memory.debugPlatformReadEntireFile,
             "data/test/test_hero_right_torso.bmp",
         );
-        bitmaps[0].alignment = Vec2{ .x = 72, .y = 182 };
+        bitmaps[0].alignment = .{ .x = 72, .y = 182 };
 
         bitmaps[1].head = debugLoadBmp(
             thread,
@@ -1189,7 +1242,7 @@ pub export fn updateAndRender(
             memory.debugPlatformReadEntireFile,
             "data/test/test_hero_back_torso.bmp",
         );
-        bitmaps[1].alignment = Vec2{ .x = 72, .y = 182 };
+        bitmaps[1].alignment = .{ .x = 72, .y = 182 };
 
         bitmaps[2].head = debugLoadBmp(
             thread,
@@ -1206,7 +1259,7 @@ pub export fn updateAndRender(
             memory.debugPlatformReadEntireFile,
             "data/test/test_hero_left_torso.bmp",
         );
-        bitmaps[2].alignment = Vec2{ .x = 72, .y = 182 };
+        bitmaps[2].alignment = .{ .x = 72, .y = 182 };
 
         bitmaps[3].head = debugLoadBmp(
             thread,
@@ -1223,7 +1276,7 @@ pub export fn updateAndRender(
             memory.debugPlatformReadEntireFile,
             "data/test/test_hero_front_torso.bmp",
         );
-        bitmaps[3].alignment = Vec2{ .x = 72, .y = 182 };
+        bitmaps[3].alignment = .{ .x = 72, .y = 182 };
 
         // TODO: Can we just use Zig's own arena allocator?
         initializeArena(
@@ -1419,11 +1472,11 @@ pub export fn updateAndRender(
             const entity = forceEntityIntoHigh(game_state, low_index);
 
             if (entity.high) |high| {
-                var dd_pos = Vec2{};
+                var dd_pos: Vec2 = .{};
 
                 if (controller.is_analog) {
                     // NOTE: Use analog movement tuning
-                    dd_pos = Vec2{
+                    dd_pos = .{
                         .x = controller.stick_average_x,
                         .y = controller.stick_average_y,
                     };
@@ -1447,11 +1500,50 @@ pub export fn updateAndRender(
                     }
                 }
 
-                if (controller.buttons.map.action_up.ended_down) {
+                if (controller.buttons.map.start.ended_down) {
                     high.dz = 3.0;
                 }
 
+                var d_sword: Vec2 = .{};
+
+                if (controller.buttons.map.action_up.ended_down) {
+                    d_sword = .{ .y = 1 };
+                }
+
+                if (controller.buttons.map.action_down.ended_down) {
+                    d_sword = .{ .y = -1 };
+                }
+
+                if (controller.buttons.map.action_left.ended_down) {
+                    d_sword = .{ .x = -1 };
+                }
+
+                if (controller.buttons.map.action_right.ended_down) {
+                    d_sword = .{ .x = 1 };
+                }
+
                 moveEntity(game_state, entity, input.dt_for_frame, dd_pos);
+
+                if (d_sword.x != 0 or d_sword.y != 0) {
+                    if (entity.low) |low| {
+                        const maybe_sword = getLowEntity(game_state, low.sword_low_index);
+
+                        if (maybe_sword) |sword| {
+                            var sword_pos = low.pos;
+
+                            if (world.isValid(&sword_pos)) {
+                                world.changeEntityLocation(
+                                    &game_state.world_arena,
+                                    game_world,
+                                    low.sword_low_index,
+                                    sword,
+                                    null,
+                                    &sword_pos,
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1500,8 +1592,8 @@ pub export fn updateAndRender(
     if (true) {
         drawRectangle(
             buffer,
-            Vec2{},
-            Vec2{
+            .{},
+            .{
                 .x = @floatFromInt(buffer.width),
                 .y = @floatFromInt(buffer.height),
             },
@@ -1549,32 +1641,14 @@ pub export fn updateAndRender(
                 pushBitmap(&piece_group, &hero_bitmaps.cape, .{}, 0, hero_bitmaps.alignment, 1, 1);
                 pushBitmap(&piece_group, &hero_bitmaps.head, .{}, 0, hero_bitmaps.alignment, 1, 1);
 
-                if (low.hit_point_max >= 1) {
-                    const health_dim = Vec2{ .x = 0.2, .y = 0.2 };
-                    const spacing_x = 1.5 * health_dim.x;
-                    var hit_p = Vec2{
-                        .x = -0.5 * @as(f32, @floatFromInt(low.hit_point_max - 1)) * spacing_x,
-                        .y = -0.25,
-                    };
-                    const d_hit_p = Vec2{ .x = spacing_x, .y = 0 };
-
-                    for (0..low.hit_point_max) |index| {
-                        const hit_point = low.hit_points[index];
-                        var color = Vec4{ .x = 1, .w = 1 };
-
-                        if (hit_point.filled_amount == 0) {
-                            color.x = 0.2;
-                            color.y = 0.2;
-                            color.z = 0.2;
-                        }
-
-                        pushRect(&piece_group, hit_p, 0, health_dim, color, 0);
-                        hit_p = math.add(hit_p, d_hit_p);
-                    }
-                }
+                drawHitPoints(low, &piece_group);
             },
             .wall => {
-                pushBitmap(&piece_group, &game_state.tree, .{}, 0, Vec2{ .x = 40, .y = 80 }, 1, 1);
+                pushBitmap(&piece_group, &game_state.tree, .{}, 0, .{ .x = 40, .y = 80 }, 1, 1);
+            },
+            .sword => {
+                pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
+                pushBitmap(&piece_group, &game_state.sword, .{}, 0, .{ .x = 29, .y = 10 }, 1, 1);
             },
             .familiar => {
                 updateFamiliar(game_state, entity, dt);
@@ -1592,6 +1666,7 @@ pub export fn updateAndRender(
                 updateMonster(game_state, entity, dt);
                 pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
                 pushBitmap(&piece_group, &hero_bitmaps.torso, .{}, 0, hero_bitmaps.alignment, 1, 1);
+                drawHitPoints(low, &piece_group);
             },
             else => {
                 std.debug.print("Invalid code path\n", .{});
@@ -1613,7 +1688,7 @@ pub export fn updateAndRender(
 
         for (0..piece_group.piece_count) |index| {
             const piece = piece_group.pieces[index];
-            const center = Vec2{
+            const center: Vec2 = .{
                 .x = eg_x + piece.offset.x,
                 .y = eg_y + piece.offset.y + piece.offset_z + piece.entity_zc * entity_z,
             };

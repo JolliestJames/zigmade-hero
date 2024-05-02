@@ -7,7 +7,7 @@ const BitScanResult = struct {
 };
 
 pub fn findLeastSigSetBit(value: u32) BitScanResult {
-    var result = BitScanResult{};
+    var result: BitScanResult = .{};
 
     result.index = asm ("bsf %[value], %[index]"
         : [index] "={rax}" (-> u32),
