@@ -4,6 +4,7 @@ const rotl = std.math.rotl;
 const platform = @import("zigmade_platform");
 const world = @import("zigmade_world.zig");
 const math = @import("zigmade_math.zig");
+const sim = @import("zigmade_sim_region.zig");
 const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
@@ -17,16 +18,16 @@ const HeroBitmaps = struct {
     alignment: Vec2,
 };
 
-const HighEntity = struct {
-    pos: Vec2 = .{}, // NOTE: Relative to the camera!
-    d_pos: Vec2 = .{},
-    chunk_z: u32 = 0,
-    facing_direction: u32 = 0,
-    t_bob: f32 = 0,
-    z: f32 = 0,
-    dz: f32 = 0,
-    low_entity_index: u32 = 0,
-};
+//const HighEntity = struct {
+//    pos: Vec2 = .{}, // NOTE: Relative to the camera!
+//    d_pos: Vec2 = .{},
+//    chunk_z: u32 = 0,
+//    facing_direction: u32 = 0,
+//    t_bob: f32 = 0,
+//    z: f32 = 0,
+//    dz: f32 = 0,
+//    low_entity_index: u32 = 0,
+//};
 
 const HIT_POINT_SUB_COUNT = 4;
 const HitPoint = struct {
@@ -40,15 +41,18 @@ pub const LowEntity = struct {
     pos: world.WorldPosition = .{},
     width: f32 = 0,
     height: f32 = 0,
+    facing_direction: u32 = 0,
+    t_bob: f32 = 0,
     // NOTE: This is for "stairs"
     collides: bool = false,
     d_abs_tile_z: i32 = 0,
-    high_entity_index: u32 = 0,
+    //high_entity_index: u32 = 0,
     // TODO: Should hit points themselves be entities?
     hit_point_max: u32 = 0,
     hit_points: [16]HitPoint = undefined,
     sword_low_index: u32 = 0,
     distance_remaining: f32 = 0,
+    // TODO: Generation index so we know how "up to date" this entity is
 };
 
 const EntityType = enum {
@@ -105,9 +109,10 @@ const GameState = struct {
     camera_entity_index: u32,
     camera_p: world.WorldPosition,
     low_entity_count: u32 = 0,
+    // TODO: Change name to StoredEntity
     low_entities: [100000]LowEntity,
-    high_entity_count: u32 = 0,
-    high_entities_: [256]HighEntity,
+    //high_entity_count: u32 = 0,
+    //high_entities_: [256]HighEntity,
     player_controller_index: [5]u32,
     backdrop: Bitmap,
     shadow: Bitmap,
@@ -686,124 +691,125 @@ inline fn getCameraSpaceP(
     return result;
 }
 
-inline fn makeEntityHighFrequencyFromCamera(
-    game_state: *GameState,
-    low: *LowEntity,
-    low_index: u32,
-    camera_space_p: Vec2,
-) *HighEntity {
-    var high: *HighEntity = undefined;
+//inline fn makeEntityHighFrequencyFromCamera(
+//    game_state: *GameState,
+//    low: *LowEntity,
+//    low_index: u32,
+//    camera_space_p: Vec2,
+//) *HighEntity {
+//    var high: *HighEntity = undefined;
+//
+//    assert(low.high_entity_index == 0);
+//
+//    if (low.high_entity_index == 0) {
+//        if (game_state.high_entity_count < game_state.high_entities_.len) {
+//            const high_index = game_state.high_entity_count;
+//            game_state.high_entity_count += 1;
+//            high = &game_state.high_entities_[high_index];
+//
+//            high.pos = camera_space_p;
+//            high.d_pos = .{};
+//            high.chunk_z = @intCast(low.pos.chunk_z);
+//            high.facing_direction = 0;
+//            high.low_entity_index = low_index;
+//
+//            low.high_entity_index = high_index;
+//        } else {
+//            std.debug.print("Invalid code path\n", .{});
+//            assert(false);
+//        }
+//    }
+//
+//    return high;
+//}
 
-    assert(low.high_entity_index == 0);
+//inline fn makeEntityHighFrequency(
+//    game_state: *GameState,
+//    low_index: u32,
+//) *HighEntity {
+//    var high: *HighEntity = undefined;
+//
+//    const low = &game_state.low_entities[low_index];
+//
+//    if (low.high_entity_index > 0) {
+//        high = &game_state.high_entities_[low.high_entity_index];
+//    } else {
+//        const camera_space_p = getCameraSpaceP(game_state, low);
+//
+//        high = makeEntityHighFrequencyFromCamera(
+//            game_state,
+//            low,
+//            low_index,
+//            camera_space_p,
+//        );
+//    }
+//
+//    return high;
+//}
 
-    if (low.high_entity_index == 0) {
-        if (game_state.high_entity_count < game_state.high_entities_.len) {
-            const high_index = game_state.high_entity_count;
-            game_state.high_entity_count += 1;
-            high = &game_state.high_entities_[high_index];
+//inline fn makeEntityLowFrequency(
+//    game_state: *GameState,
+//    low_index: u32,
+//) void {
+//    const low = &game_state.low_entities[low_index];
+//    const high_index = low.high_entity_index;
+//
+//    if (high_index > 0) {
+//        const last_high_index = game_state.high_entity_count - 1;
+//
+//        if (high_index != last_high_index) {
+//            const last = &game_state.high_entities_[last_high_index];
+//            const deleted = &game_state.high_entities_[high_index];
+//
+//            deleted.* = last.*;
+//            game_state.low_entities[last.low_entity_index].high_entity_index = high_index;
+//        }
+//
+//        game_state.high_entity_count -= 1;
+//        low.high_entity_index = 0;
+//    }
+//}
 
-            high.pos = camera_space_p;
-            high.d_pos = .{};
-            high.chunk_z = @intCast(low.pos.chunk_z);
-            high.facing_direction = 0;
-            high.low_entity_index = low_index;
+//inline fn validateEntityPairs(game_state: *GameState) bool {
+//    var valid = true;
+//
+//    for (1..game_state.high_entity_count) |high_index| {
+//        const high = &game_state.high_entities_[high_index];
+//
+//        valid = valid and (game_state
+//            .low_entities[high.low_entity_index]
+//            .high_entity_index ==
+//            high_index);
+//    }
+//
+//    return valid;
+//}
 
-            low.high_entity_index = high_index;
-        } else {
-            std.debug.print("Invalid code path\n", .{});
-            assert(false);
-        }
-    }
-
-    return high;
-}
-
-inline fn makeEntityHighFrequency(
-    game_state: *GameState,
-    low_index: u32,
-) *HighEntity {
-    var high: *HighEntity = undefined;
-
-    const low = &game_state.low_entities[low_index];
-
-    if (low.high_entity_index > 0) {
-        high = &game_state.high_entities_[low.high_entity_index];
-    } else {
-        const camera_space_p = getCameraSpaceP(game_state, low);
-
-        high = makeEntityHighFrequencyFromCamera(
-            game_state,
-            low,
-            low_index,
-            camera_space_p,
-        );
-    }
-
-    return high;
-}
-
-inline fn makeEntityLowFrequency(
-    game_state: *GameState,
-    low_index: u32,
-) void {
-    const low = &game_state.low_entities[low_index];
-    const high_index = low.high_entity_index;
-
-    if (high_index > 0) {
-        const last_high_index = game_state.high_entity_count - 1;
-
-        if (high_index != last_high_index) {
-            const last = &game_state.high_entities_[last_high_index];
-            const deleted = &game_state.high_entities_[high_index];
-
-            deleted.* = last.*;
-            game_state.low_entities[last.low_entity_index].high_entity_index = high_index;
-        }
-
-        game_state.high_entity_count -= 1;
-        low.high_entity_index = 0;
-    }
-}
-
-inline fn validateEntityPairs(game_state: *GameState) bool {
-    var valid = true;
-
-    for (1..game_state.high_entity_count) |high_index| {
-        const high = &game_state.high_entities_[high_index];
-
-        valid = valid and (game_state
-            .low_entities[high.low_entity_index]
-            .high_entity_index ==
-            high_index);
-    }
-
-    return valid;
-}
-
-inline fn offsetAndCheckFrequencyByArea(
-    game_state: *GameState,
-    offset: Vec2,
-    high_frequency_bounds: math.Rectangle2,
-) void {
-    var high_index: usize = 1;
-
-    while (high_index < game_state.high_entity_count) {
-        var high = &game_state.high_entities_[high_index];
-        high.pos = math.add(high.pos, offset);
-        const low = &game_state.low_entities[high.low_entity_index];
-
-        if (world.isValid(&low.pos) and math.isInRectangle(high_frequency_bounds, high.pos)) {
-            high_index += 1;
-        } else {
-            assert(game_state
-                .low_entities[high.low_entity_index]
-                .high_entity_index ==
-                high_index);
-
-            makeEntityLowFrequency(game_state, high.low_entity_index);
-        }
-    }
-}
+//inline fn offsetAndCheckFrequencyByArea(
+//    game_state: *GameState,
+//    offset: Vec2,
+//    high_frequency_bounds: math.Rectangle2,
+//) void {
+//    var high_index: usize = 1;
+//
+//    while (high_index < game_state.high_entity_count) {
+//        var high = &game_state.high_entities_[0];
+//        high += high_index;
+//        high.pos = math.add(high.pos, offset);
+//        const low = &game_state.low_entities[high.low_entity_index];
+//
+//        if (world.isValid(&low.pos) and math.isInRectangle(high_frequency_bounds, high.pos)) {
+//            high_index += 1;
+//        } else {
+//            assert(game_state
+//                .low_entities[high.low_entity_index]
+//                .high_entity_index ==
+//                high_index);
+//
+//            makeEntityLowFrequency(game_state, high.low_entity_index);
+//        }
+//    }
+//}
 
 fn addLowEntity(
     game_state: *GameState,
@@ -951,16 +957,10 @@ fn addFamiliar(
     return entity;
 }
 
-fn setCamera(
-    game_state: *GameState,
-    new_camera_p: *world.WorldPosition,
+fn simCameraRegion(
+    game_state: *GameState
 ) void {
     const game_world = game_state.world.?;
-
-    assert(validateEntityPairs(game_state));
-
-    const d_camera_p = world.subtract(game_world, new_camera_p, &game_state.camera_p);
-    game_state.camera_p = new_camera_p.*;
 
     // TODO: Dim is chosen randomly
     const tile_span_x = 17 * 3;
@@ -970,70 +970,77 @@ fn setCamera(
         game_world.tile_side_in_meters,
     ));
 
-    const entity_offset_for_frame = math.negate(d_camera_p.dxy);
+    var region = sim.beginSim(game_state.arena, game_world, game_state.camera_p, camera_bounds);
+    sim.endSim(&region, game_state);
 
-    offsetAndCheckFrequencyByArea(
-        game_state,
-        entity_offset_for_frame,
-        camera_bounds,
-    );
+    // assert(validateEntityPairs(game_state));
 
-    assert(validateEntityPairs(game_state));
+    //const d_camera_p = world.subtract(game_world, new_camera_p, &game_state.camera_p);
+    //game_state.camera_p = new_camera_p.*;
 
-    // TODO: Do this in terms of tile chunks!
-    const min_chunk_p = world.mapIntoChunkSpace(
-        game_world,
-        new_camera_p.*,
-        math.getMinCorner(camera_bounds),
-    );
+    //const entity_offset_for_frame = math.negate(d_camera_p.dxy);
 
-    const max_chunk_p = world.mapIntoChunkSpace(
-        game_world,
-        new_camera_p.*,
-        math.getMaxCorner(camera_bounds),
-    );
+    //offsetAndCheckFrequencyByArea(
+    //    game_state,
+    //    entity_offset_for_frame,
+    //    camera_bounds,
+    //);
 
-    var chunk_y = min_chunk_p.chunk_y;
+    //assert(validateEntityPairs(game_state));
 
-    while (chunk_y <= max_chunk_p.chunk_y) : (chunk_y += 1) {
-        var chunk_x = min_chunk_p.chunk_x;
+    //const min_chunk_p = world.mapIntoChunkSpace(
+    //    game_world,
+    //    new_camera_p.*,
+    //    math.getMinCorner(camera_bounds),
+    //);
 
-        while (chunk_x <= max_chunk_p.chunk_x) : (chunk_x += 1) {
-            const chunk = world.getWorldChunk(
-                game_world,
-                chunk_x,
-                chunk_y,
-                new_camera_p.chunk_z,
-                null,
-            );
+    //const max_chunk_p = world.mapIntoChunkSpace(
+    //    game_world,
+    //    new_camera_p.*,
+    //    math.getMaxCorner(camera_bounds),
+    //);
 
-            if (chunk) |c| {
-                var block: ?*world.WorldEntityBlock = &c.first_block;
+    //var chunk_y = min_chunk_p.chunk_y;
 
-                while (block) |b| : (block = b.next) {
-                    for (0..b.entity_count) |entity_index| {
-                        const low_index = b.low_entity_index[entity_index];
-                        const low = &game_state.low_entities[low_index];
+    //while (chunk_y <= max_chunk_p.chunk_y) : (chunk_y += 1) {
+    //    var chunk_x = min_chunk_p.chunk_x;
 
-                        if (low.high_entity_index == 0) {
-                            const camera_space_p = getCameraSpaceP(game_state, low);
+    //    while (chunk_x <= max_chunk_p.chunk_x) : (chunk_x += 1) {
+    //        const chunk = world.getWorldChunk(
+    //            game_world,
+    //            chunk_x,
+    //            chunk_y,
+    //            new_camera_p.chunk_z,
+    //            null,
+    //        );
 
-                            if (math.isInRectangle(camera_bounds, camera_space_p)) {
-                                _ = makeEntityHighFrequencyFromCamera(
-                                    game_state,
-                                    low,
-                                    @intCast(low_index),
-                                    camera_space_p,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    //        if (chunk) |c| {
+    //            var block: ?*world.WorldEntityBlock = &c.first_block;
 
-    assert(validateEntityPairs(game_state));
+    //            while (block) |b| : (block = b.next) {
+    //                for (0..b.entity_count) |entity_index| {
+    //                    const low_index = b.low_entity_index[entity_index];
+    //                    const low = &game_state.low_entities[low_index];
+
+    //                    if (low.high_entity_index == 0) {
+    //                        const camera_space_p = getCameraSpaceP(game_state, low);
+
+    //                        if (math.isInRectangle(camera_bounds, camera_space_p)) {
+    //                            _ = makeEntityHighFrequencyFromCamera(
+    //                                game_state,
+    //                                low,
+    //                                @intCast(low_index),
+    //                                camera_space_p,
+    //                            );
+    //                        }
+    //                    }
+    //                }
+    //            }
+    //        }
+    //    }
+    //}
+
+    //assert(validateEntityPairs(game_state));
 }
 
 fn pushPiece(
@@ -1622,43 +1629,15 @@ pub export fn updateAndRender(
         }
     }
 
-    const camera_following_entity = forceEntityIntoHigh(
-        game_state,
-        game_state.camera_entity_index,
-    );
+    // TODO: Dim is chosen randomly
+    const tile_span_x = 17 * 3;
+    const tile_span_y = 9 * 3;
+    const camera_bounds = math.rectCenterDim(.{}, math.scale(
+        .{ .x = tile_span_x, .y = tile_span_y },
+        game_world.tile_side_in_meters,
+    ));
 
-    if (camera_following_entity.high) |high| {
-        const low = camera_following_entity.low.?;
-
-        var new_camera_p = game_state.camera_p;
-
-        new_camera_p.chunk_z = low.pos.chunk_z;
-
-        if (false) {
-            if (high.pos.x > (9.0 * game_world.tile_side_in_meters)) {
-                new_camera_p.abs_tile_x +%= 17;
-            }
-
-            if (high.pos.x < -(9.0 * game_world.tile_side_in_meters)) {
-                new_camera_p.abs_tile_x -%= 17;
-            }
-
-            if (high.pos.y > (5.0 * game_world.tile_side_in_meters)) {
-                new_camera_p.abs_tile_y +%= 9;
-            }
-
-            if (high.pos.y < -(5.0 * game_world.tile_side_in_meters)) {
-                new_camera_p.abs_tile_y -%= 9;
-            }
-        } else {
-            new_camera_p = low.pos;
-        }
-
-        // TODO: Map new entities in and old entities out
-        // TODO: Mapping tiles and stairs into the entity set
-
-        setCamera(game_state, &new_camera_p);
-    }
+    var region = sim.beginSim(game_state.arena, game_world, game_state.camera_p, camera_bounds);
 
     //
     // NOTE: Render
@@ -1685,27 +1664,22 @@ pub export fn updateAndRender(
     var piece_group: EntityVisiblePieceGroup = undefined;
     piece_group.game_state = game_state;
 
-    for (1..game_state.high_entity_count) |high_index| {
+    for (0..region.entity_count) |index| {
+        var entity = region.entities[index];
+
         piece_group.piece_count = 0;
 
-        const high = &game_state.high_entities_[high_index];
-        const low = &game_state.low_entities[high.low_entity_index];
-
-        var entity: Entity = undefined;
-        entity.low_index = high.low_entity_index;
-        entity.low = low;
-        entity.high = high;
-
+        const low = &game_state.low_entities[entity.storage_index];
         const dt = input.dt_for_frame;
 
         // TODO: This is incorrect, should be computed after update
-        var shadow_alpha = 1.0 - 0.5 * high.z;
+        var shadow_alpha = 1.0 - 0.5 * entity.z;
 
         if (shadow_alpha < 0.0) {
             shadow_alpha = 0.0;
         }
 
-        var hero_bitmaps = game_state.hero_bitmaps[high.facing_direction];
+        var hero_bitmaps = game_state.hero_bitmaps[low.facing_direction];
 
         switch (low.type) {
             .hero => {
@@ -1727,13 +1701,13 @@ pub export fn updateAndRender(
             },
             .familiar => {
                 updateFamiliar(game_state, entity, dt);
-                high.t_bob += dt;
+                low.t_bob += dt;
 
-                if (high.t_bob > 2 * std.math.pi) {
-                    high.t_bob -= 2 * std.math.pi;
+                if (low.t_bob > 2 * std.math.pi) {
+                    low.t_bob -= 2 * std.math.pi;
                 }
 
-                const bob_sin = @sin(2 * high.t_bob);
+                const bob_sin = @sin(2 * low.t_bob);
                 pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, 0.5 * shadow_alpha + 0.2 * bob_sin, 0);
                 pushBitmap(&piece_group, &hero_bitmaps.head, .{}, 0.25 * bob_sin, hero_bitmaps.alignment, 1, 1);
             },
@@ -1750,15 +1724,15 @@ pub export fn updateAndRender(
         }
 
         const ddz = -9.8;
-        high.z = 0.5 * ddz * math.square(dt) + high.dz * dt + high.z;
-        high.dz = ddz * dt + high.dz;
+        entity.z = 0.5 * ddz * math.square(dt) + entity.dz * dt + entity.z;
+        entity.dz = ddz * dt + entity.dz;
 
         if (high.z < 0) {
             high.z = 0;
         }
 
-        const eg_x = screen_center_x + meters_to_pixels * high.pos.x;
-        const eg_y = screen_center_y - meters_to_pixels * high.pos.y;
+        const eg_x = screen_center_x + meters_to_pixels * entity.pos.x;
+        const eg_y = screen_center_y - meters_to_pixels * entity.pos.y;
         const entity_z = -meters_to_pixels * high.z;
 
         for (0..piece_group.piece_count) |index| {
@@ -1783,6 +1757,8 @@ pub export fn updateAndRender(
             }
         }
     }
+
+    sim.endSim(&region, game_state);
 }
 
 // NOTE: At the moment, this must be a very fast function
