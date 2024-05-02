@@ -86,6 +86,12 @@ pub inline fn lengthSquared(vec: Vec2) f32 {
     return result;
 }
 
+pub inline fn length(vec: Vec2) f32 {
+    const result = @sqrt(lengthSquared(vec));
+
+    return result;
+}
+
 pub const Rectangle2 = struct {
     min: Vec2,
     max: Vec2,

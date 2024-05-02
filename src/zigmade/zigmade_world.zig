@@ -180,6 +180,8 @@ pub inline fn changeEntityLocationRaw(
 ) void {
     // TODO: If this moves an entity into the camera bounds, should it
     // automatically go into the high set immediately?
+    // If it moves out of the camera bounds, should it be removed from
+    // the high set immediately?
 
     assert(maybe_old_p == null or isValid(maybe_old_p.?));
     assert(maybe_new_p == null or isValid(maybe_new_p.?));

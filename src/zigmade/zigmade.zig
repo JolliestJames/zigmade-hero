@@ -92,6 +92,12 @@ const AddLowEntityResult = struct {
     low: *LowEntity,
 };
 
+const MoveSpec = struct {
+    unit_max_acc_vector: bool,
+    speed: f32,
+    drag: f32,
+};
+
 const GameState = struct {
     world: ?*world.World = null,
     world_arena: MemoryArena,
@@ -440,10 +446,21 @@ fn testWall(
     return hit;
 }
 
+inline fn defaultMoveSpec() MoveSpec {
+    const result: MoveSpec = .{
+        .unit_max_acc_vector = true,
+        .speed = 1,
+        .drag = 0,
+    };
+
+    return result;
+}
+
 fn moveEntity(
     game_state: *GameState,
     entity: Entity,
     dt: f32,
+    move_spec: *MoveSpec,
     dd_pos: Vec2,
 ) void {
     const high = entity.high.?;
@@ -453,19 +470,20 @@ fn moveEntity(
 
     var acceleration = dd_pos;
 
-    const acc_length = math.lengthSquared(acceleration);
+    if (move_spec.unit_max_acc_vector) {
+        const acc_length = math.lengthSquared(acceleration);
 
-    if (acc_length > 1.0) {
-        acceleration = math.scale(acceleration, 1.0 / @sqrt(acc_length));
+        if (acc_length > 1.0) {
+            acceleration = math.scale(acceleration, 1.0 / @sqrt(acc_length));
+        }
     }
 
-    const player_speed: f32 = 50.0; // m/s^2
-    acceleration = math.scale(acceleration, player_speed);
+    acceleration = math.scale(acceleration, move_spec.speed);
 
     // TODO: ODE here
     acceleration = math.add(
         acceleration,
-        math.scale(high.d_pos, -8.0),
+        math.scale(high.d_pos, -move_spec.drag),
     );
 
     var player_delta = math.add(
@@ -484,73 +502,75 @@ fn moveEntity(
         var hit_high_index: usize = 0;
         const desired_position = math.add(high.pos, player_delta);
 
-        for (1..game_state.high_entity_count) |high_index| {
-            if (high_index != low.high_entity_index) {
-                const test_high = &game_state.high_entities_[high_index];
-                const test_low_index = test_high.low_entity_index;
-                const test_low = &game_state.low_entities[test_low_index];
+        if (low.collides) {
+            for (1..game_state.high_entity_count) |high_index| {
+                if (high_index != low.high_entity_index) {
+                    const test_high = &game_state.high_entities_[high_index];
+                    const test_low_index = test_high.low_entity_index;
+                    const test_low = &game_state.low_entities[test_low_index];
 
-                if (test_low.collides) {
-                    const diameter_w = test_low.width + low.width;
-                    const diameter_h = test_low.height + low.height;
-                    const min_corner = math.scale(.{ .x = diameter_w, .y = diameter_h }, -0.5);
-                    const max_corner = math.scale(.{ .x = diameter_w, .y = diameter_h }, 0.5);
-                    const rel = math.sub(high.pos, test_high.pos);
+                    if (test_low.collides) {
+                        const diameter_w = test_low.width + low.width;
+                        const diameter_h = test_low.height + low.height;
+                        const min_corner = math.scale(.{ .x = diameter_w, .y = diameter_h }, -0.5);
+                        const max_corner = math.scale(.{ .x = diameter_w, .y = diameter_h }, 0.5);
+                        const rel = math.sub(high.pos, test_high.pos);
 
-                    if (testWall(
-                        min_corner.x,
-                        rel.x,
-                        rel.y,
-                        player_delta.x,
-                        player_delta.y,
-                        &t_min,
-                        min_corner.y,
-                        max_corner.y,
-                    )) {
-                        wall_normal = .{ .x = -1, .y = 0 };
-                        hit_high_index = high_index;
-                    }
+                        if (testWall(
+                            min_corner.x,
+                            rel.x,
+                            rel.y,
+                            player_delta.x,
+                            player_delta.y,
+                            &t_min,
+                            min_corner.y,
+                            max_corner.y,
+                        )) {
+                            wall_normal = .{ .x = -1, .y = 0 };
+                            hit_high_index = high_index;
+                        }
 
-                    if (testWall(
-                        max_corner.x,
-                        rel.x,
-                        rel.y,
-                        player_delta.x,
-                        player_delta.y,
-                        &t_min,
-                        min_corner.y,
-                        max_corner.y,
-                    )) {
-                        wall_normal = .{ .x = 1, .y = 0 };
-                        hit_high_index = high_index;
-                    }
+                        if (testWall(
+                            max_corner.x,
+                            rel.x,
+                            rel.y,
+                            player_delta.x,
+                            player_delta.y,
+                            &t_min,
+                            min_corner.y,
+                            max_corner.y,
+                        )) {
+                            wall_normal = .{ .x = 1, .y = 0 };
+                            hit_high_index = high_index;
+                        }
 
-                    if (testWall(
-                        min_corner.y,
-                        rel.y,
-                        rel.x,
-                        player_delta.y,
-                        player_delta.x,
-                        &t_min,
-                        min_corner.x,
-                        max_corner.x,
-                    )) {
-                        wall_normal = .{ .x = 0, .y = -1 };
-                        hit_high_index = high_index;
-                    }
+                        if (testWall(
+                            min_corner.y,
+                            rel.y,
+                            rel.x,
+                            player_delta.y,
+                            player_delta.x,
+                            &t_min,
+                            min_corner.x,
+                            max_corner.x,
+                        )) {
+                            wall_normal = .{ .x = 0, .y = -1 };
+                            hit_high_index = high_index;
+                        }
 
-                    if (testWall(
-                        max_corner.y,
-                        rel.y,
-                        rel.x,
-                        player_delta.y,
-                        player_delta.x,
-                        &t_min,
-                        min_corner.x,
-                        max_corner.x,
-                    )) {
-                        wall_normal = .{ .x = 0, .y = 1 };
-                        hit_high_index = high_index;
+                        if (testWall(
+                            max_corner.y,
+                            rel.y,
+                            rel.x,
+                            player_delta.y,
+                            player_delta.x,
+                            &t_min,
+                            min_corner.x,
+                            max_corner.x,
+                        )) {
+                            wall_normal = .{ .x = 0, .y = 1 };
+                            hit_high_index = high_index;
+                        }
                     }
                 }
             }
@@ -770,8 +790,9 @@ inline fn offsetAndCheckFrequencyByArea(
     while (high_index < game_state.high_entity_count) {
         var high = &game_state.high_entities_[high_index];
         high.pos = math.add(high.pos, offset);
+        const low = &game_state.low_entities[high.low_entity_index];
 
-        if (math.isInRectangle(high_frequency_bounds, high.pos)) {
+        if (world.isValid(&low.pos) and math.isInRectangle(high_frequency_bounds, high.pos)) {
             high_index += 1;
         } else {
             assert(game_state
@@ -1132,10 +1153,47 @@ fn updateFamiliar(game_state: *GameState, entity: Entity, dt: f32) void {
         }
     }
 
-    moveEntity(game_state, entity, dt, dd_p);
+    var move_spec = defaultMoveSpec();
+
+    move_spec = .{
+        .unit_max_acc_vector = true,
+        .speed = 50,
+        .drag = 8,
+    };
+
+    moveEntity(game_state, entity, dt, &move_spec, dd_p);
 }
 
 fn updateMonster(_: *GameState, _: Entity, _: f32) void {}
+
+fn updateSword(game_state: *GameState, entity: Entity, dt: f32) void {
+    var move_spec = defaultMoveSpec();
+
+    move_spec = .{
+        .unit_max_acc_vector = false,
+        .speed = 0,
+        .drag = 0,
+    };
+
+    var low = entity.low.?;
+    const high = entity.high.?;
+
+    const old_pos = high.pos;
+    moveEntity(game_state, entity, dt, &move_spec, .{});
+    const distance_traveled = math.length(math.sub(high.pos, old_pos));
+    low.distance_remaining -= distance_traveled;
+
+    if (low.distance_remaining < 0) {
+        world.changeEntityLocation(
+            &game_state.world_arena,
+            game_state.world,
+            entity.low_index,
+            low,
+            &low.pos,
+            null,
+        );
+    }
+}
 
 fn drawHitPoints(
     low: *LowEntity,
@@ -1522,24 +1580,40 @@ pub export fn updateAndRender(
                     d_sword = .{ .x = 1 };
                 }
 
-                moveEntity(game_state, entity, input.dt_for_frame, dd_pos);
+                // TODO: Now that we have some real usage examples, let's
+                // solidify the positioning system
+
+                var move_spec = defaultMoveSpec();
+
+                move_spec = .{
+                    .unit_max_acc_vector = true,
+                    .speed = 50,
+                    .drag = 8,
+                };
+
+                moveEntity(game_state, entity, input.dt_for_frame, &move_spec, dd_pos);
 
                 if (d_sword.x != 0 or d_sword.y != 0) {
                     if (entity.low) |low| {
-                        const maybe_sword = getLowEntity(game_state, low.sword_low_index);
+                        const maybe_low_sword = getLowEntity(game_state, low.sword_low_index);
 
-                        if (maybe_sword) |sword| {
-                            var sword_pos = low.pos;
+                        if (maybe_low_sword) |low_sword| {
+                            if (!world.isValid(&low_sword.pos)) {
+                                var sword_pos = low.pos;
 
-                            if (world.isValid(&sword_pos)) {
                                 world.changeEntityLocation(
                                     &game_state.world_arena,
                                     game_world,
                                     low.sword_low_index,
-                                    sword,
+                                    low_sword,
                                     null,
                                     &sword_pos,
                                 );
+
+                                const sword = forceEntityIntoHigh(game_state, low.sword_low_index);
+
+                                low_sword.distance_remaining = 5;
+                                sword.high.?.d_pos = math.scale(d_sword, 5);
                             }
                         }
                     }
@@ -1647,6 +1721,7 @@ pub export fn updateAndRender(
                 pushBitmap(&piece_group, &game_state.tree, .{}, 0, .{ .x = 40, .y = 80 }, 1, 1);
             },
             .sword => {
+                updateSword(game_state, entity, dt);
                 pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
                 pushBitmap(&piece_group, &game_state.sword, .{}, 0, .{ .x = 29, .y = 10 }, 1, 1);
             },
