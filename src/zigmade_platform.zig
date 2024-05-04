@@ -125,9 +125,9 @@ pub const GameMemory = struct {
     is_initialized: bool = false,
     permanent_storage_size: u32 = 0,
     // NOTE: Required to be cleared to zero at startup
-    permanent_storage: [*]u8 = undefined,
+    permanent_storage: [*]void = undefined,
     transient_storage_size: u32 = 0,
-    transient_storage: [*]u8 = undefined,
+    transient_storage: [*]void = undefined,
     debugPlatformReadEntireFile: debugPlatformReadEntireFile,
     debugPlatformFreeFileMemory: debugPlatformFreeFileMemory,
     debugPlatformWriteEntireFile: debugPlatformWriteEntireFile,

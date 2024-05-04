@@ -304,11 +304,11 @@ inline fn tileRelIsCanonical(
     world: *World,
     tile_rel: f32,
 ) bool {
-    const result =
-        tile_rel >= -0.5 * world.chunk_side_in_meters and
-        tile_rel <= 0.5 * world.chunk_side_in_meters;
-
     // TODO: Fix floating point math so this can be exact
+    const epsilon = 0.0001;
+    const result =
+        (tile_rel >= -0.5 * world.chunk_side_in_meters - epsilon) and
+        (tile_rel <= 0.5 * world.chunk_side_in_meters + epsilon);
 
     return result;
 }

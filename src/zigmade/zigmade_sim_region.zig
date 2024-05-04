@@ -7,14 +7,11 @@ const world = @import("zigmade_world.zig");
 const Vec2 = math.Vec2;
 const Rectangle2 = math.Rectangle2;
 const LowEntity = game.LowEntity;
-//const Entity = game.Entity;
 const GameState = game.GameState;
 const World = world.World;
 const WorldPosition = world.WorldPosition;
 
-const SimArena = struct {};
-
-const HIT_POINT_SUB_COUNT = 4;
+pub const HIT_POINT_SUB_COUNT = 4;
 
 const HitPoint = struct {
     // TODO: Bake this down into one variable (packed struct?)
@@ -28,7 +25,7 @@ pub const MoveSpec = struct {
     drag: f32,
 };
 
-const EntityType = enum {
+pub const EntityType = enum {
     none,
     hero,
     wall,
@@ -37,13 +34,19 @@ const EntityType = enum {
     sword,
 };
 
-const EntityReference = union {
+const EntityReferenceTag = enum {
+    ptr,
+    index,
+};
+
+const EntityReference = union(EntityReferenceTag) {
     ptr: ?*SimEntity,
     index: u32,
 };
 
-const SimEntity = struct {
-    storage_index: u32,
+// TODO: Rename SimEntity to Entity
+pub const SimEntity = struct {
+    storage_index: u32 = 0,
     type: EntityType = .none,
     pos: Vec2 = .{},
     chunk_z: u32 = 0,
@@ -71,7 +74,7 @@ const SimEntityHash = struct {
     index: u32,
 };
 
-const SimRegion = struct {
+pub const SimRegion = struct {
     // TODO: Need a hash table to map stored entity indices to
     // sim entities
     world: *World,
@@ -93,8 +96,9 @@ fn getHashFromStorageIndex(region: *SimRegion, storage_index: u32) *SimEntityHas
     const hash_value: usize = storage_index;
 
     for (0..region.hash.len) |offset| {
-        const slot = (hash_value + offset) & (region.hash.len - 1);
-        const entry = region.hash[slot];
+        const hash_mask = region.hash.len - 1;
+        const hash_index = (hash_value + offset) & hash_mask;
+        const entry = &region.hash[hash_index];
 
         if (entry.index == 0 or entry.index == storage_index) {
             result = entry;
@@ -132,20 +136,25 @@ inline fn loadEntityReference(
     region: *SimRegion,
     ref: *EntityReference,
 ) void {
-    if (ref.index > 0) {
-        var entry = getHashFromStorageIndex(region, ref.index);
+    switch (ref.*) {
+        .index => {
+            if (ref.index > 0) {
+                var entry = getHashFromStorageIndex(region, ref.index);
 
-        if (entry.ptr == null) {
-            entry.index = ref.index;
-            entry.ptr = addEntity(
-                game_state,
-                region,
-                ref.index,
-                game.getLowEntity(game_state, ref.index),
-            );
-        }
+                if (entry.ptr == null) {
+                    entry.index = ref.index;
+                    entry.ptr = addEntity(
+                        game_state,
+                        region,
+                        ref.index,
+                        game.getLowEntity(game_state, ref.index),
+                    );
+                }
 
-        ref.ptr = entry.ptr;
+                ref.ptr = entry.ptr;
+            }
+        },
+        else => {},
     }
 }
 
@@ -166,7 +175,7 @@ fn addEntity(
     var entity: *SimEntity = undefined;
 
     if (region.entity_count < region.max_entity_count) {
-        entity = region.entities[region.entity_count];
+        entity = &region.entities[region.entity_count];
         region.entity_count += 1;
         mapStorageIndexToEntity(region, storage_index, entity);
 
@@ -189,10 +198,8 @@ inline fn getSimSpaceP(
     sim_region: *SimRegion,
     stored: *LowEntity,
 ) Vec2 {
-    const game_world = sim_region.world.?;
-
     // NOTE: Map entity into camera space
-    const diff = world.subtract(game_world, &stored.pos, &sim_region.origin);
+    const diff = world.subtract(sim_region.world, &stored.pos, &sim_region.origin);
     const result = diff.dxy;
 
     return result;
@@ -204,7 +211,7 @@ fn addStoredEntity(
     storage_index: u32,
     source: *LowEntity,
     maybe_sim_pos: ?*Vec2,
-) *SimEntity {
+) ?*SimEntity {
     const maybe_dest: ?*SimEntity = addEntity(game_state, sim_region, storage_index, source);
 
     if (maybe_dest) |dest| {
@@ -218,8 +225,8 @@ fn addStoredEntity(
     return maybe_dest;
 }
 
-fn beginSim(
-    arena: *SimArena,
+pub fn beginSim(
+    arena: *game.MemoryArena,
     game_state: *GameState,
     game_world: *World,
     origin: WorldPosition,
@@ -227,31 +234,29 @@ fn beginSim(
 ) *SimRegion {
     // TODO: If entities are stored in the world, we wouldn't need game state here
 
-    // TODO: IMPORTANT: CLEAR THE HASH TABLE
     // TODO: IMPORTANT: NOTION OF ACTIVE VS INACTIVE ENTITIES FOR THE APRON
 
     var sim_region = game.pushStruct(arena, SimRegion);
+    game.zeroStruct(@TypeOf(sim_region.hash), &sim_region.hash);
 
-    sim_region = .{
-        .world = game_world,
-        .origin = origin,
-        .bounds = bounds,
-        // TODO: need to be more specific about entity counts
-        .max_entity_count = 1024,
-        .entity_count = 0,
-    };
+    sim_region.world = game_world;
+    sim_region.origin = origin;
+    sim_region.bounds = bounds;
+    // TODO: need to be more specific about entity counts
+    sim_region.max_entity_count = 1024;
+    sim_region.entity_count = 0;
 
     sim_region.entities = game.pushArray(arena, sim_region.max_entity_count, SimEntity);
 
     const min_chunk_p = world.mapIntoChunkSpace(
         game_world,
-        sim_region.center,
+        sim_region.origin,
         math.getMinCorner(sim_region.bounds),
     );
 
     const max_chunk_p = world.mapIntoChunkSpace(
         game_world,
-        sim_region.center,
+        sim_region.origin,
         math.getMaxCorner(sim_region.bounds),
     );
 
@@ -277,21 +282,23 @@ fn beginSim(
                         const low_index = b.low_entity_index[entity_index];
                         const low = &game_state.low_entities[low_index];
 
-                        const sim_space_p = getSimSpaceP(sim_region, low);
+                        var sim_space_p = getSimSpaceP(sim_region, low);
 
                         if (math.isInRectangle(sim_region.bounds, sim_space_p)) {
                             // TODO: Check a second rectangle to set the entity
                             // to be "movable" or not
-                            addEntity(game_state, sim_region, low_index, low, sim_space_p);
+                            _ = addStoredEntity(game_state, sim_region, low_index, low, &sim_space_p);
                         }
                     }
                 }
             }
         }
     }
+
+    return sim_region;
 }
 
-fn endSim(
+pub fn endSim(
     region: *SimRegion,
     game_state: *game.GameState,
 ) void {
@@ -300,7 +307,7 @@ fn endSim(
         for (0..region.entity_count) |index| {
             const entity = &region.entities[index];
 
-            var stored = game_state.low_entities[entity.storage_index];
+            var stored = &game_state.low_entities[entity.storage_index];
 
             stored.sim = entity.*;
             storeEntityReference(&stored.sim.sword);
@@ -312,9 +319,9 @@ fn endSim(
 
             world.changeEntityLocation(
                 &game_state.world_arena,
-                game_state.world,
+                game_world,
                 entity.storage_index,
-                entity,
+                &game_state.low_entities[entity.storage_index],
                 &stored.pos,
                 &new_p,
             );
@@ -376,11 +383,11 @@ fn testWall(
     return hit;
 }
 
-fn moveEntity(
+pub fn moveEntity(
     region: *SimRegion,
     entity: *SimEntity,
     dt: f32,
-    move_spec: *game.MoveSpec,
+    move_spec: *MoveSpec,
     dd_pos: Vec2,
 ) void {
     //const game_world = game_state.world.?;
@@ -417,13 +424,13 @@ fn moveEntity(
         var t_min: f32 = 1.0;
         var wall_normal: Vec2 = .{};
         //var hit_high_index: usize = 0;
-        var hit_entity: SimEntity = undefined;
+        var hit_entity: ?*SimEntity = null;
         const desired_position = math.add(entity.pos, player_delta);
 
         if (entity.collides) {
             // TODO: Spatial partition here!
             for (1..region.entity_count) |high_index| {
-                const test_entity = region.entities[high_index];
+                const test_entity = &region.entities[high_index];
                 if (entity != test_entity) {
                     if (test_entity.collides) {
                         const diameter_w = test_entity.width + entity.width;
