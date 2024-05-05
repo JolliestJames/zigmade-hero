@@ -8,12 +8,16 @@ const sim = @import("zigmade_sim_region.zig");
 const Vec2 = math.Vec2;
 const Rectangle2 = math.Rectangle2;
 const LowEntity = game.LowEntity;
-const Entity = sim.SimEntity;
+const Entity = sim.Entity;
 const SimRegion = sim.SimRegion;
 const MoveSpec = sim.MoveSpec;
 const GameState = game.GameState;
 const World = world.World;
 const WorldPosition = world.WorldPosition;
+
+pub inline fn invalidPos() Vec2 {
+    return Vec2{ .x = 100000, .y = 100000 };
+}
 
 pub inline fn defaultMoveSpec() MoveSpec {
     const result: MoveSpec = .{
@@ -72,23 +76,42 @@ pub fn updateFamiliar(region: *SimRegion, entity: *Entity, dt: f32) void {
 
 pub fn updateMonster(_: *SimRegion, _: *Entity, _: f32) void {}
 
+inline fn makeEntityNonSpatial(entity: *Entity) void {
+    entity.flags.non_spatial = true;
+    entity.pos = invalidPos();
+}
+
+pub inline fn makeEntitySpatial(
+    entity: *Entity,
+    pos: Vec2,
+    d_pos: Vec2,
+) void {
+    entity.flags.non_spatial = false;
+    entity.pos = pos;
+    entity.d_pos = d_pos;
+}
+
 pub fn updateSword(region: *SimRegion, entity: *Entity, dt: f32) void {
-    var move_spec = defaultMoveSpec();
+    if (entity.flags.non_spatial) {} else {
+        var move_spec = defaultMoveSpec();
 
-    move_spec = .{
-        .unit_max_acc_vector = false,
-        .speed = 0,
-        .drag = 0,
-    };
+        move_spec = .{
+            .unit_max_acc_vector = false,
+            .speed = 0,
+            .drag = 0,
+        };
 
-    const old_pos = entity.pos;
-    sim.moveEntity(region, entity, dt, &move_spec, .{});
-    const diff = math.sub(entity.pos, old_pos);
-    const distance_traveled = math.length(diff);
-    entity.distance_remaining -= distance_traveled;
+        const old_pos = entity.pos;
+        sim.moveEntity(region, entity, dt, &move_spec, .{});
+        const diff = math.sub(entity.pos, old_pos);
+        const distance_traveled = math.length(diff);
+        entity.distance_remaining -= distance_traveled;
 
-    if (entity.distance_remaining < 0) {
-        std.debug.print("NEED TO MAKE ENTITIES BE ABLE TO NOT BE THERE\n", .{});
-        assert(false);
+        // TODO: Need to handle the fact that distance_traveled might
+        // not have enough distance for the total entity move
+        // for the frame
+        if (entity.distance_remaining < 0) {
+            makeEntityNonSpatial(entity);
+        }
     }
 }

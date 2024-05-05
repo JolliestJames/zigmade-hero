@@ -280,9 +280,20 @@ pub inline fn changeEntityLocation(
     maybe_world: ?*World,
     low_entity_index: u32,
     low: *game.LowEntity,
-    maybe_old_p: ?*WorldPosition,
-    maybe_new_p: ?*WorldPosition,
+    new_p_init: WorldPosition,
 ) void {
+    var p = new_p_init;
+    var maybe_old_p: ?*WorldPosition = null;
+    var maybe_new_p: ?*WorldPosition = null;
+
+    if (isValid(&low.pos) and !low.sim.flags.non_spatial) {
+        maybe_old_p = &low.pos;
+    }
+
+    if (isValid(&p)) {
+        maybe_new_p = &p;
+    }
+
     if (maybe_world) |world| {
         changeEntityLocationRaw(
             arena,
@@ -295,8 +306,10 @@ pub inline fn changeEntityLocation(
 
     if (maybe_new_p) |new_p| {
         low.pos = new_p.*;
+        low.sim.flags.non_spatial = false;
     } else {
         low.pos = nullPosition();
+        low.sim.flags.non_spatial = true;
     }
 }
 

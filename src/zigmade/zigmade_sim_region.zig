@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 const game = @import("zigmade.zig");
 const math = @import("zigmade_math.zig");
 const world = @import("zigmade_world.zig");
+const ety = @import("zigmade_entity.zig");
 
 const Vec2 = math.Vec2;
 const Rectangle2 = math.Rectangle2;
@@ -40,37 +41,42 @@ const EntityReferenceTag = enum {
 };
 
 const EntityReference = union(EntityReferenceTag) {
-    ptr: ?*SimEntity,
+    ptr: *Entity,
     index: u32,
 };
 
-// TODO: Rename SimEntity to Entity
-pub const SimEntity = struct {
+const EntityFlags = packed struct(u32) {
+    // TODO: Does it make more sense for this flag to be non_colliding?
+    collides: bool = false,
+    non_spatial: bool = false,
+    simming: bool = false,
+    _padding: u29 = 0,
+};
+
+pub const Entity = struct {
     storage_index: u32 = 0,
     type: EntityType = .none,
+    flags: EntityFlags = .{},
     pos: Vec2 = .{},
-    chunk_z: u32 = 0,
+    d_pos: Vec2 = .{},
     z: f32 = 0,
     dz: f32 = 0,
-    d_pos: Vec2 = .{},
+    chunk_z: u32 = 0,
     width: f32 = 0,
     height: f32 = 0,
     facing_direction: u32 = 0,
     t_bob: f32 = 0,
-    collides: bool = false,
     d_abs_tile_z: i32 = 0,
     // TODO: Should hit points themselves be entities?
     hit_point_max: u32 = 0,
     hit_points: [16]HitPoint = undefined,
-    sword: EntityReference = undefined,
+    sword: EntityReference = .{ .index = 0 },
     distance_remaining: f32 = 0,
     // TODO: Generation index so we know how "up to date" this entity is
 };
 
-//const StoredEntity = struct {};
-
 const SimEntityHash = struct {
-    ptr: ?*SimEntity,
+    ptr: ?*Entity,
     index: u32,
 };
 
@@ -82,7 +88,7 @@ pub const SimRegion = struct {
     bounds: Rectangle2,
     max_entity_count: u32,
     entity_count: u32,
-    entities: [*]SimEntity,
+    entities: [*]Entity,
     // TODO: Do we really want a hash for this?
     // NOTE: Must be a power of two
     hash: [4096]SimEntityHash,
@@ -109,23 +115,10 @@ fn getHashFromStorageIndex(region: *SimRegion, storage_index: u32) *SimEntityHas
     return result;
 }
 
-fn mapStorageIndexToEntity(
-    region: *SimRegion,
-    storage_index: u32,
-    entity: *SimEntity,
-) void {
-    var entry = getHashFromStorageIndex(region, storage_index);
-
-    assert(entry.index == 0 or entry.index == storage_index);
-
-    entry.index = storage_index;
-    entry.ptr = entity;
-}
-
 inline fn getEntityByStorageIndex(
     region: *SimRegion,
     storage_index: u32,
-) ?*SimEntity {
+) ?*Entity {
     const entry = getHashFromStorageIndex(region, storage_index);
     const result = entry.ptr;
     return result;
@@ -143,15 +136,17 @@ inline fn loadEntityReference(
 
                 if (entry.ptr == null) {
                     entry.index = ref.index;
+
                     entry.ptr = addEntity(
                         game_state,
                         region,
                         ref.index,
                         game.getLowEntity(game_state, ref.index),
+                        null,
                     );
                 }
 
-                ref.ptr = entry.ptr;
+                ref.* = .{ .ptr = entry.ptr.? };
             }
         },
         else => {},
@@ -159,36 +154,52 @@ inline fn loadEntityReference(
 }
 
 inline fn storeEntityReference(ref: *EntityReference) void {
-    if (ref.ptr) |ptr| {
-        ref.index = ptr.storage_index;
+    switch (ref.*) {
+        .ptr => {
+            const copy = ref.ptr;
+            ref.* = .{ .index = copy.storage_index };
+        },
+        else => {},
     }
 }
 
-fn addEntity(
+fn addEntityRaw(
     game_state: *GameState,
     region: *SimRegion,
     storage_index: u32,
     maybe_source: ?*LowEntity,
-) *SimEntity {
+) ?*Entity {
     assert(storage_index > 0);
 
-    var entity: *SimEntity = undefined;
+    var entity: ?*Entity = null;
 
-    if (region.entity_count < region.max_entity_count) {
-        entity = &region.entities[region.entity_count];
-        region.entity_count += 1;
-        mapStorageIndexToEntity(region, storage_index, entity);
+    var entry = getHashFromStorageIndex(region, storage_index);
 
-        if (maybe_source) |source| {
-            // TODO: This should really be a decompression step, not a copy
-            entity.* = source.sim;
-            loadEntityReference(game_state, region, &entity.sword);
+    if (entry.ptr == null) {
+        if (region.entity_count < region.max_entity_count) {
+            entity = &region.entities[region.entity_count];
+            region.entity_count += 1;
+
+            entry = getHashFromStorageIndex(region, storage_index);
+
+            entry.index = storage_index;
+            entry.ptr = entity;
+
+            if (maybe_source) |source| {
+                // TODO: This should really be a decompression step, not a copy
+                entity.?.* = source.sim;
+
+                loadEntityReference(game_state, region, &entity.?.sword);
+
+                assert(!source.sim.flags.simming);
+                source.sim.flags.simming = true;
+            }
+
+            entity.?.storage_index = storage_index;
+        } else {
+            std.debug.print("Invalid code path\n", .{});
+            assert(false);
         }
-
-        entity.storage_index = storage_index;
-    } else {
-        std.debug.print("Invalid code path\n", .{});
-        assert(false);
     }
 
     return entity;
@@ -196,23 +207,32 @@ fn addEntity(
 
 inline fn getSimSpaceP(
     sim_region: *SimRegion,
-    stored: *LowEntity,
+    maybe_stored: ?*LowEntity,
 ) Vec2 {
     // NOTE: Map entity into camera space
-    const diff = world.subtract(sim_region.world, &stored.pos, &sim_region.origin);
-    const result = diff.dxy;
+    // TODO: Do we want to set this to signaling NAN in
+    // debug to make sure nobody ever uses the position
+    // of a nonspatial entity?
+    var result = ety.invalidPos();
+
+    if (maybe_stored) |stored| {
+        if (!stored.sim.flags.non_spatial) {
+            const diff = world.subtract(sim_region.world, &stored.pos, &sim_region.origin);
+            result = diff.dxy;
+        }
+    }
 
     return result;
 }
 
-fn addStoredEntity(
+fn addEntity(
     game_state: *GameState,
     sim_region: *SimRegion,
     storage_index: u32,
-    source: *LowEntity,
+    source: ?*LowEntity,
     maybe_sim_pos: ?*Vec2,
-) ?*SimEntity {
-    const maybe_dest: ?*SimEntity = addEntity(game_state, sim_region, storage_index, source);
+) ?*Entity {
+    const maybe_dest = addEntityRaw(game_state, sim_region, storage_index, source);
 
     if (maybe_dest) |dest| {
         if (maybe_sim_pos) |sim_pos| {
@@ -246,7 +266,7 @@ pub fn beginSim(
     sim_region.max_entity_count = 1024;
     sim_region.entity_count = 0;
 
-    sim_region.entities = game.pushArray(arena, sim_region.max_entity_count, SimEntity);
+    sim_region.entities = game.pushArray(arena, sim_region.max_entity_count, Entity);
 
     const min_chunk_p = world.mapIntoChunkSpace(
         game_world,
@@ -282,12 +302,14 @@ pub fn beginSim(
                         const low_index = b.low_entity_index[entity_index];
                         const low = &game_state.low_entities[low_index];
 
-                        var sim_space_p = getSimSpaceP(sim_region, low);
+                        if (!low.sim.flags.non_spatial) {
+                            var sim_space_p = getSimSpaceP(sim_region, low);
 
-                        if (math.isInRectangle(sim_region.bounds, sim_space_p)) {
-                            // TODO: Check a second rectangle to set the entity
-                            // to be "movable" or not
-                            _ = addStoredEntity(game_state, sim_region, low_index, low, &sim_space_p);
+                            if (math.isInRectangle(sim_region.bounds, sim_space_p)) {
+                                // TODO: Check a second rectangle to set the entity
+                                // to be "movable" or not
+                                _ = addEntity(game_state, sim_region, low_index, low, &sim_space_p);
+                            }
                         }
                     }
                 }
@@ -303,27 +325,33 @@ pub fn endSim(
     game_state: *game.GameState,
 ) void {
     // TODO: Maybe don't take a game state here, low entities should be stored in the world?
+
     if (game_state.world) |game_world| {
         for (0..region.entity_count) |index| {
             const entity = &region.entities[index];
 
             var stored = &game_state.low_entities[entity.storage_index];
 
+            assert(stored.sim.flags.simming);
             stored.sim = entity.*;
+            assert(!stored.sim.flags.simming);
+
             storeEntityReference(&stored.sim.sword);
 
             // TODO: Save state back to the stored entity, once high entities
             // do state decompression, etc.
 
-            var new_p = world.mapIntoChunkSpace(game_world, region.origin, entity.pos);
+            const new_p = if (entity.flags.non_spatial)
+                world.nullPosition()
+            else
+                world.mapIntoChunkSpace(game_world, region.origin, entity.pos);
 
             world.changeEntityLocation(
                 &game_state.world_arena,
                 game_world,
                 entity.storage_index,
                 &game_state.low_entities[entity.storage_index],
-                &stored.pos,
-                &new_p,
+                new_p,
             );
 
             if (entity.storage_index == game_state.camera_entity_index) {
@@ -350,6 +378,8 @@ pub fn endSim(
                 } else {
                     new_camera_p = stored.pos;
                 }
+
+                game_state.camera_p = new_camera_p;
             }
         }
     }
@@ -385,12 +415,12 @@ fn testWall(
 
 pub fn moveEntity(
     region: *SimRegion,
-    entity: *SimEntity,
+    entity: *Entity,
     dt: f32,
     move_spec: *MoveSpec,
     dd_pos: Vec2,
 ) void {
-    //const game_world = game_state.world.?;
+    assert(!entity.flags.non_spatial);
 
     var acceleration = dd_pos;
 
@@ -423,16 +453,19 @@ pub fn moveEntity(
     for (0..4) |_| {
         var t_min: f32 = 1.0;
         var wall_normal: Vec2 = .{};
-        //var hit_high_index: usize = 0;
-        var hit_entity: ?*SimEntity = null;
+        var hit_entity: ?*Entity = null;
         const desired_position = math.add(entity.pos, player_delta);
 
-        if (entity.collides) {
+        if (entity.flags.collides and
+            !entity.flags.non_spatial)
+        {
             // TODO: Spatial partition here!
             for (1..region.entity_count) |high_index| {
                 const test_entity = &region.entities[high_index];
                 if (entity != test_entity) {
-                    if (test_entity.collides) {
+                    if (test_entity.flags.collides and
+                        !test_entity.flags.non_spatial)
+                    {
                         const diameter_w = test_entity.width + entity.width;
                         const diameter_h = test_entity.height + entity.height;
                         const min_corner = math.scale(.{ .x = diameter_w, .y = diameter_h }, -0.5);

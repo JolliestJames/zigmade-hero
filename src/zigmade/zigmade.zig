@@ -5,14 +5,14 @@ const platform = @import("zigmade_platform");
 const world = @import("zigmade_world.zig");
 const math = @import("zigmade_math.zig");
 const sim = @import("zigmade_sim_region.zig");
-const zigmade_entity = @import("zigmade_entity.zig");
+const ety = @import("zigmade_entity.zig");
 const intrinsics = @import("zigmade_intrinsics.zig");
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
 const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
-const SimEntity = sim.SimEntity;
+const Entity = sim.Entity;
 const SimRegion = sim.SimRegion;
 const EntityType = sim.EntityType;
 const MoveSpec = sim.MoveSpec;
@@ -26,7 +26,10 @@ const HeroBitmaps = struct {
 };
 
 pub const LowEntity = struct {
-    sim: SimEntity,
+    // TODO: It's kind of busted that pos can be invalid here
+    // and we can store whether they would be invalid in the flags
+    // Can we do something better?
+    sim: Entity,
     pos: world.WorldPosition = .{},
 };
 
@@ -432,7 +435,7 @@ inline fn getCameraSpaceP(
 fn addLowEntity(
     game_state: *GameState,
     t: EntityType,
-    pos: ?*world.WorldPosition,
+    pos: world.WorldPosition,
 ) AddLowEntityResult {
     assert(game_state.low_entity_count < game_state.low_entities.len);
 
@@ -440,6 +443,7 @@ fn addLowEntity(
     game_state.low_entity_count += 1;
 
     const low = &game_state.low_entities[entity_index];
+    low.pos = world.nullPosition();
     low.sim = .{ .type = t };
 
     world.changeEntityLocation(
@@ -447,7 +451,6 @@ fn addLowEntity(
         game_state.world,
         entity_index,
         low,
-        null,
         pos,
     );
 
@@ -471,18 +474,18 @@ fn addWall(
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
 
-    var pos = world.chunkPosFromTilePos(
+    const pos = world.chunkPosFromTilePos(
         game_world,
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
     );
 
-    const entity = addLowEntity(game_state, .wall, &pos);
+    const entity = addLowEntity(game_state, .wall, pos);
 
     entity.low.sim.height = game_world.tile_side_in_meters;
     entity.low.sim.width = entity.low.sim.height;
-    entity.low.sim.collides = true;
+    entity.low.sim.flags = .{ .collides = true };
 
     return entity;
 }
@@ -499,22 +502,16 @@ fn initHitPoints(low: *LowEntity, count: u32) void {
 }
 
 fn addPlayer(game_state: *GameState) AddLowEntityResult {
-    var pos = game_state.camera_p;
-    const entity = addLowEntity(game_state, .hero, &pos);
+    const pos = game_state.camera_p;
+    const entity = addLowEntity(game_state, .hero, pos);
 
     entity.low.sim.height = 0.5;
     entity.low.sim.width = 1.0;
-    entity.low.sim.collides = true;
+    entity.low.sim.flags = .{ .collides = true };
     initHitPoints(entity.low, 3);
 
     const sword = addSword(game_state);
-
-    switch (entity.low.sim.sword) {
-        .index => {
-            entity.low.sim.sword.index = sword.low_index;
-        },
-        else => {},
-    }
+    entity.low.sim.sword.index = sword.low_index;
 
     if (game_state.camera_entity_index == 0) {
         game_state.camera_entity_index = entity.low_index;
@@ -531,28 +528,27 @@ fn addMonster(
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
 
-    var pos = world.chunkPosFromTilePos(
+    const pos = world.chunkPosFromTilePos(
         game_world,
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
     );
 
-    const entity = addLowEntity(game_state, .monster, &pos);
+    const entity = addLowEntity(game_state, .monster, pos);
     entity.low.sim.height = 0.5;
     entity.low.sim.width = 1.0;
-    entity.low.sim.collides = true;
+    entity.low.sim.flags = .{ .collides = true };
     initHitPoints(entity.low, 3);
 
     return entity;
 }
 
 fn addSword(game_state: *GameState) AddLowEntityResult {
-    const entity = addLowEntity(game_state, .sword, null);
+    const entity = addLowEntity(game_state, .sword, world.nullPosition());
 
     entity.low.sim.height = 0.5;
     entity.low.sim.width = 1.0;
-    entity.low.sim.collides = false;
 
     return entity;
 }
@@ -565,18 +561,18 @@ fn addFamiliar(
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
 
-    var pos = world.chunkPosFromTilePos(
+    const pos = world.chunkPosFromTilePos(
         game_world,
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
     );
 
-    const entity = addLowEntity(game_state, .familiar, &pos);
+    const entity = addLowEntity(game_state, .familiar, pos);
 
     entity.low.sim.height = 0.5;
     entity.low.sim.width = 1.0;
-    entity.low.sim.collides = true;
+    entity.low.sim.flags = .{ .collides = true };
 
     return entity;
 }
@@ -662,7 +658,7 @@ fn pushRect(
 }
 
 fn drawHitPoints(
-    entity: *SimEntity,
+    entity: *Entity,
     piece_group: *EntityVisiblePieceGroup,
 ) void {
     if (entity.hit_point_max >= 1) {
@@ -709,7 +705,7 @@ pub export fn updateAndRender(
 
     if (!memory.is_initialized) {
         // NOTE: Reserve entity slot 0 as the null entity
-        _ = addLowEntity(game_state, .none, null);
+        _ = addLowEntity(game_state, .none, world.nullPosition());
 
         game_state.backdrop = debugLoadBmp(
             thread,
@@ -940,12 +936,14 @@ pub export fn updateAndRender(
         const camera_tile_y = screen_base_y * tiles_per_height + 9 / 2;
         const camera_tile_z = screen_base_z;
 
-        //var new_camera_p = world.chunkPosFromTilePos(
-        //    game_world,
-        //    camera_tile_x,
-        //    camera_tile_y,
-        //    camera_tile_z,
-        //);
+        const new_camera_p = world.chunkPosFromTilePos(
+            game_world,
+            camera_tile_x,
+            camera_tile_y,
+            camera_tile_z,
+        );
+
+        game_state.camera_p = new_camera_p;
 
         _ = addMonster(
             game_state,
@@ -991,7 +989,9 @@ pub export fn updateAndRender(
                 hero.entity_index = addPlayer(game_state).low_index;
             }
         } else {
+            hero.dz = 0;
             hero.dd_pos = .{};
+            hero.d_sword = .{};
 
             if (controller.is_analog) {
                 // NOTE: Use analog movement tuning
@@ -1022,8 +1022,6 @@ pub export fn updateAndRender(
             if (controller.buttons.map.start.ended_down) {
                 hero.dz = 3.0;
             }
-
-            hero.d_sword = .{};
 
             if (controller.buttons.map.action_up.ended_down) {
                 hero.d_sword = .{ .y = 1 };
@@ -1103,9 +1101,11 @@ pub export fn updateAndRender(
                     const hero = &game_state.controlled_heroes[control_index];
 
                     if (entity.storage_index == hero.entity_index) {
-                        entity.dz = hero.dz;
+                        if (hero.dz != 0) {
+                            entity.dz = hero.dz;
+                        }
 
-                        var move_spec = zigmade_entity.defaultMoveSpec();
+                        var move_spec = ety.defaultMoveSpec();
 
                         move_spec = .{
                             .unit_max_acc_vector = true,
@@ -1116,12 +1116,17 @@ pub export fn updateAndRender(
                         sim.moveEntity(region, entity, input.dt_for_frame, &move_spec, hero.dd_pos);
 
                         if (hero.d_sword.x != 0 or hero.d_sword.y != 0) {
-                            const maybe_sword = entity.sword.ptr;
+                            switch (entity.sword) {
+                                .ptr => {
+                                    const sword = entity.sword.ptr;
 
-                            if (maybe_sword) |sword| {
-                                sword.pos = entity.pos;
-                                sword.distance_remaining = 5;
-                                sword.d_pos = math.scale(hero.d_sword, 5);
+                                    if (sword.flags.non_spatial) {
+                                        sword.distance_remaining = 5;
+                                        const d_pos = math.scale(hero.d_sword, 5);
+                                        ety.makeEntitySpatial(sword, entity.pos, d_pos);
+                                    }
+                                },
+                                else => {},
                             }
                         }
                     }
@@ -1139,12 +1144,14 @@ pub export fn updateAndRender(
                 pushBitmap(&piece_group, &game_state.tree, .{}, 0, .{ .x = 40, .y = 80 }, 1, 1);
             },
             .sword => {
-                zigmade_entity.updateSword(region, entity, dt);
+                ety.updateSword(region, entity, dt);
+
                 pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
                 pushBitmap(&piece_group, &game_state.sword, .{}, 0, .{ .x = 29, .y = 10 }, 1, 1);
             },
             .familiar => {
-                zigmade_entity.updateFamiliar(region, entity, dt);
+                ety.updateFamiliar(region, entity, dt);
+
                 entity.t_bob += dt;
 
                 if (entity.t_bob > 2 * std.math.pi) {
@@ -1156,7 +1163,7 @@ pub export fn updateAndRender(
                 pushBitmap(&piece_group, &hero_bitmaps.head, .{}, 0.25 * bob_sin, hero_bitmaps.alignment, 1, 1);
             },
             .monster => {
-                zigmade_entity.updateMonster(region, entity, dt);
+                ety.updateMonster(region, entity, dt);
                 pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
                 pushBitmap(&piece_group, &hero_bitmaps.torso, .{}, 0, hero_bitmaps.alignment, 1, 1);
                 drawHitPoints(entity, &piece_group);
@@ -1202,8 +1209,6 @@ pub export fn updateAndRender(
         }
     }
 
-    // TODO: Add logic to the sim region to handle "unplaced" entities
-    // TODO: Figure out why the origin is where it is
     var world_origin: WorldPosition = .{};
     const diff = world.subtract(region.world, &world_origin, &region.origin);
 
