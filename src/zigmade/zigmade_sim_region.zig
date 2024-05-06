@@ -63,6 +63,7 @@ pub const Entity = struct {
     d_pos: Vec2 = .{},
     z: f32 = 0,
     dz: f32 = 0,
+    distance_limit: f32 = 0,
     chunk_z: u32 = 0,
     width: f32 = 0,
     height: f32 = 0,
@@ -73,7 +74,6 @@ pub const Entity = struct {
     hit_point_max: u32 = 0,
     hit_points: [16]HitPoint = undefined,
     sword: EntityReference = .{ .index = 0 },
-    distance_remaining: f32 = 0,
     // TODO: Generation index so we know how "up to date" this entity is
 };
 
@@ -421,6 +421,19 @@ fn testWall(
     return hit;
 }
 
+inline fn handleCollision(
+    a: *Entity,
+    b: *Entity,
+) void {
+    if (a.type == .monster and b.type == .sword) {
+        if (a.hit_point_max > 0) {
+            a.hit_point_max -%= 1;
+        }
+
+        ety.makeEntityNonSpatial(b);
+    }
+}
+
 pub fn moveEntity(
     region: *SimRegion,
     entity: *Entity,
@@ -466,119 +479,147 @@ pub fn moveEntity(
         entity.z = 0;
     }
 
+    var distance_remaining = entity.distance_limit;
+
+    if (distance_remaining == 0) {
+        // TODO: Do we want to formalize this number?
+        distance_remaining = 10000;
+    }
+
     for (0..4) |_| {
         var t_min: f32 = 1.0;
-        var wall_normal: Vec2 = .{};
-        var hit_entity: ?*Entity = null;
-        const desired_position = math.add(entity.pos, player_delta);
+        const player_delta_length = math.length(player_delta);
 
-        if (entity.flags.collides and
-            !entity.flags.non_spatial)
-        {
-            // TODO: Spatial partition here!
-            for (1..region.entity_count) |high_index| {
-                const test_entity = &region.entities[high_index];
-                if (entity != test_entity) {
-                    if (test_entity.flags.collides and
-                        !test_entity.flags.non_spatial)
-                    {
-                        const diameter_w = test_entity.width + entity.width;
-                        const diameter_h = test_entity.height + entity.height;
-                        const min_corner = math.scale(.{ .x = diameter_w, .y = diameter_h }, -0.5);
-                        const max_corner = math.scale(.{ .x = diameter_w, .y = diameter_h }, 0.5);
-                        const rel = math.sub(entity.pos, test_entity.pos);
+        // TODO: What do we want to do for epsilons here?
+        // Think this through for the final collision code
+        if (player_delta_length > 0) {
+            if (player_delta_length > distance_remaining) {
+                t_min = distance_remaining / player_delta_length;
+            }
 
-                        if (testWall(
-                            min_corner.x,
-                            rel.x,
-                            rel.y,
-                            player_delta.x,
-                            player_delta.y,
-                            &t_min,
-                            min_corner.y,
-                            max_corner.y,
-                        )) {
-                            wall_normal = .{ .x = -1, .y = 0 };
-                            hit_entity = test_entity;
-                        }
+            var wall_normal: Vec2 = .{};
+            var hit_entity: ?*Entity = null;
 
-                        if (testWall(
-                            max_corner.x,
-                            rel.x,
-                            rel.y,
-                            player_delta.x,
-                            player_delta.y,
-                            &t_min,
-                            min_corner.y,
-                            max_corner.y,
-                        )) {
-                            wall_normal = .{ .x = 1, .y = 0 };
-                            hit_entity = test_entity;
-                        }
+            const desired_position = math.add(entity.pos, player_delta);
+            const stops_on_collision = entity.flags.collides;
 
-                        if (testWall(
-                            min_corner.y,
-                            rel.y,
-                            rel.x,
-                            player_delta.y,
-                            player_delta.x,
-                            &t_min,
-                            min_corner.x,
-                            max_corner.x,
-                        )) {
-                            wall_normal = .{ .x = 0, .y = -1 };
-                            hit_entity = test_entity;
-                        }
+            if (!entity.flags.non_spatial) {
+                // TODO: Spatial partition here!
+                for (1..region.entity_count) |high_index| {
+                    const test_entity = &region.entities[high_index];
+                    if (entity != test_entity) {
+                        if (test_entity.flags.collides and
+                            !test_entity.flags.non_spatial)
+                        {
+                            const diameter_w = test_entity.width + entity.width;
+                            const diameter_h = test_entity.height + entity.height;
+                            const min_corner = math.scale(.{ .x = diameter_w, .y = diameter_h }, -0.5);
+                            const max_corner = math.scale(.{ .x = diameter_w, .y = diameter_h }, 0.5);
+                            const rel = math.sub(entity.pos, test_entity.pos);
 
-                        if (testWall(
-                            max_corner.y,
-                            rel.y,
-                            rel.x,
-                            player_delta.y,
-                            player_delta.x,
-                            &t_min,
-                            min_corner.x,
-                            max_corner.x,
-                        )) {
-                            wall_normal = .{ .x = 0, .y = 1 };
-                            hit_entity = test_entity;
+                            if (testWall(
+                                min_corner.x,
+                                rel.x,
+                                rel.y,
+                                player_delta.x,
+                                player_delta.y,
+                                &t_min,
+                                min_corner.y,
+                                max_corner.y,
+                            )) {
+                                wall_normal = .{ .x = -1, .y = 0 };
+                                hit_entity = test_entity;
+                            }
+
+                            if (testWall(
+                                max_corner.x,
+                                rel.x,
+                                rel.y,
+                                player_delta.x,
+                                player_delta.y,
+                                &t_min,
+                                min_corner.y,
+                                max_corner.y,
+                            )) {
+                                wall_normal = .{ .x = 1, .y = 0 };
+                                hit_entity = test_entity;
+                            }
+
+                            if (testWall(
+                                min_corner.y,
+                                rel.y,
+                                rel.x,
+                                player_delta.y,
+                                player_delta.x,
+                                &t_min,
+                                min_corner.x,
+                                max_corner.x,
+                            )) {
+                                wall_normal = .{ .x = 0, .y = -1 };
+                                hit_entity = test_entity;
+                            }
+
+                            if (testWall(
+                                max_corner.y,
+                                rel.y,
+                                rel.x,
+                                player_delta.y,
+                                player_delta.x,
+                                &t_min,
+                                min_corner.x,
+                                max_corner.x,
+                            )) {
+                                wall_normal = .{ .x = 0, .y = 1 };
+                                hit_entity = test_entity;
+                            }
                         }
                     }
                 }
             }
-        }
 
-        entity.pos = math.add(
-            entity.pos,
-            math.scale(player_delta, t_min),
-        );
-
-        if (hit_entity) |_| {
-            entity.d_pos = math.sub(
-                entity.d_pos,
-                math.scale(
-                    wall_normal,
-                    1 * math.inner(entity.d_pos, wall_normal),
-                ),
+            entity.pos = math.add(
+                entity.pos,
+                math.scale(player_delta, t_min),
             );
 
-            player_delta = math.sub(desired_position, entity.pos);
+            distance_remaining -= t_min * player_delta_length;
 
-            player_delta = math.sub(
-                player_delta,
-                math.scale(
-                    wall_normal,
-                    1 * math.inner(player_delta, wall_normal),
-                ),
-            );
+            if (hit_entity) |hit| {
+                player_delta = math.sub(desired_position, entity.pos);
 
-            // TODO: stairs
-            //high.abs_tile_z += @bitCast(hit_low.d_abs_tile_z);
-        } else {
-            break;
-        }
+                if (stops_on_collision) {
+                    const p_product = 1 * math.inner(player_delta, wall_normal);
+                    const p_magnitude = math.scale(wall_normal, p_product);
+                    player_delta = math.sub(player_delta, p_magnitude);
+
+                    const d_product = 1 * math.inner(entity.d_pos, wall_normal);
+                    const d_magnitude = math.scale(wall_normal, d_product);
+                    entity.d_pos = math.sub(entity.d_pos, d_magnitude);
+                }
+                // TODO: IMPORTANT: Need our collision table here
+
+                var a = entity;
+                var b = hit;
+
+                if (@intFromEnum(a.type) > @intFromEnum(b.type)) {
+                    const temp = a;
+                    a = b;
+                    b = temp;
+                }
+
+                handleCollision(a, b);
+
+                // TODO: stairs
+                //high.abs_tile_z += @bitCast(hit_low.d_abs_tile_z);
+            } else break;
+        } else break;
     }
 
+    if (entity.distance_limit != 0) {
+        entity.distance_limit = distance_remaining;
+    }
+
+    // TODO: Change to using the acceleration vector
     if (entity.d_pos.x == 0.0 and entity.d_pos.y == 0.0) {
         // Leave facing_direction alone
     } else if (@abs(entity.d_pos.x) > @abs(entity.d_pos.y)) {

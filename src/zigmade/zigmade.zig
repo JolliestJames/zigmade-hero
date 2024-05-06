@@ -1124,8 +1124,9 @@ pub export fn updateAndRender(
                                         const sword = entity.sword.ptr;
 
                                         if (sword.flags.non_spatial) {
-                                            sword.distance_remaining = 5;
-                                            const d_pos = math.scale(hero.d_sword, 5);
+                                            sword.distance_limit = 5;
+                                            var d_pos = math.scale(hero.d_sword, 5);
+                                            d_pos = math.add(entity.d_pos, d_pos);
                                             ety.makeEntitySpatial(sword, entity.pos, d_pos);
                                         }
                                     },
@@ -1156,16 +1157,12 @@ pub export fn updateAndRender(
                     // TODO: IMPORTANT: Add the ability in collision routines to understand
                     // movement limit for an entity and then update this routine to use this
                     // to know when to remove the sword
+                    //
                     // TODO: Need to handle the fact that distance_traveled might
                     // not have enough distance for the total entity move
                     // for the frame
-                    const old_pos = entity.pos;
-                    const diff = math.sub(entity.pos, old_pos);
-                    const distance_traveled = math.length(diff);
 
-                    entity.distance_remaining -= distance_traveled;
-
-                    if (entity.distance_remaining < 0) {
+                    if (entity.distance_limit == 0) {
                         ety.makeEntityNonSpatial(entity);
                     }
 
@@ -1198,8 +1195,7 @@ pub export fn updateAndRender(
                             const acceleration = 0.5;
                             const one_over_length = acceleration / @sqrt(closest_hero_d_sq);
 
-                            const diff =
-                                math.sub(closest_hero.pos, entity.pos);
+                            const diff = math.sub(closest_hero.pos, entity.pos);
                             dd_pos = math.scale(diff, one_over_length);
                         }
                     }
@@ -1209,8 +1205,6 @@ pub export fn updateAndRender(
                         .speed = 50,
                         .drag = 8,
                     };
-
-                    sim.moveEntity(region, entity, dt, &move_spec, dd_pos);
 
                     entity.t_bob += dt;
 
