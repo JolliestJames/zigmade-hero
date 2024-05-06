@@ -1075,136 +1075,192 @@ pub export fn updateAndRender(
     const screen_center_x = 0.5 * @as(f32, @floatFromInt(buffer.width));
     const screen_center_y = 0.5 * @as(f32, @floatFromInt(buffer.height));
 
+    // TODO: Move this out into the zigmade_entity
     var piece_group: EntityVisiblePieceGroup = undefined;
     piece_group.game_state = game_state;
 
     for (0..region.entity_count) |index| {
         var entity = &region.entities[index];
 
-        piece_group.piece_count = 0;
-        const dt = input.dt_for_frame;
+        if (entity.updatable) {
+            piece_group.piece_count = 0;
+            const dt = input.dt_for_frame;
 
-        // TODO: This is incorrect, should be computed after update
-        var shadow_alpha = 1.0 - 0.5 * entity.z;
+            // TODO: This is incorrect, should be computed after update
+            var shadow_alpha = 1.0 - 0.5 * entity.z;
 
-        if (shadow_alpha < 0.0) {
-            shadow_alpha = 0.0;
-        }
+            if (shadow_alpha < 0.0) {
+                shadow_alpha = 0.0;
+            }
 
-        var hero_bitmaps = game_state.hero_bitmaps[entity.facing_direction];
+            var move_spec = ety.defaultMoveSpec();
+            var dd_pos: Vec2 = .{};
 
-        switch (entity.type) {
-            .hero => {
-                // TODO: Now that we have some real usage examples, let's
-                // solidify the positioning system
-                for (0..game_state.controlled_heroes.len) |control_index| {
-                    const hero = &game_state.controlled_heroes[control_index];
+            var hero_bitmaps = game_state.hero_bitmaps[entity.facing_direction];
 
-                    if (entity.storage_index == hero.entity_index) {
-                        if (hero.dz != 0) {
-                            entity.dz = hero.dz;
-                        }
+            switch (entity.type) {
+                .hero => {
+                    // TODO: Now that we have some real usage examples, let's
+                    // solidify the positioning system
+                    for (0..game_state.controlled_heroes.len) |control_index| {
+                        const hero = &game_state.controlled_heroes[control_index];
 
-                        var move_spec = ety.defaultMoveSpec();
+                        if (entity.storage_index == hero.entity_index) {
+                            if (hero.dz != 0) {
+                                entity.dz = hero.dz;
+                            }
 
-                        move_spec = .{
-                            .unit_max_acc_vector = true,
-                            .speed = 50,
-                            .drag = 8,
-                        };
+                            move_spec = .{
+                                .unit_max_acc_vector = true,
+                                .speed = 50,
+                                .drag = 8,
+                            };
 
-                        sim.moveEntity(region, entity, input.dt_for_frame, &move_spec, hero.dd_pos);
+                            dd_pos = hero.dd_pos;
 
-                        if (hero.d_sword.x != 0 or hero.d_sword.y != 0) {
-                            switch (entity.sword) {
-                                .ptr => {
-                                    const sword = entity.sword.ptr;
+                            if (hero.d_sword.x != 0 or hero.d_sword.y != 0) {
+                                switch (entity.sword) {
+                                    .ptr => {
+                                        const sword = entity.sword.ptr;
 
-                                    if (sword.flags.non_spatial) {
-                                        sword.distance_remaining = 5;
-                                        const d_pos = math.scale(hero.d_sword, 5);
-                                        ety.makeEntitySpatial(sword, entity.pos, d_pos);
-                                    }
-                                },
-                                else => {},
+                                        if (sword.flags.non_spatial) {
+                                            sword.distance_remaining = 5;
+                                            const d_pos = math.scale(hero.d_sword, 5);
+                                            ety.makeEntitySpatial(sword, entity.pos, d_pos);
+                                        }
+                                    },
+                                    else => {},
+                                }
                             }
                         }
                     }
+
+                    // TODO: z
+                    pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
+                    pushBitmap(&piece_group, &hero_bitmaps.torso, .{}, 0, hero_bitmaps.alignment, 1, 1);
+                    pushBitmap(&piece_group, &hero_bitmaps.cape, .{}, 0, hero_bitmaps.alignment, 1, 1);
+                    pushBitmap(&piece_group, &hero_bitmaps.head, .{}, 0, hero_bitmaps.alignment, 1, 1);
+
+                    drawHitPoints(entity, &piece_group);
+                },
+                .wall => {
+                    pushBitmap(&piece_group, &game_state.tree, .{}, 0, .{ .x = 40, .y = 80 }, 1, 1);
+                },
+                .sword => {
+                    move_spec = .{
+                        .unit_max_acc_vector = false,
+                        .speed = 0,
+                        .drag = 0,
+                    };
+
+                    // TODO: IMPORTANT: Add the ability in collision routines to understand
+                    // movement limit for an entity and then update this routine to use this
+                    // to know when to remove the sword
+                    // TODO: Need to handle the fact that distance_traveled might
+                    // not have enough distance for the total entity move
+                    // for the frame
+                    const old_pos = entity.pos;
+                    const diff = math.sub(entity.pos, old_pos);
+                    const distance_traveled = math.length(diff);
+
+                    entity.distance_remaining -= distance_traveled;
+
+                    if (entity.distance_remaining < 0) {
+                        ety.makeEntityNonSpatial(entity);
+                    }
+
+                    pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
+                    pushBitmap(&piece_group, &game_state.sword, .{}, 0, .{ .x = 29, .y = 10 }, 1, 1);
+                },
+                .familiar => {
+                    var maybe_closest_hero: ?*Entity = null;
+                    var closest_hero_d_sq = math.square(10); // NOTE: Ten meter max search
+
+                    // TODO: Make spatial queries easy for things
+                    for (0..region.entity_count) |test_index| {
+                        const test_entity = &region.entities[test_index];
+
+                        if (test_entity.type == .hero) {
+                            const diff = math.sub(test_entity.pos, entity.pos);
+                            var test_d_sq = math.lengthSquared(diff);
+
+                            test_d_sq *= 0.75;
+
+                            if (closest_hero_d_sq > test_d_sq) {
+                                maybe_closest_hero = test_entity;
+                                closest_hero_d_sq = test_d_sq;
+                            }
+                        }
+                    }
+
+                    if (maybe_closest_hero) |closest_hero| {
+                        if (closest_hero_d_sq > math.square(3)) {
+                            const acceleration = 0.5;
+                            const one_over_length = acceleration / @sqrt(closest_hero_d_sq);
+
+                            const diff =
+                                math.sub(closest_hero.pos, entity.pos);
+                            dd_pos = math.scale(diff, one_over_length);
+                        }
+                    }
+
+                    move_spec = .{
+                        .unit_max_acc_vector = true,
+                        .speed = 50,
+                        .drag = 8,
+                    };
+
+                    sim.moveEntity(region, entity, dt, &move_spec, dd_pos);
+
+                    entity.t_bob += dt;
+
+                    if (entity.t_bob > 2 * std.math.pi) {
+                        entity.t_bob -= 2 * std.math.pi;
+                    }
+
+                    const bob_sin = @sin(2 * entity.t_bob);
+                    pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, 0.5 * shadow_alpha + 0.2 * bob_sin, 0);
+                    pushBitmap(&piece_group, &hero_bitmaps.head, .{}, 0.25 * bob_sin, hero_bitmaps.alignment, 1, 1);
+                },
+                .monster => {
+                    pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
+                    pushBitmap(&piece_group, &hero_bitmaps.torso, .{}, 0, hero_bitmaps.alignment, 1, 1);
+                    drawHitPoints(entity, &piece_group);
+                },
+                else => {
+                    std.debug.print("Invalid code path\n", .{});
+                    assert(false);
+                },
+            }
+
+            if (!entity.flags.non_spatial) {
+                sim.moveEntity(region, entity, input.dt_for_frame, &move_spec, dd_pos);
+            }
+
+            const eg_x = screen_center_x + meters_to_pixels * entity.pos.x;
+            const eg_y = screen_center_y - meters_to_pixels * entity.pos.y;
+            const entity_z = -meters_to_pixels * entity.z;
+
+            for (0..piece_group.piece_count) |piece_index| {
+                const piece = piece_group.pieces[piece_index];
+                const center: Vec2 = .{
+                    .x = eg_x + piece.offset.x,
+                    .y = eg_y + piece.offset.y + piece.offset_z + piece.entity_zc * entity_z,
+                };
+
+                if (piece.bitmap) |bitmap| {
+                    drawBitmap(buffer, bitmap, center.x, center.y, piece.a);
+                } else {
+                    const half_dim = math.scale(piece.dim, 0.5 * meters_to_pixels);
+                    drawRectangle(
+                        buffer,
+                        math.sub(center, half_dim),
+                        math.add(center, half_dim),
+                        piece.r,
+                        piece.g,
+                        piece.b,
+                    );
                 }
-
-                // TODO: z
-                pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                pushBitmap(&piece_group, &hero_bitmaps.torso, .{}, 0, hero_bitmaps.alignment, 1, 1);
-                pushBitmap(&piece_group, &hero_bitmaps.cape, .{}, 0, hero_bitmaps.alignment, 1, 1);
-                pushBitmap(&piece_group, &hero_bitmaps.head, .{}, 0, hero_bitmaps.alignment, 1, 1);
-
-                drawHitPoints(entity, &piece_group);
-            },
-            .wall => {
-                pushBitmap(&piece_group, &game_state.tree, .{}, 0, .{ .x = 40, .y = 80 }, 1, 1);
-            },
-            .sword => {
-                ety.updateSword(region, entity, dt);
-
-                pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                pushBitmap(&piece_group, &game_state.sword, .{}, 0, .{ .x = 29, .y = 10 }, 1, 1);
-            },
-            .familiar => {
-                ety.updateFamiliar(region, entity, dt);
-
-                entity.t_bob += dt;
-
-                if (entity.t_bob > 2 * std.math.pi) {
-                    entity.t_bob -= 2 * std.math.pi;
-                }
-
-                const bob_sin = @sin(2 * entity.t_bob);
-                pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, 0.5 * shadow_alpha + 0.2 * bob_sin, 0);
-                pushBitmap(&piece_group, &hero_bitmaps.head, .{}, 0.25 * bob_sin, hero_bitmaps.alignment, 1, 1);
-            },
-            .monster => {
-                ety.updateMonster(region, entity, dt);
-                pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                pushBitmap(&piece_group, &hero_bitmaps.torso, .{}, 0, hero_bitmaps.alignment, 1, 1);
-                drawHitPoints(entity, &piece_group);
-            },
-            else => {
-                std.debug.print("Invalid code path\n", .{});
-                assert(false);
-            },
-        }
-
-        const ddz = -9.8;
-        entity.z = 0.5 * ddz * math.square(dt) + entity.dz * dt + entity.z;
-        entity.dz = ddz * dt + entity.dz;
-
-        if (entity.z < 0) {
-            entity.z = 0;
-        }
-
-        const eg_x = screen_center_x + meters_to_pixels * entity.pos.x;
-        const eg_y = screen_center_y - meters_to_pixels * entity.pos.y;
-        const entity_z = -meters_to_pixels * entity.z;
-
-        for (0..piece_group.piece_count) |piece_index| {
-            const piece = piece_group.pieces[piece_index];
-            const center: Vec2 = .{
-                .x = eg_x + piece.offset.x,
-                .y = eg_y + piece.offset.y + piece.offset_z + piece.entity_zc * entity_z,
-            };
-
-            if (piece.bitmap) |bitmap| {
-                drawBitmap(buffer, bitmap, center.x, center.y, piece.a);
-            } else {
-                const half_dim = math.scale(piece.dim, 0.5 * meters_to_pixels);
-                drawRectangle(
-                    buffer,
-                    math.sub(center, half_dim),
-                    math.add(center, half_dim),
-                    piece.r,
-                    piece.g,
-                    piece.b,
-                );
             }
         }
     }

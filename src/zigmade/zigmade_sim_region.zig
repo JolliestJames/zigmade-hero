@@ -54,7 +54,9 @@ const EntityFlags = packed struct(u32) {
 };
 
 pub const Entity = struct {
+    // NOTE: These are only for the sim region
     storage_index: u32 = 0,
+    updatable: bool = false,
     type: EntityType = .none,
     flags: EntityFlags = .{},
     pos: Vec2 = .{},
@@ -86,6 +88,7 @@ pub const SimRegion = struct {
     world: *World,
     origin: WorldPosition,
     bounds: Rectangle2,
+    updatable_bounds: Rectangle2,
     max_entity_count: u32,
     entity_count: u32,
     entities: [*]Entity,
@@ -136,14 +139,9 @@ inline fn loadEntityReference(
 
                 if (entry.ptr == null) {
                     entry.index = ref.index;
-
-                    entry.ptr = addEntity(
-                        game_state,
-                        region,
-                        ref.index,
-                        game.getLowEntity(game_state, ref.index),
-                        null,
-                    );
+                    const low = game.getLowEntity(game_state, ref.index);
+                    var p = getSimSpaceP(region, low);
+                    entry.ptr = addEntity(game_state, region, ref.index, low, &p);
                 }
 
                 ref.* = .{ .ptr = entry.ptr.? };
@@ -171,13 +169,13 @@ fn addEntityRaw(
 ) ?*Entity {
     assert(storage_index > 0);
 
-    var entity: ?*Entity = null;
+    var maybe_entity: ?*Entity = null;
 
     var entry = getHashFromStorageIndex(region, storage_index);
 
     if (entry.ptr == null) {
         if (region.entity_count < region.max_entity_count) {
-            entity = &region.entities[region.entity_count];
+            var entity = &region.entities[region.entity_count];
             region.entity_count += 1;
 
             entry = getHashFromStorageIndex(region, storage_index);
@@ -187,22 +185,24 @@ fn addEntityRaw(
 
             if (maybe_source) |source| {
                 // TODO: This should really be a decompression step, not a copy
-                entity.?.* = source.sim;
+                entity.* = source.sim;
 
-                loadEntityReference(game_state, region, &entity.?.sword);
+                loadEntityReference(game_state, region, &entity.sword);
 
                 assert(!source.sim.flags.simming);
                 source.sim.flags.simming = true;
             }
 
-            entity.?.storage_index = storage_index;
+            entity.storage_index = storage_index;
+            entity.updatable = false;
+            maybe_entity = entity;
         } else {
             std.debug.print("Invalid code path\n", .{});
             assert(false);
         }
     }
 
-    return entity;
+    return maybe_entity;
 }
 
 inline fn getSimSpaceP(
@@ -237,6 +237,7 @@ fn addEntity(
     if (maybe_dest) |dest| {
         if (maybe_sim_pos) |sim_pos| {
             dest.pos = sim_pos.*;
+            dest.updatable = math.isInRectangle(sim_region.updatable_bounds, dest.pos);
         } else {
             dest.pos = getSimSpaceP(sim_region, source);
         }
@@ -254,14 +255,23 @@ pub fn beginSim(
 ) *SimRegion {
     // TODO: If entities are stored in the world, we wouldn't need game state here
 
-    // TODO: IMPORTANT: NOTION OF ACTIVE VS INACTIVE ENTITIES FOR THE APRON
-
     var sim_region = game.pushStruct(arena, SimRegion);
     game.zeroStruct(@TypeOf(sim_region.hash), &sim_region.hash);
 
+    // TODO: IMPORTANT: Calculate this eventually from the maximum value
+    // of all entities radii plus their speed
+    const update_safety_margin: f32 = 1.0;
+
     sim_region.world = game_world;
     sim_region.origin = origin;
-    sim_region.bounds = bounds;
+    sim_region.updatable_bounds = bounds;
+
+    sim_region.bounds = math.addRadius(
+        sim_region.updatable_bounds,
+        update_safety_margin,
+        update_safety_margin,
+    );
+
     // TODO: need to be more specific about entity counts
     sim_region.max_entity_count = 1024;
     sim_region.entity_count = 0;
@@ -306,8 +316,6 @@ pub fn beginSim(
                             var sim_space_p = getSimSpaceP(sim_region, low);
 
                             if (math.isInRectangle(sim_region.bounds, sim_space_p)) {
-                                // TODO: Check a second rectangle to set the entity
-                                // to be "movable" or not
                                 _ = addEntity(game_state, sim_region, low_index, low, &sim_space_p);
                             }
                         }
@@ -449,6 +457,14 @@ pub fn moveEntity(
         math.scale(acceleration, dt),
         entity.d_pos,
     );
+
+    const ddz = -9.8;
+    entity.z = 0.5 * ddz * math.square(dt) + entity.dz * dt + entity.z;
+    entity.dz = ddz * dt + entity.dz;
+
+    if (entity.z < 0) {
+        entity.z = 0;
+    }
 
     for (0..4) |_| {
         var t_min: f32 = 1.0;

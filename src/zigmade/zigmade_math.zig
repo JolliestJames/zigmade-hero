@@ -130,6 +130,19 @@ pub inline fn rectMinDim(min: Vec2, dim: Vec2) Rectangle2 {
     return result;
 }
 
+pub inline fn addRadius(
+    rect: Rectangle2,
+    radius_width: f32,
+    radius_height: f32,
+) Rectangle2 {
+    var result: Rectangle2 = undefined;
+
+    result.min = sub(rect.min, .{ .x = radius_width, .y = radius_height });
+    result.max = sub(rect.max, .{ .x = radius_width, .y = radius_height });
+
+    return result;
+}
+
 pub inline fn rectCenterDim(center: Vec2, dim: Vec2) Rectangle2 {
     const result = rectCenterHalfDim(center, scale(dim, 0.5));
 
