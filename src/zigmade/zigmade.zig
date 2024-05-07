@@ -1,3 +1,56 @@
+//
+// TODO:
+//
+// ARCHITECTURE EXPLORATION
+//
+// - Collision detection?
+//   - Entry/exit?
+//   - What's the plan for robustness/shape definition?
+// - Implement multiple sim regions per frame
+//   - Per-entity clocking
+//   - Sim region merging? Multiple players?
+// - Z
+//   - Clean things up with Vec3
+//   - Figure out how you go up and down and how is this rendered?
+//
+// - Debug
+//   - Logging
+//   - Diagramming
+//   - (Just enough GUI) Switches/sliders/etc.
+//
+// - Audio
+//   - Sound effect triggers
+//   - Ambience sounds
+//   - Music
+// - Asset streaming
+//
+// - Metagame/save game?
+//   - How do you enter "save slot"?
+//   - Persistent unlocks/etc.
+//   - Do we allow saved games? Probably, just only for "pausing"
+//   * Continuous save for crash recovery?
+// - Rudimentary world gen (no quality, just "what sorts of things" we do
+//   - Placement of background objects
+//   - Connectivity?
+//   - Non-overlapping?
+//   - Map display
+//     - Magnets - how they work?
+// - AI
+//   - Rudimentary monster behavior example
+//   * Pathfinding
+//   - AI "storage"
+//
+// * Animation, probably should lead into rendering
+//   - Skeletal animation
+//   - Particle systems
+//
+// PRODUCTION
+// - Rendering
+// - Game
+//   - Entity system
+//   - World generation
+//
+
 const std = @import("std");
 const assert = std.debug.assert;
 const rotl = std.math.rotl;
@@ -701,6 +754,15 @@ fn drawHitPoints(
 fn clearCollisionRulesFor(game_state: *GameState, storage_index: u32) void {
     // TODO: Need to make a better data structure that allows removal
     // of collision rules without searching the entire table
+    //
+    // NOTE: One way to make removal easy would be to always
+    // add both orders of pairs of sotrage indices to the hash
+    // so no matter which position the entity is in it can be found
+    // When doing first removal pass, remember the top of the free
+    // list and when finished, do a pass through on all new
+    // entries to the free list to remove the reverse of those
+    // pairs
+    //
     for (0..game_state.collision_rule_hash.len) |bucket| {
         var maybe_rule = &game_state.collision_rule_hash[bucket];
 

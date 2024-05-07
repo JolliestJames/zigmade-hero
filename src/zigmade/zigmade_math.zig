@@ -138,7 +138,7 @@ pub inline fn addRadius(
     var result: Rectangle2 = undefined;
 
     result.min = sub(rect.min, .{ .x = radius_width, .y = radius_height });
-    result.max = sub(rect.max, .{ .x = radius_width, .y = radius_height });
+    result.max = add(rect.max, .{ .x = radius_width, .y = radius_height });
 
     return result;
 }

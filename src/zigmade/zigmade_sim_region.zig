@@ -432,29 +432,31 @@ fn shouldCollide(
     var a = entity_a;
     var b = entity_b;
 
-    if (a.storage_index > b.storage_index) {
-        const temp = a;
-        a = b;
-        b = temp;
-    }
+    if (a != b) {
+        if (a.storage_index > b.storage_index) {
+            const temp = a;
+            a = b;
+            b = temp;
+        }
 
-    if (!a.flags.non_spatial and
-        !b.flags.non_spatial)
-    {
-        // TODO: Property-based logic goes here
-        result = true;
-    }
-
-    // TODO: BETTER HASH FUNCTION
-    const bucket = a.storage_index & (game_state.collision_rule_hash.len - 1);
-    var maybe_rule = game_state.collision_rule_hash[bucket];
-
-    while (maybe_rule) |rule| : (maybe_rule = rule.next_in_hash) {
-        if (rule.storage_index_a == a.storage_index and
-            rule.storage_index_b == b.storage_index)
+        if (!a.flags.non_spatial and
+            !b.flags.non_spatial)
         {
-            result = rule.should_collide;
-            break;
+            // TODO: Property-based logic goes here
+            result = true;
+        }
+
+        // TODO: BETTER HASH FUNCTION
+        const bucket = a.storage_index & (game_state.collision_rule_hash.len - 1);
+        var maybe_rule = game_state.collision_rule_hash[bucket];
+
+        while (maybe_rule) |rule| : (maybe_rule = rule.next_in_hash) {
+            if (rule.storage_index_a == a.storage_index and
+                rule.storage_index_b == b.storage_index)
+            {
+                result = rule.should_collide;
+                break;
+            }
         }
     }
 
