@@ -3,15 +3,16 @@
 //
 // ARCHITECTURE EXPLORATION
 //
+// - Z
+//   - Minkowski inclusion test for sim region begin/updatable bounds
+//   - Figure out how you go up and down and how is this rendered?
+//   - Solve the puzzler from WorldPosition?
 // - Collision detection?
 //   - Entry/exit?
 //   - What's the plan for robustness/shape definition?
 // - Implement multiple sim regions per frame
 //   - Per-entity clocking
 //   - Sim region merging? Multiple players?
-// - Z
-//   - Clean things up with Vec3
-//   - Figure out how you go up and down and how is this rendered?
 //
 // - Debug
 //   - Logging
@@ -65,6 +66,7 @@ const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
+const Rectangle3 = math.Rectangle3;
 const Entity = sim.Entity;
 const SimRegion = sim.SimRegion;
 const EntityType = sim.EntityType;
@@ -114,8 +116,8 @@ const AddLowEntityResult = struct {
 
 const ControlledHero = struct {
     entity_index: u32 = 0,
-    dd_pos: Vec2 = .{},
-    d_sword: Vec2 = .{},
+    dd_pos: Vec2 = Vec2.splat(0),
+    d_sword: Vec2 = Vec2.splat(0),
     dz: f32 = 0,
 };
 
@@ -235,10 +237,10 @@ fn drawRectangle(
     g: f32,
     b: f32,
 ) void {
-    var min_x: i32 = @intFromFloat(@round(min.x));
-    var min_y: i32 = @intFromFloat(@round(min.y));
-    var max_x: i32 = @intFromFloat(@round(max.x));
-    var max_y: i32 = @intFromFloat(@round(max.y));
+    var min_x: i32 = @intFromFloat(@round(min.x()));
+    var min_y: i32 = @intFromFloat(@round(min.y()));
+    var max_x: i32 = @intFromFloat(@round(max.x()));
+    var max_y: i32 = @intFromFloat(@round(max.y()));
 
     if (min_x < 0) min_x = 0;
     if (min_y < 0) min_y = 0;
@@ -482,19 +484,6 @@ pub inline fn getLowEntity(
     return result;
 }
 
-inline fn getCameraSpaceP(
-    game_state: *GameState,
-    low_entity: *LowEntity,
-) Vec2 {
-    const game_world = game_state.world.?;
-
-    // NOTE: Map entity into camera space
-    const diff = world.subtract(game_world, &low_entity.pos, &game_state.camera_p);
-    const result = diff.dxy;
-
-    return result;
-}
-
 fn addLowEntity(
     game_state: *GameState,
     t: EntityType,
@@ -642,21 +631,6 @@ fn addFamiliar(
     return entity;
 }
 
-fn simCameraRegion(game_state: *GameState) void {
-    const game_world = game_state.world.?;
-
-    // TODO: Dim is chosen randomly
-    const tile_span_x = 17 * 3;
-    const tile_span_y = 9 * 3;
-    const camera_bounds = math.rectCenterDim(.{}, math.scale(
-        .{ .x = tile_span_x, .y = tile_span_y },
-        game_world.tile_side_in_meters,
-    ));
-
-    var region = sim.beginSim(game_state.arena, game_world, game_state.camera_p, camera_bounds);
-    sim.endSim(&region, game_state);
-}
-
 fn pushPiece(
     group: *EntityVisiblePieceGroup,
     bitmap: ?*Bitmap,
@@ -673,20 +647,20 @@ fn pushPiece(
     group.piece_count += 1;
     piece.bitmap = bitmap;
 
-    piece.offset = math.sub(
-        math.scale(
-            .{ .x = offset.x, .y = -offset.y },
+    piece.offset = Vec2.sub(
+        &Vec2.scale(
+            &Vec2.init(offset.x(), -offset.y()),
             group.game_state.meters_to_pixels,
         ),
-        alignment,
+        &alignment,
     );
 
     piece.offset_z = group.game_state.meters_to_pixels * offset_z;
     piece.entity_zc = entity_zc;
-    piece.r = color.x;
-    piece.g = color.y;
-    piece.b = color.z;
-    piece.a = color.w;
+    piece.r = color.r();
+    piece.g = color.g();
+    piece.b = color.b();
+    piece.a = color.a();
     piece.dim = dim;
 }
 
@@ -705,8 +679,8 @@ fn pushBitmap(
         offset,
         offset_z,
         alignment,
-        .{},
-        .{ .x = 1, .y = 1, .z = 1, .w = alpha },
+        Vec2.splat(0),
+        Vec4.init(1, 1, 1, alpha),
         entity_zc,
     );
 }
@@ -719,7 +693,7 @@ fn pushRect(
     color: Vec4,
     entity_zc: f32,
 ) void {
-    pushPiece(group, null, offset, offset_z, .{}, dim, color, entity_zc);
+    pushPiece(group, null, offset, offset_z, Vec2.splat(0), dim, color, entity_zc);
 }
 
 fn drawHitPoints(
@@ -727,26 +701,27 @@ fn drawHitPoints(
     piece_group: *EntityVisiblePieceGroup,
 ) void {
     if (entity.hit_point_max >= 1) {
-        const health_dim: Vec2 = .{ .x = 0.2, .y = 0.2 };
-        const spacing_x = 1.5 * health_dim.x;
-        var hit_p: Vec2 = .{
-            .x = -0.5 * @as(f32, @floatFromInt(entity.hit_point_max - 1)) * spacing_x,
-            .y = -0.25,
-        };
-        const d_hit_p: Vec2 = .{ .x = spacing_x, .y = 0 };
+        const health_dim = Vec2.splat(0.2);
+        const spacing_x = 1.5 * health_dim.x();
+        var hit_p = Vec2.init(
+            -0.5 * @as(f32, @floatFromInt(entity.hit_point_max - 1)) * spacing_x,
+            -0.25,
+        );
+
+        const d_hit_p = Vec2.init(spacing_x, 0);
 
         for (0..entity.hit_point_max) |index| {
             const hit_point = entity.hit_points[index];
-            var color: Vec4 = .{ .x = 1, .w = 1 };
+            var color = Vec4.init(1, 0, 0, 1);
 
             if (hit_point.filled_amount == 0) {
-                color.x = 0.2;
-                color.y = 0.2;
-                color.z = 0.2;
+                color.v[0] = 0.2;
+                color.v[1] = 0.2;
+                color.v[2] = 0.2;
             }
 
             pushRect(piece_group, hit_p, 0, health_dim, color, 0);
-            hit_p = math.add(hit_p, d_hit_p);
+            hit_p = Vec2.add(&hit_p, &d_hit_p);
         }
     }
 }
@@ -892,7 +867,7 @@ pub export fn updateAndRender(
             memory.debugPlatformReadEntireFile,
             "data/test/test_hero_right_torso.bmp",
         );
-        bitmaps[0].alignment = .{ .x = 72, .y = 182 };
+        bitmaps[0].alignment = .{ .v = .{ 72, 182 } };
 
         bitmaps[1].head = debugLoadBmp(
             thread,
@@ -909,7 +884,7 @@ pub export fn updateAndRender(
             memory.debugPlatformReadEntireFile,
             "data/test/test_hero_back_torso.bmp",
         );
-        bitmaps[1].alignment = .{ .x = 72, .y = 182 };
+        bitmaps[1].alignment = .{ .v = .{ 72, 182 } };
 
         bitmaps[2].head = debugLoadBmp(
             thread,
@@ -926,7 +901,7 @@ pub export fn updateAndRender(
             memory.debugPlatformReadEntireFile,
             "data/test/test_hero_left_torso.bmp",
         );
-        bitmaps[2].alignment = .{ .x = 72, .y = 182 };
+        bitmaps[2].alignment = .{ .v = .{ 72, 182 } };
 
         bitmaps[3].head = debugLoadBmp(
             thread,
@@ -943,7 +918,7 @@ pub export fn updateAndRender(
             memory.debugPlatformReadEntireFile,
             "data/test/test_hero_front_torso.bmp",
         );
-        bitmaps[3].alignment = .{ .x = 72, .y = 182 };
+        bitmaps[3].alignment = .{ .v = .{ 72, 182 } };
 
         // TODO: Can we just use Zig's own arena allocator?
         initializeArena(
@@ -1138,32 +1113,29 @@ pub export fn updateAndRender(
             }
         } else {
             hero.dz = 0;
-            hero.dd_pos = .{};
-            hero.d_sword = .{};
+            hero.dd_pos = Vec2.splat(0);
+            hero.d_sword = Vec2.splat(0);
 
             if (controller.is_analog) {
                 // NOTE: Use analog movement tuning
-                hero.dd_pos = .{
-                    .x = controller.stick_average_x,
-                    .y = controller.stick_average_y,
-                };
+                hero.dd_pos = Vec2.init(controller.stick_average_x, controller.stick_average_y);
             } else {
                 // NOTE: Use digital movement tuning
 
                 if (controller.buttons.map.move_up.ended_down) {
-                    hero.dd_pos.y = 1.0;
+                    hero.dd_pos.v[1] = 1.0;
                 }
 
                 if (controller.buttons.map.move_down.ended_down) {
-                    hero.dd_pos.y = -1.0;
+                    hero.dd_pos.v[1] = -1.0;
                 }
 
                 if (controller.buttons.map.move_left.ended_down) {
-                    hero.dd_pos.x = -1.0;
+                    hero.dd_pos.v[0] = -1.0;
                 }
 
                 if (controller.buttons.map.move_right.ended_down) {
-                    hero.dd_pos.x = 1.0;
+                    hero.dd_pos.v[0] = 1.0;
                 }
             }
 
@@ -1172,19 +1144,19 @@ pub export fn updateAndRender(
             }
 
             if (controller.buttons.map.action_up.ended_down) {
-                hero.d_sword = .{ .y = 1 };
+                hero.d_sword = Vec2.init(0, 1);
             }
 
             if (controller.buttons.map.action_down.ended_down) {
-                hero.d_sword = .{ .y = -1 };
+                hero.d_sword = Vec2.init(0, -1);
             }
 
             if (controller.buttons.map.action_left.ended_down) {
-                hero.d_sword = .{ .x = -1 };
+                hero.d_sword = Vec2.init(-1, 0);
             }
 
             if (controller.buttons.map.action_right.ended_down) {
-                hero.d_sword = .{ .x = 1 };
+                hero.d_sword = Vec2.init(1, 0);
             }
         }
     }
@@ -1192,8 +1164,9 @@ pub export fn updateAndRender(
     // TODO: Dim is chosen randomly
     const tile_span_x = 17 * 3;
     const tile_span_y = 9 * 3;
-    const camera_bounds = math.rectCenterDim(.{}, math.scale(
-        .{ .x = tile_span_x, .y = tile_span_y },
+    const tile_span_z = 1;
+    const camera_bounds = Rectangle3.centerDim(Vec3.splat(0), Vec3.scale(
+        &Vec3.init(tile_span_x, tile_span_y, tile_span_z),
         game_world.tile_side_in_meters,
     ));
 
@@ -1207,11 +1180,12 @@ pub export fn updateAndRender(
     if (true) {
         drawRectangle(
             buffer,
-            .{},
-            .{
-                .x = @floatFromInt(buffer.width),
-                .y = @floatFromInt(buffer.height),
-            },
+            Vec2.splat(0),
+            Vec2.fromInt(buffer.width, buffer.height),
+            //.{
+            //    .x = @floatFromInt(buffer.width),
+            //    .y = @floatFromInt(buffer.height),
+            //},
             0.5,
             0.5,
             0.5,
@@ -1235,14 +1209,14 @@ pub export fn updateAndRender(
             const dt = input.dt_for_frame;
 
             // TODO: This is incorrect, should be computed after update
-            var shadow_alpha = 1.0 - 0.5 * entity.z;
+            var shadow_alpha = 1.0 - 0.5 * entity.pos.z();
 
             if (shadow_alpha < 0.0) {
                 shadow_alpha = 0.0;
             }
 
             var move_spec = ety.defaultMoveSpec();
-            var dd_pos: Vec2 = .{};
+            var dd_pos = Vec3.splat(0);
 
             var hero_bitmaps = game_state.hero_bitmaps[entity.facing_direction];
 
@@ -1255,7 +1229,7 @@ pub export fn updateAndRender(
 
                         if (entity.storage_index == hero.entity_index) {
                             if (hero.dz != 0) {
-                                entity.dz = hero.dz;
+                                entity.d_pos.v[2] = hero.dz;
                             }
 
                             move_spec = .{
@@ -1264,17 +1238,23 @@ pub export fn updateAndRender(
                                 .drag = 8,
                             };
 
-                            dd_pos = hero.dd_pos;
+                            dd_pos = Vec3.init(hero.dd_pos.x(), hero.dd_pos.y(), 0);
 
-                            if (hero.d_sword.x != 0 or hero.d_sword.y != 0) {
+                            if (hero.d_sword.x() != 0 or hero.d_sword.y() != 0) {
                                 switch (entity.sword) {
                                     .ptr => {
                                         const sword = entity.sword.ptr;
 
                                         if (sword.flags.non_spatial) {
                                             sword.distance_limit = 5;
-                                            var d_pos = math.scale(hero.d_sword, 5);
-                                            d_pos = math.add(entity.d_pos, d_pos);
+
+                                            var d_pos = Vec3.scale(
+                                                &Vec3.init(hero.d_sword.x(), hero.d_sword.y(), 0),
+                                                5,
+                                            );
+
+                                            d_pos = Vec3.add(&entity.d_pos, &d_pos);
+
                                             ety.makeEntitySpatial(sword, entity.pos, d_pos);
 
                                             addCollisionRule(
@@ -1292,15 +1272,15 @@ pub export fn updateAndRender(
                     }
 
                     // TODO: z
-                    pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                    pushBitmap(&piece_group, &hero_bitmaps.torso, .{}, 0, hero_bitmaps.alignment, 1, 1);
-                    pushBitmap(&piece_group, &hero_bitmaps.cape, .{}, 0, hero_bitmaps.alignment, 1, 1);
-                    pushBitmap(&piece_group, &hero_bitmaps.head, .{}, 0, hero_bitmaps.alignment, 1, 1);
+                    pushBitmap(&piece_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
+                    pushBitmap(&piece_group, &hero_bitmaps.torso, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
+                    pushBitmap(&piece_group, &hero_bitmaps.cape, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
+                    pushBitmap(&piece_group, &hero_bitmaps.head, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
 
                     drawHitPoints(entity, &piece_group);
                 },
                 .wall => {
-                    pushBitmap(&piece_group, &game_state.tree, .{}, 0, .{ .x = 40, .y = 80 }, 1, 1);
+                    pushBitmap(&piece_group, &game_state.tree, Vec2.splat(0), 0, Vec2.init(40, 80), 1, 1);
                 },
                 .sword => {
                     move_spec = .{
@@ -1322,8 +1302,8 @@ pub export fn updateAndRender(
                         ety.makeEntityNonSpatial(entity);
                     }
 
-                    pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                    pushBitmap(&piece_group, &game_state.sword, .{}, 0, .{ .x = 29, .y = 10 }, 1, 1);
+                    pushBitmap(&piece_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
+                    pushBitmap(&piece_group, &game_state.sword, Vec2.splat(0), 0, Vec2.init(29, 10), 1, 1);
                 },
                 .familiar => {
                     var maybe_closest_hero: ?*Entity = null;
@@ -1334,10 +1314,8 @@ pub export fn updateAndRender(
                         const test_entity = &region.entities[test_index];
 
                         if (test_entity.type == .hero) {
-                            const diff = math.sub(test_entity.pos, entity.pos);
-                            var test_d_sq = math.lengthSquared(diff);
-
-                            test_d_sq *= 0.75;
+                            const diff = Vec3.sub(&test_entity.pos, &entity.pos);
+                            const test_d_sq = Vec3.lengthSquared(&diff);
 
                             if (closest_hero_d_sq > test_d_sq) {
                                 maybe_closest_hero = test_entity;
@@ -1351,8 +1329,8 @@ pub export fn updateAndRender(
                             const acceleration = 0.5;
                             const one_over_length = acceleration / @sqrt(closest_hero_d_sq);
 
-                            const diff = math.sub(closest_hero.pos, entity.pos);
-                            dd_pos = math.scale(diff, one_over_length);
+                            const diff = Vec3.sub(&closest_hero.pos, &entity.pos);
+                            dd_pos = Vec3.scale(&diff, one_over_length);
                         }
                     }
 
@@ -1369,12 +1347,12 @@ pub export fn updateAndRender(
                     }
 
                     const bob_sin = @sin(2 * entity.t_bob);
-                    pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, 0.5 * shadow_alpha + 0.2 * bob_sin, 0);
-                    pushBitmap(&piece_group, &hero_bitmaps.head, .{}, 0.25 * bob_sin, hero_bitmaps.alignment, 1, 1);
+                    pushBitmap(&piece_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, 0.5 * shadow_alpha + 0.2 * bob_sin, 0);
+                    pushBitmap(&piece_group, &hero_bitmaps.head, Vec2.splat(0), 0.25 * bob_sin, hero_bitmaps.alignment, 1, 1);
                 },
                 .monster => {
-                    pushBitmap(&piece_group, &game_state.shadow, .{}, 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                    pushBitmap(&piece_group, &hero_bitmaps.torso, .{}, 0, hero_bitmaps.alignment, 1, 1);
+                    pushBitmap(&piece_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
+                    pushBitmap(&piece_group, &hero_bitmaps.torso, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
                     drawHitPoints(entity, &piece_group);
                 },
                 else => {
@@ -1387,25 +1365,25 @@ pub export fn updateAndRender(
                 sim.moveEntity(game_state, region, entity, input.dt_for_frame, &move_spec, dd_pos);
             }
 
-            const eg_x = screen_center_x + meters_to_pixels * entity.pos.x;
-            const eg_y = screen_center_y - meters_to_pixels * entity.pos.y;
-            const entity_z = -meters_to_pixels * entity.z;
+            const eg_x = screen_center_x + meters_to_pixels * entity.pos.x();
+            const eg_y = screen_center_y - meters_to_pixels * entity.pos.y();
+            const entity_z = -meters_to_pixels * entity.pos.z();
 
             for (0..piece_group.piece_count) |piece_index| {
                 const piece = piece_group.pieces[piece_index];
-                const center: Vec2 = .{
-                    .x = eg_x + piece.offset.x,
-                    .y = eg_y + piece.offset.y + piece.offset_z + piece.entity_zc * entity_z,
-                };
+                const center = Vec2.init(
+                    eg_x + piece.offset.x(),
+                    eg_y + piece.offset.y() + piece.offset_z + piece.entity_zc * entity_z,
+                );
 
                 if (piece.bitmap) |bitmap| {
-                    drawBitmap(buffer, bitmap, center.x, center.y, piece.a);
+                    drawBitmap(buffer, bitmap, center.x(), center.y(), piece.a);
                 } else {
-                    const half_dim = math.scale(piece.dim, 0.5 * meters_to_pixels);
+                    const half_dim = Vec2.scale(&piece.dim, 0.5 * meters_to_pixels);
                     drawRectangle(
                         buffer,
-                        math.sub(center, half_dim),
-                        math.add(center, half_dim),
+                        Vec2.sub(&center, &half_dim),
+                        Vec2.add(&center, &half_dim),
                         piece.r,
                         piece.g,
                         piece.b,
@@ -1420,8 +1398,8 @@ pub export fn updateAndRender(
 
     drawRectangle(
         buffer,
-        diff.dxy,
-        .{ .x = 10, .y = 10 },
+        Vec2.init(diff.x(), diff.y()),
+        Vec2.init(10, 10),
         1,
         1,
         0,

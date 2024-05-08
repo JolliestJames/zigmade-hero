@@ -2,16 +2,10 @@ const std = @import("std");
 const assert = std.debug.assert;
 const game = @import("zigmade.zig");
 const math = @import("zigmade_math.zig");
-const Vec2 = math.Vec2;
+const Vec3 = math.Vec3;
 const TILE_CHUNK_SAFE_MARGIN = std.math.maxInt(i32) / 64;
 const TILE_CHUNK_UNINITIALIZED = std.math.maxInt(i32);
 const TILES_PER_CHUNK = 16;
-
-// TODO: Replace this with a Vec3 once we get to Vec3
-pub const WorldDifference = struct {
-    dxy: Vec2,
-    dz: f32,
-};
 
 pub const WorldPosition = struct {
     // TODO: How can we get rid of abs_tile_* here,
@@ -21,7 +15,7 @@ pub const WorldPosition = struct {
     chunk_y: i32 = 0,
     chunk_z: i32 = 0,
     // NOTE: Offset from chunk center
-    offset_: Vec2 = .{},
+    offset_: Vec3 = Vec3.splat(0),
 };
 
 // TODO: Could make this just TileChunk and allow multiple chunks per x/y/z
@@ -42,7 +36,10 @@ pub const WorldChunk = struct {
 
 pub const World = struct {
     tile_side_in_meters: f32,
-    chunk_side_in_meters: f32,
+    tile_depth_in_meters: f32,
+    chunk_dim_in_meters: Vec3,
+    //chunk_side_in_meters: f32,
+    //chunk_depth_in_meters: f32,
     // TODO: tile_chunk_hash should probably switch to pointers if
     // tile entity blocks continue to be store en masse directly
     // inside the tile chunk
@@ -53,7 +50,12 @@ pub const World = struct {
 
 pub fn initializeWorld(world: *World, tile_side_in_meters: f32) void {
     world.tile_side_in_meters = tile_side_in_meters;
-    world.chunk_side_in_meters = TILES_PER_CHUNK * tile_side_in_meters;
+    world.chunk_dim_in_meters = Vec3.init(
+        TILES_PER_CHUNK * tile_side_in_meters,
+        TILES_PER_CHUNK * tile_side_in_meters,
+        tile_side_in_meters,
+    );
+    world.tile_depth_in_meters = tile_side_in_meters;
     world.first_free = null;
 
     for (0..world.chunk_hash.len) |index| {
@@ -133,26 +135,22 @@ pub inline fn subtract(
     world: *World,
     a: *WorldPosition,
     b: *WorldPosition,
-) WorldDifference {
-    var result: WorldDifference = undefined;
+) Vec3 {
+    var result: Vec3 = undefined;
 
-    const d_tile_xy: Vec2 = .{
-        .x = @as(f32, @floatFromInt(a.chunk_x)) -
+    const d_tile = Vec3.init(
+        @as(f32, @floatFromInt(a.chunk_x)) -
             @as(f32, @floatFromInt(b.chunk_x)),
-        .y = @as(f32, @floatFromInt(a.chunk_y)) -
+        @as(f32, @floatFromInt(a.chunk_y)) -
             @as(f32, @floatFromInt(b.chunk_y)),
-    };
-
-    const d_tile_z = @as(f32, @floatFromInt(a.chunk_z)) -
-        @as(f32, @floatFromInt(b.chunk_z));
-
-    result.dxy = math.add(
-        math.scale(d_tile_xy, world.chunk_side_in_meters),
-        math.sub(a.offset_, b.offset_),
+        @as(f32, @floatFromInt(a.chunk_z)) -
+            @as(f32, @floatFromInt(b.chunk_z)),
     );
 
-    // TODO: Think about what we want to do with z
-    result.dz = world.chunk_side_in_meters * d_tile_z;
+    result = Vec3.add(
+        &Vec3.hadamard(&world.chunk_dim_in_meters, &d_tile),
+        &Vec3.sub(&a.offset_, &b.offset_),
+    );
 
     return result;
 }
@@ -162,7 +160,7 @@ pub inline fn centeredChunkPoint(
     chunk_y: u32,
     chunk_z: u32,
 ) WorldPosition {
-    var result: WorldPosition = undefined;
+    var result: WorldPosition = .{};
 
     result.chunk_x = chunk_x;
     result.chunk_y = chunk_y;
@@ -314,31 +312,32 @@ pub inline fn changeEntityLocation(
 }
 
 inline fn tileRelIsCanonical(
-    world: *World,
+    chunk_dim: f32,
     tile_rel: f32,
 ) bool {
     // TODO: Fix floating point math so this can be exact
     const epsilon = 0.0001;
     const result =
-        (tile_rel >= -0.5 * world.chunk_side_in_meters - epsilon) and
-        (tile_rel <= 0.5 * world.chunk_side_in_meters + epsilon);
+        (tile_rel >= -0.5 * chunk_dim - epsilon) and
+        (tile_rel <= 0.5 * chunk_dim + epsilon);
 
     return result;
 }
 
 inline fn vecIsCanonical(
     world: *World,
-    offset: Vec2,
+    offset: Vec3,
 ) bool {
     const result =
-        tileRelIsCanonical(world, offset.x) and
-        tileRelIsCanonical(world, offset.y);
+        tileRelIsCanonical(world.chunk_dim_in_meters.x(), offset.x()) and
+        tileRelIsCanonical(world.chunk_dim_in_meters.y(), offset.y()) and
+        tileRelIsCanonical(world.chunk_dim_in_meters.z(), offset.z());
 
     return result;
 }
 
 inline fn recanonicalizeCoordinate(
-    world: *World,
+    chunk_dim: f32,
     tile: *i32,
     tile_rel: *f32,
 ) void {
@@ -349,23 +348,37 @@ inline fn recanonicalizeCoordinate(
     // NOTE: Wrapping is not allowed, all coordinates are assumed to be within
     // the safe margin
     // TODO: Assert that we are nowhere near the edges of the world
-    const offset: i32 = @intFromFloat(@round(tile_rel.* / world.chunk_side_in_meters));
+    const offset: i32 = @intFromFloat(@round(tile_rel.* / chunk_dim));
     tile.* += offset;
-    tile_rel.* -= @as(f32, @floatFromInt(offset)) * world.chunk_side_in_meters;
+    tile_rel.* -= @as(f32, @floatFromInt(offset)) * chunk_dim;
 
-    assert(tileRelIsCanonical(world, tile_rel.*));
+    assert(tileRelIsCanonical(chunk_dim, tile_rel.*));
 }
 
 pub inline fn mapIntoChunkSpace(
     world: *World,
     base_pos: WorldPosition,
-    offset: Vec2,
+    offset: Vec3,
 ) WorldPosition {
     var result = base_pos;
 
-    result.offset_ = math.add(result.offset_, offset);
-    recanonicalizeCoordinate(world, &result.chunk_x, &result.offset_.x);
-    recanonicalizeCoordinate(world, &result.chunk_y, &result.offset_.y);
+    result.offset_ = Vec3.add(&result.offset_, &offset);
+
+    recanonicalizeCoordinate(
+        world.chunk_dim_in_meters.x(),
+        &result.chunk_x,
+        &result.offset_.v[0],
+    );
+    recanonicalizeCoordinate(
+        world.chunk_dim_in_meters.y(),
+        &result.chunk_y,
+        &result.offset_.v[1],
+    );
+    recanonicalizeCoordinate(
+        world.chunk_dim_in_meters.z(),
+        &result.chunk_z,
+        &result.offset_.v[2],
+    );
 
     return result;
 }
@@ -376,24 +389,14 @@ pub fn chunkPosFromTilePos(
     abs_tile_y: i32,
     abs_tile_z: i32,
 ) WorldPosition {
-    var result: WorldPosition = .{};
+    const base_pos: WorldPosition = .{};
 
-    result.chunk_x = @divTrunc(abs_tile_x, TILES_PER_CHUNK);
-    result.chunk_y = @divTrunc(abs_tile_y, TILES_PER_CHUNK);
-    result.chunk_z = @divTrunc(abs_tile_z, TILES_PER_CHUNK);
+    const offset = Vec3.hadamard(
+        &world.chunk_dim_in_meters,
+        &Vec3.fromInt(abs_tile_x, abs_tile_y, abs_tile_z),
+    );
 
-    // TODO: Think this through and actually work out the math
-    if (abs_tile_x < 0) result.chunk_x -= 1;
-    if (abs_tile_y < 0) result.chunk_y -= 1;
-    if (abs_tile_z < 0) result.chunk_z -= 1;
-
-    // TODO: Decide on tile alignment in chunks
-    result.offset_.x = @as(f32, @floatFromInt((abs_tile_x - TILES_PER_CHUNK / 2) -
-        (result.chunk_x * TILES_PER_CHUNK))) * world.tile_side_in_meters;
-
-    result.offset_.y = @as(f32, @floatFromInt((abs_tile_y - TILES_PER_CHUNK / 2) -
-        (result.chunk_y * TILES_PER_CHUNK))) * world.tile_side_in_meters;
-    // TODO: Move to 3D z
+    const result = mapIntoChunkSpace(world, base_pos, offset);
 
     assert(vecIsCanonical(world, result.offset_));
 

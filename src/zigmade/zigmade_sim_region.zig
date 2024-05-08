@@ -5,8 +5,8 @@ const math = @import("zigmade_math.zig");
 const world = @import("zigmade_world.zig");
 const ety = @import("zigmade_entity.zig");
 
-const Vec2 = math.Vec2;
-const Rectangle2 = math.Rectangle2;
+const Vec3 = math.Vec3;
+const Rectangle3 = math.Rectangle3;
 const LowEntity = game.LowEntity;
 const GameState = game.GameState;
 const PairwiseCollisionRule = game.PairwiseCollisionRule;
@@ -60,10 +60,8 @@ pub const Entity = struct {
     updatable: bool = false,
     type: EntityType = .none,
     flags: EntityFlags = .{},
-    pos: Vec2 = .{},
-    d_pos: Vec2 = .{},
-    z: f32 = 0,
-    dz: f32 = 0,
+    pos: Vec3 = Vec3.splat(0),
+    d_pos: Vec3 = Vec3.splat(0),
     distance_limit: f32 = 0,
     chunk_z: u32 = 0,
     width: f32 = 0,
@@ -88,8 +86,8 @@ pub const SimRegion = struct {
     // sim entities
     world: *World,
     origin: WorldPosition,
-    bounds: Rectangle2,
-    updatable_bounds: Rectangle2,
+    bounds: Rectangle3,
+    updatable_bounds: Rectangle3,
     max_entity_count: u32,
     entity_count: u32,
     entities: [*]Entity,
@@ -209,7 +207,7 @@ fn addEntityRaw(
 inline fn getSimSpaceP(
     sim_region: *SimRegion,
     maybe_stored: ?*LowEntity,
-) Vec2 {
+) Vec3 {
     // NOTE: Map entity into camera space
     // TODO: Do we want to set this to signaling NAN in
     // debug to make sure nobody ever uses the position
@@ -218,8 +216,7 @@ inline fn getSimSpaceP(
 
     if (maybe_stored) |stored| {
         if (!stored.sim.flags.non_spatial) {
-            const diff = world.subtract(sim_region.world, &stored.pos, &sim_region.origin);
-            result = diff.dxy;
+            result = world.subtract(sim_region.world, &stored.pos, &sim_region.origin);
         }
     }
 
@@ -231,14 +228,14 @@ fn addEntity(
     sim_region: *SimRegion,
     storage_index: u32,
     source: ?*LowEntity,
-    maybe_sim_pos: ?*Vec2,
+    maybe_sim_pos: ?*Vec3,
 ) ?*Entity {
     const maybe_dest = addEntityRaw(game_state, sim_region, storage_index, source);
 
     if (maybe_dest) |dest| {
         if (maybe_sim_pos) |sim_pos| {
             dest.pos = sim_pos.*;
-            dest.updatable = math.isInRectangle(sim_region.updatable_bounds, dest.pos);
+            dest.updatable = Rectangle3.isInRectangle(sim_region.updatable_bounds, dest.pos);
         } else {
             dest.pos = getSimSpaceP(sim_region, source);
         }
@@ -252,7 +249,7 @@ pub fn beginSim(
     game_state: *GameState,
     game_world: *World,
     origin: WorldPosition,
-    bounds: Rectangle2,
+    bounds: Rectangle3,
 ) *SimRegion {
     // TODO: If entities are stored in the world, we wouldn't need game state here
 
@@ -262,15 +259,19 @@ pub fn beginSim(
     // TODO: IMPORTANT: Calculate this eventually from the maximum value
     // of all entities radii plus their speed
     const update_safety_margin: f32 = 1.0;
+    const update_safety_margin_z: f32 = 1.0;
 
     sim_region.world = game_world;
     sim_region.origin = origin;
     sim_region.updatable_bounds = bounds;
 
-    sim_region.bounds = math.addRadius(
+    sim_region.bounds = Rectangle3.addRadius(
         sim_region.updatable_bounds,
-        update_safety_margin,
-        update_safety_margin,
+        Vec3.init(
+            update_safety_margin,
+            update_safety_margin,
+            update_safety_margin_z,
+        ),
     );
 
     // TODO: need to be more specific about entity counts
@@ -279,16 +280,19 @@ pub fn beginSim(
 
     sim_region.entities = game.pushArray(arena, sim_region.max_entity_count, Entity);
 
+    const min_corner = Rectangle3.getMinCorner(sim_region.bounds);
+    const max_corner = Rectangle3.getMaxCorner(sim_region.bounds);
+
     const min_chunk_p = world.mapIntoChunkSpace(
         game_world,
         sim_region.origin,
-        math.getMinCorner(sim_region.bounds),
+        min_corner,
     );
 
     const max_chunk_p = world.mapIntoChunkSpace(
         game_world,
         sim_region.origin,
-        math.getMaxCorner(sim_region.bounds),
+        max_corner,
     );
 
     var chunk_y = min_chunk_p.chunk_y;
@@ -316,7 +320,7 @@ pub fn beginSim(
                         if (!low.sim.flags.non_spatial) {
                             var sim_space_p = getSimSpaceP(sim_region, low);
 
-                            if (math.isInRectangle(sim_region.bounds, sim_space_p)) {
+                            if (Rectangle3.isInRectangle(sim_region.bounds, sim_space_p)) {
                                 _ = addEntity(game_state, sim_region, low_index, low, &sim_space_p);
                             }
                         }
@@ -503,45 +507,42 @@ pub fn moveEntity(
     entity: *Entity,
     dt: f32,
     move_spec: *MoveSpec,
-    dd_pos: Vec2,
+    dd_pos: Vec3,
 ) void {
     assert(!entity.flags.non_spatial);
 
     var acceleration = dd_pos;
 
     if (move_spec.unit_max_acc_vector) {
-        const acc_length = math.lengthSquared(acceleration);
+        const acc_length = Vec3.lengthSquared(&acceleration);
 
         if (acc_length > 1.0) {
-            acceleration = math.scale(acceleration, 1.0 / @sqrt(acc_length));
+            acceleration = Vec3.scale(&acceleration, 1.0 / @sqrt(acc_length));
         }
     }
 
-    acceleration = math.scale(acceleration, move_spec.speed);
+    acceleration = Vec3.scale(&acceleration, move_spec.speed);
 
     // TODO: ODE here
-    acceleration = math.add(
-        acceleration,
-        math.scale(entity.d_pos, -move_spec.drag),
+    acceleration = Vec3.add(
+        &acceleration,
+        &Vec3.scale(&entity.d_pos, -move_spec.drag),
     );
 
-    var player_d = math.add(
-        math.scale(acceleration, 0.5 * math.square(dt)),
-        math.scale(entity.d_pos, dt),
+    acceleration = Vec3.add(
+        &acceleration,
+        &Vec3.init(0, 0, -9.8),
     );
 
-    entity.d_pos = math.add(
-        math.scale(acceleration, dt),
-        entity.d_pos,
+    var player_d = Vec3.add(
+        &Vec3.scale(&acceleration, 0.5 * math.square(dt)),
+        &Vec3.scale(&entity.d_pos, dt),
     );
 
-    const ddz = -9.8;
-    entity.z = 0.5 * ddz * math.square(dt) + entity.dz * dt + entity.z;
-    entity.dz = ddz * dt + entity.dz;
-
-    if (entity.z < 0) {
-        entity.z = 0;
-    }
+    entity.d_pos = Vec3.add(
+        &Vec3.scale(&acceleration, dt),
+        &entity.d_pos,
+    );
 
     var distance_remaining = entity.distance_limit;
 
@@ -552,7 +553,7 @@ pub fn moveEntity(
 
     for (0..4) |_| {
         var t_min: f32 = 1.0;
-        const player_delta_length = math.length(player_d);
+        const player_delta_length = Vec3.length(&player_d);
 
         // TODO: What do we want to do for epsilons here?
         // Think this through for the final collision code
@@ -561,10 +562,10 @@ pub fn moveEntity(
                 t_min = distance_remaining / player_delta_length;
             }
 
-            var wall_normal: Vec2 = .{};
+            var wall_normal = Vec3.splat(0);
             var hit_entity: ?*Entity = null;
 
-            const desired_position = math.add(entity.pos, player_d);
+            const desired_position = Vec3.add(&entity.pos, &player_d);
 
             // NOTE: This is just an optimization to avoid entering the
             // loop in the case where the test entity is non spatial
@@ -574,44 +575,49 @@ pub fn moveEntity(
                     const test_entity = &region.entities[high_index];
 
                     if (shouldCollide(game_state, entity, test_entity)) {
-                        const diameter_w = test_entity.width + entity.width;
-                        const diameter_h = test_entity.height + entity.height;
-                        const min_c = math.scale(.{ .x = diameter_w, .y = diameter_h }, -0.5);
-                        const max_c = math.scale(.{ .x = diameter_w, .y = diameter_h }, 0.5);
-                        const rel = math.sub(entity.pos, test_entity.pos);
+                        // TODO: Entities have height?
+                        const minkowski_diameter = Vec3.init(
+                            test_entity.width + entity.width,
+                            test_entity.height + entity.height,
+                            game_state.world.?.tile_depth_in_meters,
+                        );
 
-                        if (testWall(min_c.x, rel.x, rel.y, player_d.x, player_d.y, &t_min, min_c.y, max_c.y)) {
-                            wall_normal = .{ .x = -1, .y = 0 };
+                        const min_c = Vec3.scale(&minkowski_diameter, -0.5);
+                        const max_c = Vec3.scale(&minkowski_diameter, 0.5);
+                        const rel = Vec3.sub(&entity.pos, &test_entity.pos);
+
+                        if (testWall(min_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min, min_c.y(), max_c.y())) {
+                            wall_normal = Vec3.init(-1, 0, 0);
                             hit_entity = test_entity;
                         }
 
-                        if (testWall(max_c.x, rel.x, rel.y, player_d.x, player_d.y, &t_min, min_c.y, max_c.y)) {
-                            wall_normal = .{ .x = 1, .y = 0 };
+                        if (testWall(max_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min, min_c.y(), max_c.y())) {
+                            wall_normal = Vec3.init(1, 0, 0);
                             hit_entity = test_entity;
                         }
 
-                        if (testWall(min_c.y, rel.y, rel.x, player_d.y, player_d.x, &t_min, min_c.x, max_c.x)) {
-                            wall_normal = .{ .x = 0, .y = -1 };
+                        if (testWall(min_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min, min_c.x(), max_c.x())) {
+                            wall_normal = Vec3.init(0, -1, 0);
                             hit_entity = test_entity;
                         }
 
-                        if (testWall(max_c.y, rel.y, rel.x, player_d.y, player_d.x, &t_min, min_c.x, max_c.x)) {
-                            wall_normal = .{ .x = 0, .y = 1 };
+                        if (testWall(max_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min, min_c.x(), max_c.x())) {
+                            wall_normal = Vec3.init(0, 1, 0);
                             hit_entity = test_entity;
                         }
                     }
                 }
             }
 
-            entity.pos = math.add(
-                entity.pos,
-                math.scale(player_d, t_min),
+            entity.pos = Vec3.add(
+                &entity.pos,
+                &Vec3.scale(&player_d, t_min),
             );
 
             distance_remaining -= t_min * player_delta_length;
 
             if (hit_entity) |hit| {
-                player_d = math.sub(desired_position, entity.pos);
+                player_d = Vec3.sub(&desired_position, &entity.pos);
 
                 const stops_on_collision = handleCollision(entity, hit);
 
@@ -621,9 +627,9 @@ pub fn moveEntity(
                     //const p_magnitude = math.scale(wall_normal, p_product);
                     //player_d = math.sub(player_d, p_magnitude);
 
-                    const d_product = 1 * math.inner(entity.d_pos, wall_normal);
-                    const d_magnitude = math.scale(wall_normal, d_product);
-                    entity.d_pos = math.sub(entity.d_pos, d_magnitude);
+                    const d_product = 1 * Vec3.inner(&entity.d_pos, &wall_normal);
+                    const d_magnitude = Vec3.scale(&wall_normal, d_product);
+                    entity.d_pos = Vec3.sub(&entity.d_pos, &d_magnitude);
                 } else {
                     game.addCollisionRule(
                         game_state,
@@ -636,21 +642,26 @@ pub fn moveEntity(
         } else break;
     }
 
+    // TODO: This has to become real height handling
+    if (entity.pos.z() < 0) {
+        entity.pos.v[2] = 0;
+    }
+
     if (entity.distance_limit != 0) {
         entity.distance_limit = distance_remaining;
     }
 
     // TODO: Change to using the acceleration vector
-    if (entity.d_pos.x == 0.0 and entity.d_pos.y == 0.0) {
+    if (entity.d_pos.x() == 0.0 and entity.d_pos.y() == 0.0) {
         // Leave facing_direction alone
-    } else if (@abs(entity.d_pos.x) > @abs(entity.d_pos.y)) {
-        if (entity.d_pos.x > 0) {
+    } else if (@abs(entity.d_pos.x()) > @abs(entity.d_pos.y())) {
+        if (entity.d_pos.x() > 0) {
             entity.facing_direction = 0;
         } else {
             entity.facing_direction = 2;
         }
-    } else if (@abs(entity.d_pos.x) < @abs(entity.d_pos.y)) {
-        if (entity.d_pos.y > 0) {
+    } else if (@abs(entity.d_pos.x()) < @abs(entity.d_pos.y())) {
+        if (entity.d_pos.y() > 0) {
             entity.facing_direction = 1;
         } else {
             entity.facing_direction = 3;

@@ -5,7 +5,7 @@ const math = @import("zigmade_math.zig");
 const world = @import("zigmade_world.zig");
 const sim = @import("zigmade_sim_region.zig");
 
-const Vec2 = math.Vec2;
+const Vec3 = math.Vec3;
 const Rectangle2 = math.Rectangle2;
 const LowEntity = game.LowEntity;
 const Entity = sim.Entity;
@@ -15,8 +15,8 @@ const GameState = game.GameState;
 const World = world.World;
 const WorldPosition = world.WorldPosition;
 
-pub inline fn invalidPos() Vec2 {
-    return Vec2{ .x = 100000, .y = 100000 };
+pub inline fn invalidPos() Vec3 {
+    return Vec3.init(100000, 100000, 100000);
 }
 
 pub inline fn defaultMoveSpec() MoveSpec {
@@ -36,8 +36,8 @@ pub inline fn makeEntityNonSpatial(entity: *Entity) void {
 
 pub inline fn makeEntitySpatial(
     entity: *Entity,
-    pos: Vec2,
-    d_pos: Vec2,
+    pos: Vec3,
+    d_pos: Vec3,
 ) void {
     entity.flags.non_spatial = false;
     entity.pos = pos;
