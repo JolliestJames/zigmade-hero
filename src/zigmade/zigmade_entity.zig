@@ -6,14 +6,8 @@ const world = @import("zigmade_world.zig");
 const sim = @import("zigmade_sim_region.zig");
 
 const Vec3 = math.Vec3;
-const Rectangle2 = math.Rectangle2;
-const LowEntity = game.LowEntity;
 const Entity = sim.Entity;
-const SimRegion = sim.SimRegion;
 const MoveSpec = sim.MoveSpec;
-const GameState = game.GameState;
-const World = world.World;
-const WorldPosition = world.WorldPosition;
 
 pub inline fn invalidPos() Vec3 {
     return Vec3.init(100000, 100000, 100000);

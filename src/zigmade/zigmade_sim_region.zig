@@ -7,6 +7,7 @@ const ety = @import("zigmade_entity.zig");
 
 const Vec3 = math.Vec3;
 const Rectangle3 = math.Rectangle3;
+const MemoryArena = game.MemoryArena;
 const LowEntity = game.LowEntity;
 const GameState = game.GameState;
 const PairwiseCollisionRule = game.PairwiseCollisionRule;
@@ -63,9 +64,8 @@ pub const Entity = struct {
     pos: Vec3 = Vec3.splat(0),
     d_pos: Vec3 = Vec3.splat(0),
     distance_limit: f32 = 0,
+    dim: Vec3 = Vec3.splat(0),
     chunk_z: u32 = 0,
-    width: f32 = 0,
-    height: f32 = 0,
     facing_direction: u32 = 0,
     t_bob: f32 = 0,
     d_abs_tile_z: i32 = 0,
@@ -85,6 +85,8 @@ pub const SimRegion = struct {
     // TODO: Need a hash table to map stored entity indices to
     // sim entities
     world: *World,
+    max_entity_radius: f32,
+    max_entity_velocity: f32,
     origin: WorldPosition,
     bounds: Rectangle3,
     updatable_bounds: Rectangle3,
@@ -223,6 +225,13 @@ inline fn getSimSpaceP(
     return result;
 }
 
+pub inline fn entityOverlaps(pos: Vec3, dim: Vec3, rect: Rectangle3) bool {
+    const grown = Rectangle3.addRadius(rect, Vec3.scale(&dim, 0.5));
+    const result = Rectangle3.isInRectangle(grown, pos);
+
+    return result;
+}
+
 fn addEntity(
     game_state: *GameState,
     sim_region: *SimRegion,
@@ -235,7 +244,12 @@ fn addEntity(
     if (maybe_dest) |dest| {
         if (maybe_sim_pos) |sim_pos| {
             dest.pos = sim_pos.*;
-            dest.updatable = Rectangle3.isInRectangle(sim_region.updatable_bounds, dest.pos);
+
+            dest.updatable = entityOverlaps(
+                dest.dim,
+                dest.pos,
+                sim_region.updatable_bounds,
+            );
         } else {
             dest.pos = getSimSpaceP(sim_region, source);
         }
@@ -245,25 +259,33 @@ fn addEntity(
 }
 
 pub fn beginSim(
-    arena: *game.MemoryArena,
+    arena: *MemoryArena,
     game_state: *GameState,
     game_world: *World,
     origin: WorldPosition,
     bounds: Rectangle3,
+    dt: f32,
 ) *SimRegion {
     // TODO: If entities are stored in the world, we wouldn't need game state here
 
     var sim_region = game.pushStruct(arena, SimRegion);
     game.zeroStruct(@TypeOf(sim_region.hash), &sim_region.hash);
 
-    // TODO: IMPORTANT: Calculate this eventually from the maximum value
-    // of all entities radii plus their speed
-    const update_safety_margin: f32 = 1.0;
-    const update_safety_margin_z: f32 = 1.0;
+    // TODO: Try to enforce these more rigorously
+    sim_region.max_entity_radius = 5;
+    sim_region.max_entity_velocity = 30;
+
+    const update_safety_margin: f32 = sim_region.max_entity_radius +
+        dt * sim_region.max_entity_velocity;
+
+    const update_safety_margin_z: f32 = 1;
 
     sim_region.world = game_world;
     sim_region.origin = origin;
-    sim_region.updatable_bounds = bounds;
+    sim_region.updatable_bounds = Rectangle3.addRadius(
+        bounds,
+        Vec3.splat(sim_region.max_entity_radius),
+    );
 
     sim_region.bounds = Rectangle3.addRadius(
         sim_region.updatable_bounds,
@@ -320,7 +342,11 @@ pub fn beginSim(
                         if (!low.sim.flags.non_spatial) {
                             var sim_space_p = getSimSpaceP(sim_region, low);
 
-                            if (Rectangle3.isInRectangle(sim_region.bounds, sim_space_p)) {
+                            if (entityOverlaps(
+                                sim_space_p,
+                                low.sim.dim,
+                                sim_region.bounds,
+                            )) {
                                 _ = addEntity(game_state, sim_region, low_index, low, &sim_space_p);
                             }
                         }
@@ -335,7 +361,7 @@ pub fn beginSim(
 
 pub fn endSim(
     region: *SimRegion,
-    game_state: *game.GameState,
+    game_state: *GameState,
 ) void {
     // TODO: Maybe don't take a game state here, low entities should be stored in the world?
 
@@ -354,7 +380,7 @@ pub fn endSim(
             // TODO: Save state back to the stored entity, once high entities
             // do state decompression, etc.
 
-            const new_p = if (entity.flags.non_spatial)
+            var new_p = if (entity.flags.non_spatial)
                 world.nullPosition()
             else
                 world.mapIntoChunkSpace(game_world, region.origin, entity.pos);
@@ -364,7 +390,7 @@ pub fn endSim(
                 game_world,
                 entity.storage_index,
                 &game_state.low_entities[entity.storage_index],
-                new_p,
+                &new_p,
             );
 
             if (entity.storage_index == game_state.camera_entity_index) {
@@ -389,7 +415,9 @@ pub fn endSim(
                         new_camera_p.abs_tile_y -%= 9;
                     }
                 } else {
+                    const z_offset = new_camera_p.offset_.z();
                     new_camera_p = stored.pos;
+                    new_camera_p.offset_.v[2] = z_offset;
                 }
 
                 game_state.camera_p = new_camera_p;
@@ -529,10 +557,7 @@ pub fn moveEntity(
         &Vec3.scale(&entity.d_pos, -move_spec.drag),
     );
 
-    acceleration = Vec3.add(
-        &acceleration,
-        &Vec3.init(0, 0, -9.8),
-    );
+    acceleration = Vec3.add(&acceleration, &Vec3.init(0, 0, -9.8));
 
     var player_d = Vec3.add(
         &Vec3.scale(&acceleration, 0.5 * math.square(dt)),
@@ -543,6 +568,11 @@ pub fn moveEntity(
         &Vec3.scale(&acceleration, dt),
         &entity.d_pos,
     );
+
+    // TODO: Upgrade physical motion routines to handle capping
+    // max velocity?
+    assert(Vec3.lengthSquared(&entity.d_pos) <=
+        math.square(region.max_entity_velocity));
 
     var distance_remaining = entity.distance_limit;
 
@@ -577,9 +607,9 @@ pub fn moveEntity(
                     if (shouldCollide(game_state, entity, test_entity)) {
                         // TODO: Entities have height?
                         const minkowski_diameter = Vec3.init(
-                            test_entity.width + entity.width,
-                            test_entity.height + entity.height,
-                            game_state.world.?.tile_depth_in_meters,
+                            test_entity.dim.x() + entity.dim.x(),
+                            test_entity.dim.y() + entity.dim.y(),
+                            test_entity.dim.z() + entity.dim.z(),
                         );
 
                         const min_c = Vec3.scale(&minkowski_diameter, -0.5);
@@ -645,6 +675,7 @@ pub fn moveEntity(
     // TODO: This has to become real height handling
     if (entity.pos.z() < 0) {
         entity.pos.v[2] = 0;
+        entity.d_pos.v[2] = 0;
     }
 
     if (entity.distance_limit != 0) {

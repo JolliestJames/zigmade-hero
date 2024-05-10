@@ -2,15 +2,20 @@ const std = @import("std");
 const assert = std.debug.assert;
 const game = @import("zigmade.zig");
 const math = @import("zigmade_math.zig");
-const Vec3 = math.Vec3;
 const TILE_CHUNK_SAFE_MARGIN = std.math.maxInt(i32) / 64;
 const TILE_CHUNK_UNINITIALIZED = std.math.maxInt(i32);
 const TILES_PER_CHUNK = 16;
 
+const Vec3 = math.Vec3;
+const MemoryArena = game.MemoryArena;
+const LowEntity = game.LowEntity;
+
 pub const WorldPosition = struct {
-    // TODO: How can we get rid of abs_tile_* here,
-    // and still allow references to entities to be able to figure out
-    // where they are/which world chunk they are in?
+    // TODO: It seems like we have to store chunk_x/y/z with each
+    // entity because even though the sim region gather doesn't need it
+    // at first, and we could get by without it, entity references pull
+    // in entities without going through their WorldChunk, and thus
+    // still need to know chunk_x/y/z
     chunk_x: i32 = 0,
     chunk_y: i32 = 0,
     chunk_z: i32 = 0,
@@ -82,7 +87,7 @@ pub inline fn getWorldChunk(
     chunk_x: i32,
     chunk_y: i32,
     chunk_z: i32,
-    arena: ?*game.MemoryArena,
+    arena: ?*MemoryArena,
 ) ?*WorldChunk {
     assert(chunk_x > -TILE_CHUNK_SAFE_MARGIN);
     assert(chunk_y > -TILE_CHUNK_SAFE_MARGIN);
@@ -170,7 +175,7 @@ pub inline fn centeredChunkPoint(
 }
 
 pub inline fn changeEntityLocationRaw(
-    arena: *game.MemoryArena,
+    arena: *MemoryArena,
     world: *World,
     low_entity_index: u32,
     maybe_old_p: ?*WorldPosition,
@@ -274,13 +279,12 @@ pub inline fn changeEntityLocationRaw(
 }
 
 pub inline fn changeEntityLocation(
-    arena: *game.MemoryArena,
+    arena: *MemoryArena,
     maybe_world: ?*World,
     low_entity_index: u32,
-    low: *game.LowEntity,
-    new_p_init: WorldPosition,
+    low: *LowEntity,
+    new_p_init: *WorldPosition,
 ) void {
-    var p = new_p_init;
     var maybe_old_p: ?*WorldPosition = null;
     var maybe_new_p: ?*WorldPosition = null;
 
@@ -288,8 +292,8 @@ pub inline fn changeEntityLocation(
         maybe_old_p = &low.pos;
     }
 
-    if (isValid(&p)) {
-        maybe_new_p = &p;
+    if (isValid(new_p_init)) {
+        maybe_new_p = new_p_init;
     }
 
     if (maybe_world) |world| {
@@ -316,7 +320,7 @@ inline fn tileRelIsCanonical(
     tile_rel: f32,
 ) bool {
     // TODO: Fix floating point math so this can be exact
-    const epsilon = 0.0001;
+    const epsilon = 0.01;
     const result =
         (tile_rel >= -0.5 * chunk_dim - epsilon) and
         (tile_rel <= 0.5 * chunk_dim + epsilon);
@@ -391,9 +395,9 @@ pub fn chunkPosFromTilePos(
 ) WorldPosition {
     const base_pos: WorldPosition = .{};
 
-    const offset = Vec3.hadamard(
-        &world.chunk_dim_in_meters,
+    const offset = Vec3.scale(
         &Vec3.fromInt(abs_tile_x, abs_tile_y, abs_tile_z),
+        world.tile_side_in_meters,
     );
 
     const result = mapIntoChunkSpace(world, base_pos, offset);

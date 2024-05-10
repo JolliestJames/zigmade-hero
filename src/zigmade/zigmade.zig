@@ -6,10 +6,10 @@
 // - Z
 //   - Minkowski inclusion test for sim region begin/updatable bounds
 //   - Figure out how you go up and down and how is this rendered?
-//   - Solve the puzzler from WorldPosition?
 // - Collision detection?
 //   - Entry/exit?
 //   - What's the plan for robustness/shape definition?
+//   - Implement reprojection to handle interpenetration
 // - Implement multiple sim regions per frame
 //   - Per-entity clocking
 //   - Sim region merging? Multiple players?
@@ -63,6 +63,8 @@ const ety = @import("zigmade_entity.zig");
 const intrinsics = @import("zigmade_intrinsics.zig");
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
+const lossyCast = std.math.lossyCast;
+
 const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
@@ -71,6 +73,7 @@ const Entity = sim.Entity;
 const SimRegion = sim.SimRegion;
 const EntityType = sim.EntityType;
 const MoveSpec = sim.MoveSpec;
+const World = world.World;
 const WorldPosition = world.WorldPosition;
 
 const HeroBitmaps = struct {
@@ -85,7 +88,7 @@ pub const LowEntity = struct {
     // and we can store whether they would be invalid in the flags
     // Can we do something better?
     sim: Entity,
-    pos: world.WorldPosition = .{},
+    pos: WorldPosition = .{},
 };
 
 const EntityVisiblePiece = struct {
@@ -129,11 +132,11 @@ pub const PairwiseCollisionRule = struct {
 };
 
 pub const GameState = struct {
-    world: ?*world.World = null,
+    world: ?*World = null,
     world_arena: MemoryArena,
     // TODO: Should we allow split-screen?
     camera_entity_index: u32,
-    camera_p: world.WorldPosition,
+    camera_p: WorldPosition,
     controlled_heroes: [5]ControlledHero,
     low_entity_count: u32 = 0,
     // TODO: Change name to StoredEntity
@@ -334,9 +337,9 @@ fn drawBitmap(
             const g = (1.0 - a) * dg + a * sg;
             const b = (1.0 - a) * db + a * sb;
 
-            dest[0] = (@as(u32, @intFromFloat(r + 0.5)) << 16) |
-                (@as(u32, @intFromFloat(g + 0.5)) << 8) |
-                (@as(u32, @intFromFloat(b + 0.5)) << 0);
+            dest[0] = (lossyCast(u32, r + 0.5) << 16) |
+                (lossyCast(u32, g + 0.5) << 8) |
+                (lossyCast(u32, b + 0.5) << 0);
 
             dest += 1;
             source += 1;
@@ -487,7 +490,7 @@ pub inline fn getLowEntity(
 fn addLowEntity(
     game_state: *GameState,
     t: EntityType,
-    pos: world.WorldPosition,
+    pos: *WorldPosition,
 ) AddLowEntityResult {
     assert(game_state.low_entity_count < game_state.low_entities.len);
 
@@ -526,17 +529,17 @@ fn addWall(
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
 
-    const pos = world.chunkPosFromTilePos(
+    var pos = world.chunkPosFromTilePos(
         game_world,
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
     );
 
-    const entity = addLowEntity(game_state, .wall, pos);
+    const entity = addLowEntity(game_state, .wall, &pos);
 
-    entity.low.sim.height = game_world.tile_side_in_meters;
-    entity.low.sim.width = entity.low.sim.height;
+    entity.low.sim.dim.v[0] = game_world.tile_side_in_meters;
+    entity.low.sim.dim.v[1] = entity.low.sim.dim.v[0];
     entity.low.sim.flags = .{ .collides = true };
 
     return entity;
@@ -554,11 +557,11 @@ fn initHitPoints(low: *LowEntity, count: u32) void {
 }
 
 fn addPlayer(game_state: *GameState) AddLowEntityResult {
-    const pos = game_state.camera_p;
-    const entity = addLowEntity(game_state, .hero, pos);
+    var pos = game_state.camera_p;
+    const entity = addLowEntity(game_state, .hero, &pos);
 
-    entity.low.sim.height = 0.5;
-    entity.low.sim.width = 1.0;
+    entity.low.sim.dim.v[1] = 0.5;
+    entity.low.sim.dim.v[0] = 1.0;
     entity.low.sim.flags = .{ .collides = true };
     initHitPoints(entity.low, 3);
 
@@ -582,16 +585,16 @@ fn addMonster(
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
 
-    const pos = world.chunkPosFromTilePos(
+    var pos = world.chunkPosFromTilePos(
         game_world,
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
     );
 
-    const entity = addLowEntity(game_state, .monster, pos);
-    entity.low.sim.height = 0.5;
-    entity.low.sim.width = 1.0;
+    const entity = addLowEntity(game_state, .monster, &pos);
+    entity.low.sim.dim.v[1] = 0.5;
+    entity.low.sim.dim.v[0] = 1.0;
     entity.low.sim.flags = .{ .collides = true };
     initHitPoints(entity.low, 3);
 
@@ -599,10 +602,11 @@ fn addMonster(
 }
 
 fn addSword(game_state: *GameState) AddLowEntityResult {
-    const entity = addLowEntity(game_state, .sword, world.nullPosition());
+    var null_pos = world.nullPosition();
+    const entity = addLowEntity(game_state, .sword, &null_pos);
 
-    entity.low.sim.height = 0.5;
-    entity.low.sim.width = 1.0;
+    entity.low.sim.dim.v[1] = 0.5;
+    entity.low.sim.dim.v[0] = 1.0;
 
     return entity;
 }
@@ -615,17 +619,17 @@ fn addFamiliar(
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
 
-    const pos = world.chunkPosFromTilePos(
+    var pos = world.chunkPosFromTilePos(
         game_world,
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
     );
 
-    const entity = addLowEntity(game_state, .familiar, pos);
+    const entity = addLowEntity(game_state, .familiar, &pos);
 
-    entity.low.sim.height = 0.5;
-    entity.low.sim.width = 1.0;
+    entity.low.sim.dim.v[1] = 0.5;
+    entity.low.sim.dim.v[0] = 1.0;
     entity.low.sim.flags = .{ .collides = true };
 
     return entity;
@@ -827,8 +831,10 @@ pub export fn updateAndRender(
     var game_state: *GameState = @alignCast(@ptrCast(memory.permanent_storage));
 
     if (!memory.is_initialized) {
+        var null_pos = world.nullPosition();
+
         // NOTE: Reserve entity slot 0 as the null entity
-        _ = addLowEntity(game_state, .none, world.nullPosition());
+        _ = addLowEntity(game_state, .none, &null_pos);
 
         game_state.backdrop = debugLoadBmp(
             thread,
@@ -927,7 +933,7 @@ pub export fn updateAndRender(
             memory.permanent_storage + @sizeOf(GameState),
         );
 
-        game_state.world = pushStruct(&game_state.world_arena, world.World);
+        game_state.world = pushStruct(&game_state.world_arena, World);
         const game_world = game_state.world.?;
 
         world.initializeWorld(game_world, 1.4);
@@ -1172,7 +1178,15 @@ pub export fn updateAndRender(
 
     var sim_arena: MemoryArena = undefined;
     initializeArena(&sim_arena, memory.transient_storage_size, memory.transient_storage);
-    var region = sim.beginSim(&sim_arena, game_state, game_world, game_state.camera_p, camera_bounds);
+
+    var region = sim.beginSim(
+        &sim_arena,
+        game_state,
+        game_world,
+        game_state.camera_p,
+        camera_bounds,
+        input.dt_for_frame,
+    );
 
     //
     // NOTE: Render
