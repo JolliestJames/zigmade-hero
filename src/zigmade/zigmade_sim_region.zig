@@ -35,6 +35,7 @@ pub const EntityType = enum {
     familiar,
     monster,
     sword,
+    stairwell,
 };
 
 const EntityReferenceTag = enum {
@@ -198,8 +199,7 @@ fn addEntityRaw(
             entity.updatable = false;
             maybe_entity = entity;
         } else {
-            std.debug.print("Invalid code path\n", .{});
-            assert(false);
+            game.invalidCodePath();
         }
     }
 
@@ -272,6 +272,9 @@ pub fn beginSim(
     game.zeroStruct(@TypeOf(sim_region.hash), &sim_region.hash);
 
     // TODO: Try to enforce these more rigorously
+    // TODO: Perhaps try a dual system where we support
+    // entities larger than the max entity radius by adding
+    // them multiple times to the spatial partition?
     sim_region.max_entity_radius = 5;
     sim_region.max_entity_velocity = 30;
 
@@ -496,12 +499,21 @@ fn shouldCollide(
 }
 
 fn handleCollision(
+    game_state: *GameState,
     entity: *Entity,
     hit: *Entity,
+    _: bool,
 ) bool {
     var stops_on_collision = false;
 
     if (entity.type == .sword) {
+        game.addCollisionRule(
+            game_state,
+            entity.storage_index,
+            hit.storage_index,
+            false,
+        );
+
         stops_on_collision = false;
     } else {
         stops_on_collision = true;
@@ -520,6 +532,10 @@ fn handleCollision(
         if (a.hit_point_max > 0) {
             a.hit_point_max -%= 1;
         }
+    }
+
+    if (a.type == .hero and b.type == .stairwell) {
+        stops_on_collision = false;
     }
 
     // TODO: stairs
@@ -579,6 +595,40 @@ pub fn moveEntity(
     if (distance_remaining == 0) {
         // TODO: Do we want to formalize this number?
         distance_remaining = 10000;
+    }
+
+    // NOTE: Check for initial inclusion
+    var overlapping_count: usize = 0;
+    var overlapping: [16]*Entity = undefined;
+    var overlapping_entities = (&overlapping)[0..16];
+
+    {
+        const entity_rect = Rectangle3.centerDim(entity.pos, entity.dim);
+
+        // TODO: Spatial partition here!
+        for (0..region.entity_count) |high_index| {
+            const test_entity = &region.entities[high_index];
+
+            if (shouldCollide(game_state, entity, test_entity)) {
+                const test_entity_rect = Rectangle3.centerDim(test_entity.pos, test_entity.dim);
+
+                if (Rectangle3.rectanglesIntersect(entity_rect, test_entity_rect)) {
+                    if (overlapping_count < overlapping_entities.len) {
+                        //if (game.addCollisionRule(
+                        //    entity.storage_index,
+                        //    test_entity.storage_index,
+                        //    false,
+                        //))
+                        {
+                            overlapping_entities[overlapping_count] = test_entity;
+                            overlapping_count += 1;
+                        }
+                    } else {
+                        game.invalidCodePath();
+                    }
+                }
+            }
+        }
     }
 
     for (0..4) |_| {
@@ -649,7 +699,17 @@ pub fn moveEntity(
             if (hit_entity) |hit| {
                 player_d = Vec3.sub(&desired_position, &entity.pos);
 
-                const stops_on_collision = handleCollision(entity, hit);
+                var overlap_index = overlapping_count;
+
+                for (0..overlapping_count) |test_overlap_index| {
+                    if (hit == overlapping_entities[test_overlap_index]) {
+                        overlap_index = test_overlap_index;
+                        break;
+                    }
+                }
+
+                const was_overlapping = overlap_index != overlapping_count;
+                const stops_on_collision = handleCollision(game_state, entity, hit, was_overlapping);
 
                 if (stops_on_collision) {
                     // NOTE: Why were we still updating the player delta here?
@@ -661,12 +721,15 @@ pub fn moveEntity(
                     const d_magnitude = Vec3.scale(&wall_normal, d_product);
                     entity.d_pos = Vec3.sub(&entity.d_pos, &d_magnitude);
                 } else {
-                    game.addCollisionRule(
-                        game_state,
-                        entity.storage_index,
-                        hit.storage_index,
-                        false,
-                    );
+                    if (was_overlapping) {
+                        overlapping_entities[overlap_index] = overlapping_entities[overlapping_count];
+                        overlapping_count -= 1;
+                    } else if (overlapping_count < overlapping_entities.len) {
+                        overlapping_entities[overlapping_count] = hit;
+                        overlapping_count += 1;
+                    } else {
+                        game.invalidCodePath();
+                    }
                 }
             } else break;
         } else break;

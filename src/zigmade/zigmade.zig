@@ -3,16 +3,19 @@
 //
 // ARCHITECTURE EXPLORATION
 //
+// - Collision detection?
+//   - Transient collision rules! Clear based on flag.
+//     - Allow non-transient rules to override transient ones
+//     - Entry/exit?
+//   - What's the plan for robustness/shape definition?
+//   - Implement reprojection to handle interpenetration
 // - Z
 //   - Minkowski inclusion test for sim region begin/updatable bounds
 //   - Figure out how you go up and down and how is this rendered?
-// - Collision detection?
-//   - Entry/exit?
-//   - What's the plan for robustness/shape definition?
-//   - Implement reprojection to handle interpenetration
 // - Implement multiple sim regions per frame
 //   - Per-entity clocking
 //   - Sim region merging? Multiple players?
+//   - Simple zoomed-out view for testing?
 //
 // - Debug
 //   - Logging
@@ -124,6 +127,12 @@ const ControlledHero = struct {
     dz: f32 = 0,
 };
 
+//pub const PairwiseCollisionRuleFlag = packed struct(u32) {
+//    should_collide: bool = false,
+//    temporary: bool = false,
+//    _padding: u32 = 0,
+//};
+
 pub const PairwiseCollisionRule = struct {
     should_collide: bool,
     storage_index_a: u32,
@@ -148,6 +157,7 @@ pub const GameState = struct {
     hero_bitmaps: [4]HeroBitmaps,
     tree: Bitmap,
     sword: Bitmap,
+    stairwell: Bitmap,
     meters_to_pixels: f32,
     // TODO: Must be power of two
     collision_rule_hash: [256]?*PairwiseCollisionRule,
@@ -192,6 +202,11 @@ const BitmapHeader = packed struct {
 };
 
 var rand = std.rand.DefaultPrng.init(8192);
+
+pub fn invalidCodePath() void {
+    std.debug.print("Invalid code path\n", .{});
+    assert(false);
+}
 
 fn gameOutputSound(
     sound_buffer: *platform.GameSoundBuffer,
@@ -545,6 +560,30 @@ fn addWall(
     return entity;
 }
 
+fn addStair(
+    game_state: *GameState,
+    abs_tile_x: i32,
+    abs_tile_y: i32,
+    abs_tile_z: i32,
+) AddLowEntityResult {
+    const game_world = game_state.world.?;
+
+    var pos = world.chunkPosFromTilePos(
+        game_world,
+        abs_tile_x,
+        abs_tile_y,
+        abs_tile_z,
+    );
+
+    const entity = addLowEntity(game_state, .stairwell, &pos);
+
+    entity.low.sim.dim.v[0] = game_world.tile_side_in_meters;
+    entity.low.sim.dim.v[1] = entity.low.sim.dim.v[0];
+    entity.low.sim.dim.v[2] = game_world.tile_depth_in_meters;
+
+    return entity;
+}
+
 fn initHitPoints(low: *LowEntity, count: u32) void {
     assert(count < low.sim.hit_points.len);
     low.sim.hit_point_max = count;
@@ -760,11 +799,19 @@ fn clearCollisionRulesFor(game_state: *GameState, storage_index: u32) void {
     }
 }
 
+//pub fn removeCollisionRule(
+//    game_state: *GameState,
+//    storage_index_a: u32,
+//    storage_index_b: u32,
+//) bool {
+//}
+
 pub fn addCollisionRule(
     game_state: *GameState,
     storage_index_a: u32,
     storage_index_b: u32,
     should_collide: bool,
+    //flags: PairwiseCollisionRuleFlag,
 ) void {
     var a = storage_index_a;
     var b = storage_index_b;
@@ -850,6 +897,11 @@ pub export fn updateAndRender(
             thread,
             memory.debugPlatformReadEntireFile,
             "data/test2/tree00.bmp",
+        );
+        game_state.stairwell = debugLoadBmp(
+            thread,
+            memory.debugPlatformReadEntireFile,
+            "data/test2/rock02.bmp",
         );
         game_state.sword = debugLoadBmp(
             thread,
@@ -965,7 +1017,7 @@ pub export fn updateAndRender(
         for (0..2000) |_| {
             var random_choice: usize = undefined;
 
-            if (true or door_up or door_down) {
+            if (door_up or door_down) {
                 random_choice = rand.random().int(usize) % 2;
             } else {
                 random_choice = rand.random().int(usize) % 3;
@@ -992,40 +1044,39 @@ pub export fn updateAndRender(
                     const abs_tile_x = screen_x * tiles_per_width + @as(i32, @intCast(tile_x));
                     const abs_tile_y = screen_y * tiles_per_height + @as(i32, @intCast(tile_y));
 
-                    var tile_value: u32 = 1;
+                    var should_be_door = false;
 
                     if (tile_x == 0 and (!door_left or (tile_y != tiles_per_height / 2))) {
-                        tile_value = 2;
+                        should_be_door = true;
                     }
 
                     if (tile_x == (tiles_per_width - 1) and
                         (!door_right or (tile_y != tiles_per_height / 2)))
                     {
-                        tile_value = 2;
+                        should_be_door = true;
                     }
 
                     if (tile_y == 0 and (!door_bottom or (tile_x != tiles_per_width / 2))) {
-                        tile_value = 2;
+                        should_be_door = true;
                     }
 
                     if (tile_y == (tiles_per_height - 1) and
                         (!door_top or tile_x != (tiles_per_width / 2)))
                     {
-                        tile_value = 2;
+                        should_be_door = true;
                     }
 
-                    if (tile_x == 10 and tile_y == 6) {
-                        if (door_up) {
-                            tile_value = 3;
-                        }
-
-                        if (door_down) {
-                            tile_value = 4;
-                        }
-                    }
-
-                    if (tile_value == 2) {
+                    if (should_be_door) {
                         _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
+                    } else if (created_z_door) {
+                        if (tile_x == 10 and tile_y == 6) {
+                            _ = addStair(
+                                game_state,
+                                abs_tile_x,
+                                abs_tile_y,
+                                if (door_down) abs_tile_z - 1 else abs_tile_z,
+                            );
+                        }
                     }
                 }
             }
@@ -1076,7 +1127,7 @@ pub export fn updateAndRender(
 
         _ = addMonster(
             game_state,
-            camera_tile_x + 2,
+            camera_tile_x - 3,
             camera_tile_y + 2,
             camera_tile_z,
         );
@@ -1296,6 +1347,9 @@ pub export fn updateAndRender(
                 .wall => {
                     pushBitmap(&piece_group, &game_state.tree, Vec2.splat(0), 0, Vec2.init(40, 80), 1, 1);
                 },
+                .stairwell => {
+                    pushBitmap(&piece_group, &game_state.stairwell, Vec2.splat(0), 0, Vec2.init(37, 37), 1, 1);
+                },
                 .sword => {
                     move_spec = .{
                         .unit_max_acc_vector = false,
@@ -1370,8 +1424,7 @@ pub export fn updateAndRender(
                     drawHitPoints(entity, &piece_group);
                 },
                 else => {
-                    std.debug.print("Invalid code path\n", .{});
-                    assert(false);
+                    invalidCodePath();
                 },
             }
 

@@ -189,6 +189,16 @@ pub fn Rectangle(comptime VecN: type) type {
 
                     return result;
                 }
+                pub inline fn rectanglesIntersect(a: RectangleN, b: RectangleN) bool {
+                    const result = !(a.min.x() > b.max.x() or
+                        a.max.x() < b.min.x() or
+                        a.min.y() > b.max.y() or
+                        a.max.y() < b.min.y() or
+                        a.min.z() > b.max.z() or
+                        a.max.z() < b.min.z());
+
+                    return result;
+                }
             },
             else => @compileError("Expected Vec2, Vec3, found '" ++ @typeName(VecN) ++ "'"),
         };
@@ -246,12 +256,12 @@ pub fn Rectangle(comptime VecN: type) type {
         }
 
         pub inline fn centerDim(center: VecN, dim: VecN) RectangleN {
-            const result = rectCenterHalfDim(center, VecN.scale(&dim, 0.5));
+            const result = centerHalfDim(center, VecN.scale(&dim, 0.5));
 
             return result;
         }
 
-        pub inline fn rectCenterHalfDim(center: VecN, half_dim: VecN) RectangleN {
+        pub inline fn centerHalfDim(center: VecN, half_dim: VecN) RectangleN {
             var result: RectangleN = undefined;
 
             result.min = VecN.sub(&center, &half_dim);
