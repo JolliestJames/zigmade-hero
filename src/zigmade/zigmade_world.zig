@@ -392,6 +392,7 @@ pub fn chunkPosFromTilePos(
     abs_tile_x: i32,
     abs_tile_y: i32,
     abs_tile_z: i32,
+    additional_offset: Vec3,
 ) WorldPosition {
     const base_pos: WorldPosition = .{};
 
@@ -400,7 +401,11 @@ pub fn chunkPosFromTilePos(
         world.tile_side_in_meters,
     );
 
-    const result = mapIntoChunkSpace(world, base_pos, offset);
+    const result = mapIntoChunkSpace(
+        world,
+        base_pos,
+        Vec3.add(&additional_offset, &offset),
+    );
 
     assert(vecIsCanonical(world, result.offset_));
 

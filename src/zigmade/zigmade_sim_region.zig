@@ -52,8 +52,9 @@ const EntityFlags = packed struct(u32) {
     // TODO: Does it make more sense for this flag to be non_colliding?
     collides: bool = false,
     non_spatial: bool = false,
+    movable: bool = false,
     simming: bool = false,
-    _padding: u29 = 0,
+    _padding: u28 = 0,
 };
 
 pub const Entity = struct {
@@ -320,37 +321,41 @@ pub fn beginSim(
         max_corner,
     );
 
-    var chunk_y = min_chunk_p.chunk_y;
+    var chunk_z = min_chunk_p.chunk_z;
 
-    while (chunk_y <= max_chunk_p.chunk_y) : (chunk_y += 1) {
-        var chunk_x = min_chunk_p.chunk_x;
+    while (chunk_z <= max_chunk_p.chunk_z) : (chunk_z += 1) {
+        var chunk_y = min_chunk_p.chunk_y;
 
-        while (chunk_x <= max_chunk_p.chunk_x) : (chunk_x += 1) {
-            const chunk = world.getWorldChunk(
-                game_world,
-                chunk_x,
-                chunk_y,
-                sim_region.origin.chunk_z,
-                null,
-            );
+        while (chunk_y <= max_chunk_p.chunk_y) : (chunk_y += 1) {
+            var chunk_x = min_chunk_p.chunk_x;
 
-            if (chunk) |c| {
-                var block: ?*world.WorldEntityBlock = &c.first_block;
+            while (chunk_x <= max_chunk_p.chunk_x) : (chunk_x += 1) {
+                const chunk = world.getWorldChunk(
+                    game_world,
+                    chunk_x,
+                    chunk_y,
+                    chunk_z,
+                    null,
+                );
 
-                while (block) |b| : (block = b.next) {
-                    for (0..b.entity_count) |entity_index| {
-                        const low_index = b.low_entity_index[entity_index];
-                        const low = &game_state.low_entities[low_index];
+                if (chunk) |c| {
+                    var block: ?*world.WorldEntityBlock = &c.first_block;
 
-                        if (!low.sim.flags.non_spatial) {
-                            var sim_space_p = getSimSpaceP(sim_region, low);
+                    while (block) |b| : (block = b.next) {
+                        for (0..b.entity_count) |entity_index| {
+                            const low_index = b.low_entity_index[entity_index];
+                            const low = &game_state.low_entities[low_index];
 
-                            if (entityOverlaps(
-                                sim_space_p,
-                                low.sim.dim,
-                                sim_region.bounds,
-                            )) {
-                                _ = addEntity(game_state, sim_region, low_index, low, &sim_space_p);
+                            if (!low.sim.flags.non_spatial) {
+                                var sim_space_p = getSimSpaceP(sim_region, low);
+
+                                if (entityOverlaps(
+                                    sim_space_p,
+                                    low.sim.dim,
+                                    sim_region.bounds,
+                                )) {
+                                    _ = addEntity(game_state, sim_region, low_index, low, &sim_space_p);
+                                }
                             }
                         }
                     }
@@ -457,7 +462,7 @@ fn testWall(
     return hit;
 }
 
-fn shouldCollide(
+fn canCollide(
     game_state: *GameState,
     entity_a: *Entity,
     entity_b: *Entity,
@@ -481,6 +486,10 @@ fn shouldCollide(
             result = true;
         }
 
+        if (a.type == .stairwell or b.type == .stairwell) {
+            result = false;
+        }
+
         // TODO: BETTER HASH FUNCTION
         const bucket = a.storage_index & (game_state.collision_rule_hash.len - 1);
         var maybe_rule = game_state.collision_rule_hash[bucket];
@@ -489,7 +498,7 @@ fn shouldCollide(
             if (rule.storage_index_a == a.storage_index and
                 rule.storage_index_b == b.storage_index)
             {
-                result = rule.should_collide;
+                result = rule.can_collide;
                 break;
             }
         }
@@ -502,7 +511,6 @@ fn handleCollision(
     game_state: *GameState,
     entity: *Entity,
     hit: *Entity,
-    _: bool,
 ) bool {
     var stops_on_collision = false;
 
@@ -534,15 +542,46 @@ fn handleCollision(
         }
     }
 
-    if (a.type == .hero and b.type == .stairwell) {
-        stops_on_collision = false;
-    }
-
     // TODO: stairs
     //high.abs_tile_z += @bitCast(hit_low.d_abs_tile_z);
 
     // TODO: Real "stops on collision"
     return stops_on_collision;
+}
+
+fn canOverlap(
+    _: *GameState,
+    mover: *Entity,
+    region: *Entity,
+) bool {
+    var result = false;
+
+    if (mover != region) {
+        if (region.type == .stairwell) {
+            result = true;
+        }
+    }
+
+    return result;
+}
+
+fn handleOverlap(
+    _: *GameState,
+    mover: *Entity,
+    region: *Entity,
+    _: f32,
+    ground: *f32,
+) void {
+    if (region.type == .stairwell) {
+        const region_rect = Rectangle3.centerDim(region.pos, region.dim);
+
+        const bary = Vec3.clamp(&Rectangle3.getBarycentric(
+            region_rect,
+            mover.pos,
+        ));
+
+        ground.* = math.lerp(region_rect.min.z(), bary.y(), region_rect.max.z());
+    }
 }
 
 pub fn moveEntity(
@@ -597,40 +636,6 @@ pub fn moveEntity(
         distance_remaining = 10000;
     }
 
-    // NOTE: Check for initial inclusion
-    var overlapping_count: usize = 0;
-    var overlapping: [16]*Entity = undefined;
-    var overlapping_entities = (&overlapping)[0..16];
-
-    {
-        const entity_rect = Rectangle3.centerDim(entity.pos, entity.dim);
-
-        // TODO: Spatial partition here!
-        for (0..region.entity_count) |high_index| {
-            const test_entity = &region.entities[high_index];
-
-            if (shouldCollide(game_state, entity, test_entity)) {
-                const test_entity_rect = Rectangle3.centerDim(test_entity.pos, test_entity.dim);
-
-                if (Rectangle3.rectanglesIntersect(entity_rect, test_entity_rect)) {
-                    if (overlapping_count < overlapping_entities.len) {
-                        //if (game.addCollisionRule(
-                        //    entity.storage_index,
-                        //    test_entity.storage_index,
-                        //    false,
-                        //))
-                        {
-                            overlapping_entities[overlapping_count] = test_entity;
-                            overlapping_count += 1;
-                        }
-                    } else {
-                        game.invalidCodePath();
-                    }
-                }
-            }
-        }
-    }
-
     for (0..4) |_| {
         var t_min: f32 = 1.0;
         const player_delta_length = Vec3.length(&player_d);
@@ -654,7 +659,7 @@ pub fn moveEntity(
                 for (0..region.entity_count) |high_index| {
                     const test_entity = &region.entities[high_index];
 
-                    if (shouldCollide(game_state, entity, test_entity)) {
+                    if (canCollide(game_state, entity, test_entity)) {
                         // TODO: Entities have height?
                         const minkowski_diameter = Vec3.init(
                             test_entity.dim.x() + entity.dim.x(),
@@ -699,17 +704,7 @@ pub fn moveEntity(
             if (hit_entity) |hit| {
                 player_d = Vec3.sub(&desired_position, &entity.pos);
 
-                var overlap_index = overlapping_count;
-
-                for (0..overlapping_count) |test_overlap_index| {
-                    if (hit == overlapping_entities[test_overlap_index]) {
-                        overlap_index = test_overlap_index;
-                        break;
-                    }
-                }
-
-                const was_overlapping = overlap_index != overlapping_count;
-                const stops_on_collision = handleCollision(game_state, entity, hit, was_overlapping);
+                const stops_on_collision = handleCollision(game_state, entity, hit);
 
                 if (stops_on_collision) {
                     // NOTE: Why were we still updating the player delta here?
@@ -720,24 +715,35 @@ pub fn moveEntity(
                     const d_product = 1 * Vec3.inner(&entity.d_pos, &wall_normal);
                     const d_magnitude = Vec3.scale(&wall_normal, d_product);
                     entity.d_pos = Vec3.sub(&entity.d_pos, &d_magnitude);
-                } else {
-                    if (was_overlapping) {
-                        overlapping_entities[overlap_index] = overlapping_entities[overlapping_count];
-                        overlapping_count -= 1;
-                    } else if (overlapping_count < overlapping_entities.len) {
-                        overlapping_entities[overlapping_count] = hit;
-                        overlapping_count += 1;
-                    } else {
-                        game.invalidCodePath();
-                    }
                 }
             } else break;
         } else break;
     }
 
+    var ground: f32 = 0;
+
+    // NOTE: Handle events based on area overlapping
+    // TODO: Handle overlapping precisely by moving it into the collision loop?
+    {
+        const entity_rect = Rectangle3.centerDim(entity.pos, entity.dim);
+
+        // TODO: Spatial partition here!
+        for (0..region.entity_count) |high_index| {
+            const test_entity = &region.entities[high_index];
+
+            if (canOverlap(game_state, entity, test_entity)) {
+                const test_entity_rect = Rectangle3.centerDim(test_entity.pos, test_entity.dim);
+
+                if (Rectangle3.rectanglesIntersect(entity_rect, test_entity_rect)) {
+                    handleOverlap(game_state, entity, test_entity, dt, &ground);
+                }
+            }
+        }
+    }
+
     // TODO: This has to become real height handling
-    if (entity.pos.z() < 0) {
-        entity.pos.v[2] = 0;
+    if (entity.pos.z() < ground) {
+        entity.pos.v[2] = ground;
         entity.d_pos.v[2] = 0;
     }
 

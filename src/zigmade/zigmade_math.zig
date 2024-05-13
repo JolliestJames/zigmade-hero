@@ -10,6 +10,52 @@ pub inline fn square(f: f32) f32 {
     return result;
 }
 
+pub inline fn lerp(a: f32, t: f32, b: f32) f32 {
+    const result = (1.0 - t) * a + t * b;
+
+    return result;
+}
+
+pub inline fn clamp(min: f32, value: f32, max: f32) f32 {
+    var result = value;
+
+    if (result < min) {
+        result = min;
+    } else if (result > max) {
+        result = max;
+    }
+
+    return result;
+}
+
+pub inline fn clamp01(value: f32) f32 {
+    const result = clamp(0, value, 1);
+
+    return result;
+}
+
+pub inline fn safeRatioN(numerator: f32, divisor: f32, n: f32) f32 {
+    var result: f32 = n;
+
+    if (divisor != 0) {
+        result = numerator / divisor;
+    }
+
+    return result;
+}
+
+pub inline fn safeRatio0(numerator: f32, divisor: f32) f32 {
+    const result = safeRatioN(numerator, divisor, 0);
+
+    return result;
+}
+
+pub inline fn safeRatio1(numerator: f32, divisor: f32) f32 {
+    const result = safeRatioN(numerator, divisor, 1);
+
+    return result;
+}
+
 // Heavily inspired by Mach engine's math.vec
 pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
     return extern struct {
@@ -58,6 +104,18 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
                 }
                 pub inline fn b(v: *const VecN) Scalar {
                     return v.v[2];
+                }
+                pub inline fn xy(v: *const VecN) Vec2 {
+                    return Vec2.init(v.v[0], v.v[1]);
+                }
+                pub inline fn clamp(v: *const VecN) VecN {
+                    var result: VecN = undefined;
+
+                    result.v[0] = clamp01(v.x());
+                    result.v[1] = clamp01(v.y());
+                    result.v[2] = clamp01(v.z());
+
+                    return result;
                 }
             },
             inline 4 => struct {
@@ -196,6 +254,15 @@ pub fn Rectangle(comptime VecN: type) type {
                         a.max.y() < b.min.y() or
                         a.min.z() > b.max.z() or
                         a.max.z() < b.min.z());
+
+                    return result;
+                }
+                pub inline fn getBarycentric(a: RectangleN, p: VecN) VecN {
+                    var result: VecN = undefined;
+
+                    result.v[0] = safeRatio0(p.x() - a.min.x(), a.max.x() - a.min.x());
+                    result.v[1] = safeRatio0(p.y() - a.min.y(), a.max.y() - a.min.y());
+                    result.v[2] = safeRatio0(p.z() - a.min.z(), a.max.z() - a.min.z());
 
                     return result;
                 }

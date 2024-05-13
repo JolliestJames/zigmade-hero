@@ -3,15 +3,17 @@
 //
 // ARCHITECTURE EXPLORATION
 //
+// - Z
+//   - 3D collision detection working properly
+//   - Figure out how you go up and down and how is this rendered?
+//     "Frinstances"
 // - Collision detection?
 //   - Transient collision rules! Clear based on flag.
 //     - Allow non-transient rules to override transient ones
 //     - Entry/exit?
 //   - What's the plan for robustness/shape definition?
 //   - Implement reprojection to handle interpenetration
-// - Z
-//   - Minkowski inclusion test for sim region begin/updatable bounds
-//   - Figure out how you go up and down and how is this rendered?
+//   - "Things pushing other things"
 // - Implement multiple sim regions per frame
 //   - Per-entity clocking
 //   - Sim region merging? Multiple players?
@@ -128,13 +130,13 @@ const ControlledHero = struct {
 };
 
 //pub const PairwiseCollisionRuleFlag = packed struct(u32) {
-//    should_collide: bool = false,
+//    can_collide: bool = false,
 //    temporary: bool = false,
 //    _padding: u32 = 0,
 //};
 
 pub const PairwiseCollisionRule = struct {
-    should_collide: bool,
+    can_collide: bool,
     storage_index_a: u32,
     storage_index_b: u32,
     next_in_hash: ?*PairwiseCollisionRule,
@@ -549,6 +551,7 @@ fn addWall(
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
+        Vec3.splat(0),
     );
 
     const entity = addLowEntity(game_state, .wall, &pos);
@@ -573,13 +576,16 @@ fn addStair(
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
+        Vec3.init(0, 0, 0.5 * game_world.tile_depth_in_meters),
     );
 
     const entity = addLowEntity(game_state, .stairwell, &pos);
 
     entity.low.sim.dim.v[0] = game_world.tile_side_in_meters;
     entity.low.sim.dim.v[1] = entity.low.sim.dim.v[0];
-    entity.low.sim.dim.v[2] = game_world.tile_depth_in_meters;
+    // TODO: This is extremely not cool, figure out a better
+    // ground update solution
+    entity.low.sim.dim.v[2] = 1.2 * game_world.tile_depth_in_meters;
 
     return entity;
 }
@@ -601,7 +607,7 @@ fn addPlayer(game_state: *GameState) AddLowEntityResult {
 
     entity.low.sim.dim.v[1] = 0.5;
     entity.low.sim.dim.v[0] = 1.0;
-    entity.low.sim.flags = .{ .collides = true };
+    entity.low.sim.flags = .{ .collides = true, .movable = true };
     initHitPoints(entity.low, 3);
 
     const sword = addSword(game_state);
@@ -629,12 +635,13 @@ fn addMonster(
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
+        Vec3.splat(0),
     );
 
     const entity = addLowEntity(game_state, .monster, &pos);
     entity.low.sim.dim.v[1] = 0.5;
     entity.low.sim.dim.v[0] = 1.0;
-    entity.low.sim.flags = .{ .collides = true };
+    entity.low.sim.flags = .{ .collides = true, .movable = true };
     initHitPoints(entity.low, 3);
 
     return entity;
@@ -646,6 +653,7 @@ fn addSword(game_state: *GameState) AddLowEntityResult {
 
     entity.low.sim.dim.v[1] = 0.5;
     entity.low.sim.dim.v[0] = 1.0;
+    entity.low.sim.flags = .{ .movable = true };
 
     return entity;
 }
@@ -663,13 +671,14 @@ fn addFamiliar(
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
+        Vec3.splat(0),
     );
 
     const entity = addLowEntity(game_state, .familiar, &pos);
 
     entity.low.sim.dim.v[1] = 0.5;
     entity.low.sim.dim.v[0] = 1.0;
-    entity.low.sim.flags = .{ .collides = true };
+    entity.low.sim.flags = .{ .collides = true, .movable = true };
 
     return entity;
 }
@@ -810,13 +819,13 @@ pub fn addCollisionRule(
     game_state: *GameState,
     storage_index_a: u32,
     storage_index_b: u32,
-    should_collide: bool,
+    can_collide: bool,
     //flags: PairwiseCollisionRuleFlag,
 ) void {
     var a = storage_index_a;
     var b = storage_index_b;
 
-    // TODO: Collapse this with shouldCollide
+    // TODO: Collapse this with canCollide
     if (a > b) {
         const temp = a;
         a = b;
@@ -856,7 +865,7 @@ pub fn addCollisionRule(
     if (maybe_found) |found| {
         found.storage_index_a = a;
         found.storage_index_b = b;
-        found.should_collide = should_collide;
+        found.can_collide = can_collide;
     }
 }
 
@@ -1121,6 +1130,7 @@ pub export fn updateAndRender(
             camera_tile_x,
             camera_tile_y,
             camera_tile_z,
+            Vec3.splat(0),
         );
 
         game_state.camera_p = new_camera_p;
@@ -1348,7 +1358,7 @@ pub export fn updateAndRender(
                     pushBitmap(&piece_group, &game_state.tree, Vec2.splat(0), 0, Vec2.init(40, 80), 1, 1);
                 },
                 .stairwell => {
-                    pushBitmap(&piece_group, &game_state.stairwell, Vec2.splat(0), 0, Vec2.init(37, 37), 1, 1);
+                    pushRect(&piece_group, Vec2.splat(0), 0, entity.dim.xy(), Vec4.init(1, 1, 0, 1), 0);
                 },
                 .sword => {
                     move_spec = .{
@@ -1428,7 +1438,7 @@ pub export fn updateAndRender(
                 },
             }
 
-            if (!entity.flags.non_spatial) {
+            if (!entity.flags.non_spatial and entity.flags.movable) {
                 sim.moveEntity(game_state, region, entity, input.dt_for_frame, &move_spec, dd_pos);
             }
 
