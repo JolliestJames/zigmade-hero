@@ -1,3 +1,4 @@
+pub const math = @This();
 pub const Vec2 = Vec(2, f32);
 pub const Vec3 = Vec(3, f32);
 pub const Vec4 = Vec(4, f32);
@@ -108,12 +109,12 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
                 pub inline fn xy(v: *const VecN) Vec2 {
                     return Vec2.init(v.v[0], v.v[1]);
                 }
-                pub inline fn clamp(v: *const VecN) VecN {
+                pub inline fn clamp01(v: *const VecN) VecN {
                     var result: VecN = undefined;
 
-                    result.v[0] = clamp01(v.x());
-                    result.v[1] = clamp01(v.y());
-                    result.v[2] = clamp01(v.z());
+                    result.v[0] = math.clamp01(v.x());
+                    result.v[1] = math.clamp01(v.y());
+                    result.v[2] = math.clamp01(v.z());
 
                     return result;
                 }

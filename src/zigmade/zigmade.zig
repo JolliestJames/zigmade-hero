@@ -4,10 +4,18 @@
 // ARCHITECTURE EXPLORATION
 //
 // - Z
+//   - Need to make a solid concept of ground levels so the camera can
+//     be freely placed in Z and have multiple ground levels in one sim
+//     region
 //   - 3D collision detection working properly
 //   - Figure out how you go up and down and how is this rendered?
 //     "Frinstances"
+//     z_fudge
 // - Collision detection?
+//   - Clean up predicate proliferation. Can we make a nice clean
+//     set of flags/rules so that it's easy to understand how things work
+//     in terms of special handling. This may involve making the iteration
+//     handle everything instead of handling overlap outside and so on.
 //   - Transient collision rules! Clear based on flag.
 //     - Allow non-transient rules to override transient ones
 //     - Entry/exit?
@@ -558,7 +566,7 @@ fn addWall(
 
     entity.low.sim.dim.v[0] = game_world.tile_side_in_meters;
     entity.low.sim.dim.v[1] = entity.low.sim.dim.v[0];
-    entity.low.sim.flags = .{ .collides = true };
+    entity.low.sim.flags.collides = true;
 
     return entity;
 }
@@ -582,10 +590,9 @@ fn addStair(
     const entity = addLowEntity(game_state, .stairwell, &pos);
 
     entity.low.sim.dim.v[0] = game_world.tile_side_in_meters;
-    entity.low.sim.dim.v[1] = entity.low.sim.dim.v[0];
-    // TODO: This is extremely not cool, figure out a better
-    // ground update solution
-    entity.low.sim.dim.v[2] = 1.2 * game_world.tile_depth_in_meters;
+    entity.low.sim.dim.v[1] = 2 * entity.low.sim.dim.v[0];
+    entity.low.sim.dim.v[2] = game_world.tile_depth_in_meters;
+    entity.low.sim.flags.collides = true;
 
     return entity;
 }
@@ -607,7 +614,8 @@ fn addPlayer(game_state: *GameState) AddLowEntityResult {
 
     entity.low.sim.dim.v[1] = 0.5;
     entity.low.sim.dim.v[0] = 1.0;
-    entity.low.sim.flags = .{ .collides = true, .movable = true };
+    entity.low.sim.flags.collides = true;
+    entity.low.sim.flags.movable = true;
     initHitPoints(entity.low, 3);
 
     const sword = addSword(game_state);
@@ -641,7 +649,8 @@ fn addMonster(
     const entity = addLowEntity(game_state, .monster, &pos);
     entity.low.sim.dim.v[1] = 0.5;
     entity.low.sim.dim.v[0] = 1.0;
-    entity.low.sim.flags = .{ .collides = true, .movable = true };
+    entity.low.sim.flags.collides = true;
+    entity.low.sim.flags.movable = true;
     initHitPoints(entity.low, 3);
 
     return entity;
@@ -653,7 +662,7 @@ fn addSword(game_state: *GameState) AddLowEntityResult {
 
     entity.low.sim.dim.v[1] = 0.5;
     entity.low.sim.dim.v[0] = 1.0;
-    entity.low.sim.flags = .{ .movable = true };
+    entity.low.sim.flags.movable = true;
 
     return entity;
 }
@@ -678,7 +687,8 @@ fn addFamiliar(
 
     entity.low.sim.dim.v[1] = 0.5;
     entity.low.sim.dim.v[0] = 1.0;
-    entity.low.sim.flags = .{ .collides = true, .movable = true };
+    entity.low.sim.flags.collides = true;
+    entity.low.sim.flags.movable = true;
 
     return entity;
 }
@@ -807,13 +817,6 @@ fn clearCollisionRulesFor(game_state: *GameState, storage_index: u32) void {
         }
     }
 }
-
-//pub fn removeCollisionRule(
-//    game_state: *GameState,
-//    storage_index_a: u32,
-//    storage_index_b: u32,
-//) bool {
-//}
 
 pub fn addCollisionRule(
     game_state: *GameState,
@@ -1078,7 +1081,7 @@ pub export fn updateAndRender(
                     if (should_be_door) {
                         _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
                     } else if (created_z_door) {
-                        if (tile_x == 10 and tile_y == 6) {
+                        if (tile_x == 10 and tile_y == 5) {
                             _ = addStair(
                                 game_state,
                                 abs_tile_x,
@@ -1257,10 +1260,6 @@ pub export fn updateAndRender(
             buffer,
             Vec2.splat(0),
             Vec2.fromInt(buffer.width, buffer.height),
-            //.{
-            //    .x = @floatFromInt(buffer.width),
-            //    .y = @floatFromInt(buffer.height),
-            //},
             0.5,
             0.5,
             0.5,
@@ -1387,17 +1386,19 @@ pub export fn updateAndRender(
                     var maybe_closest_hero: ?*Entity = null;
                     var closest_hero_d_sq = math.square(10); // NOTE: Ten meter max search
 
-                    // TODO: Make spatial queries easy for things
-                    for (0..region.entity_count) |test_index| {
-                        const test_entity = &region.entities[test_index];
+                    if (false) {
+                        // TODO: Make spatial queries easy for things
+                        for (0..region.entity_count) |test_index| {
+                            const test_entity = &region.entities[test_index];
 
-                        if (test_entity.type == .hero) {
-                            const diff = Vec3.sub(&test_entity.pos, &entity.pos);
-                            const test_d_sq = Vec3.lengthSquared(&diff);
+                            if (test_entity.type == .hero) {
+                                const diff = Vec3.sub(&test_entity.pos, &entity.pos);
+                                const test_d_sq = Vec3.lengthSquared(&diff);
 
-                            if (closest_hero_d_sq > test_d_sq) {
-                                maybe_closest_hero = test_entity;
-                                closest_hero_d_sq = test_d_sq;
+                                if (closest_hero_d_sq > test_d_sq) {
+                                    maybe_closest_hero = test_entity;
+                                    closest_hero_d_sq = test_d_sq;
+                                }
                             }
                         }
                     }
@@ -1442,29 +1443,40 @@ pub export fn updateAndRender(
                 sim.moveEntity(game_state, region, entity, input.dt_for_frame, &move_spec, dd_pos);
             }
 
-            const eg_x = screen_center_x + meters_to_pixels * entity.pos.x();
-            const eg_y = screen_center_y - meters_to_pixels * entity.pos.y();
+            const z_fudge = 1.0 + 0.1 * entity.pos.z();
+
+            const eg_x = screen_center_x + meters_to_pixels * z_fudge * entity.pos.x();
+            const eg_y = screen_center_y - meters_to_pixels * z_fudge * entity.pos.y();
+
             const entity_z = -meters_to_pixels * entity.pos.z();
 
-            for (0..piece_group.piece_count) |piece_index| {
-                const piece = piece_group.pieces[piece_index];
-                const center = Vec2.init(
-                    eg_x + piece.offset.x(),
-                    eg_y + piece.offset.y() + piece.offset_z + piece.entity_zc * entity_z,
-                );
-
-                if (piece.bitmap) |bitmap| {
-                    drawBitmap(buffer, bitmap, center.x(), center.y(), piece.a);
-                } else {
-                    const half_dim = Vec2.scale(&piece.dim, 0.5 * meters_to_pixels);
-                    drawRectangle(
-                        buffer,
-                        Vec2.sub(&center, &half_dim),
-                        Vec2.add(&center, &half_dim),
-                        piece.r,
-                        piece.g,
-                        piece.b,
+            // NOTE: With Casey's implementation, there will be one iteration of the game
+            // loop when a sword has transitioned from spatial to non_spatial during which
+            // a draw attempt will be made without this check for non-spatialness in place.
+            // This makes it clear why avoiding use of a non spatial entity's position is
+            // important. An attempt to draw at that position in this case will create an
+            // integer part of floating point value out of bounds panic.
+            if (!entity.flags.non_spatial) {
+                for (0..piece_group.piece_count) |piece_index| {
+                    const piece = piece_group.pieces[piece_index];
+                    const center = Vec2.init(
+                        eg_x + piece.offset.x(),
+                        eg_y + piece.offset.y() + piece.offset_z + piece.entity_zc * entity_z,
                     );
+
+                    if (piece.bitmap) |bitmap| {
+                        drawBitmap(buffer, bitmap, center.x(), center.y(), piece.a);
+                    } else {
+                        const half_dim = Vec2.scale(&piece.dim, 0.5 * meters_to_pixels);
+                        drawRectangle(
+                            buffer,
+                            Vec2.sub(&center, &half_dim),
+                            Vec2.add(&center, &half_dim),
+                            piece.r,
+                            piece.g,
+                            piece.b,
+                        );
+                    }
                 }
             }
         }

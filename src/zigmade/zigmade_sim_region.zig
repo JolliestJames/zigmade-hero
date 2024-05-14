@@ -54,7 +54,8 @@ const EntityFlags = packed struct(u32) {
     non_spatial: bool = false,
     movable: bool = false,
     simming: bool = false,
-    _padding: u28 = 0,
+    z_supported: bool = false,
+    _padding: u27 = 0,
 };
 
 pub const Entity = struct {
@@ -240,20 +241,22 @@ fn addEntity(
     source: ?*LowEntity,
     maybe_sim_pos: ?*Vec3,
 ) ?*Entity {
-    const maybe_dest = addEntityRaw(game_state, sim_region, storage_index, source);
+    var maybe_dest = addEntityRaw(game_state, sim_region, storage_index, source);
 
     if (maybe_dest) |dest| {
         if (maybe_sim_pos) |sim_pos| {
             dest.pos = sim_pos.*;
 
             dest.updatable = entityOverlaps(
-                dest.dim,
                 dest.pos,
+                dest.dim,
                 sim_region.updatable_bounds,
             );
         } else {
             dest.pos = getSimSpaceP(sim_region, source);
         }
+
+        maybe_dest = dest;
     }
 
     return maybe_dest;
@@ -486,10 +489,6 @@ fn canCollide(
             result = true;
         }
 
-        if (a.type == .stairwell or b.type == .stairwell) {
-            result = false;
-        }
-
         // TODO: BETTER HASH FUNCTION
         const bucket = a.storage_index & (game_state.collision_rule_hash.len - 1);
         var maybe_rule = game_state.collision_rule_hash[bucket];
@@ -575,13 +574,47 @@ fn handleOverlap(
     if (region.type == .stairwell) {
         const region_rect = Rectangle3.centerDim(region.pos, region.dim);
 
-        const bary = Vec3.clamp(&Rectangle3.getBarycentric(
+        const bary = Vec3.clamp01(&Rectangle3.getBarycentric(
             region_rect,
             mover.pos,
         ));
 
-        ground.* = math.lerp(region_rect.min.z(), bary.y(), region_rect.max.z());
+        ground.* = math.lerp(
+            region_rect.min.z(),
+            bary.y(),
+            region_rect.max.z(),
+        );
     }
+}
+
+pub fn speculativeCollide(
+    mover: *Entity,
+    region: *Entity,
+) bool {
+    var result = true;
+
+    if (region.type == .stairwell) {
+        const region_rect = Rectangle3.centerDim(region.pos, region.dim);
+
+        const bary = Vec3.clamp01(&Rectangle3.getBarycentric(
+            region_rect,
+            mover.pos,
+        ));
+
+        // TODO: Needs work
+        const ground = math.lerp(
+            region_rect.min.z(),
+            bary.y(),
+            region_rect.max.z(),
+        );
+
+        const step_height = 0.1;
+
+        result = (@abs(mover.pos.z() - ground) > step_height) or
+            (bary.y() > 0.1 and bary.y() < 0.9);
+    }
+
+    return result;
 }
 
 pub fn moveEntity(
@@ -612,7 +645,9 @@ pub fn moveEntity(
         &Vec3.scale(&entity.d_pos, -move_spec.drag),
     );
 
-    acceleration = Vec3.add(&acceleration, &Vec3.init(0, 0, -9.8));
+    if (!entity.flags.z_supported) {
+        acceleration = Vec3.add(&acceleration, &Vec3.init(0, 0, -9.8));
+    }
 
     var player_d = Vec3.add(
         &Vec3.scale(&acceleration, 0.5 * math.square(dt)),
@@ -671,24 +706,41 @@ pub fn moveEntity(
                         const max_c = Vec3.scale(&minkowski_diameter, 0.5);
                         const rel = Vec3.sub(&entity.pos, &test_entity.pos);
 
-                        if (testWall(min_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min, min_c.y(), max_c.y())) {
-                            wall_normal = Vec3.init(-1, 0, 0);
-                            hit_entity = test_entity;
+                        var t_min_test = t_min;
+                        var test_wall_normal = Vec3.splat(0);
+                        var hit_this = false;
+
+                        if (testWall(min_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
+                            test_wall_normal = Vec3.init(-1, 0, 0);
+                            hit_this = true;
                         }
 
-                        if (testWall(max_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min, min_c.y(), max_c.y())) {
-                            wall_normal = Vec3.init(1, 0, 0);
-                            hit_entity = test_entity;
+                        if (testWall(max_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
+                            test_wall_normal = Vec3.init(1, 0, 0);
+                            hit_this = true;
                         }
 
-                        if (testWall(min_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min, min_c.x(), max_c.x())) {
-                            wall_normal = Vec3.init(0, -1, 0);
-                            hit_entity = test_entity;
+                        if (testWall(min_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
+                            test_wall_normal = Vec3.init(0, -1, 0);
+                            hit_this = true;
                         }
 
-                        if (testWall(max_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min, min_c.x(), max_c.x())) {
-                            wall_normal = Vec3.init(0, 1, 0);
-                            hit_entity = test_entity;
+                        if (testWall(max_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
+                            test_wall_normal = Vec3.init(0, 1, 0);
+                            hit_this = true;
+                        }
+
+                        // TODO: We need a concept of stepping onto vs stepping off
+                        // of here so that we can prevent you from _leaving_
+                        // stairs intead of just preventing you from getting onto them
+                        if (hit_this) {
+                            //const test_p = Vec3.add(&entity.pos, &Vec3.scale(&player_d, t_min_test),);
+
+                            if (speculativeCollide(entity, test_entity)) {
+                                t_min = t_min_test;
+                                wall_normal = test_wall_normal;
+                                hit_entity = test_entity;
+                            }
                         }
                     }
                 }
@@ -707,10 +759,9 @@ pub fn moveEntity(
                 const stops_on_collision = handleCollision(game_state, entity, hit);
 
                 if (stops_on_collision) {
-                    // NOTE: Why were we still updating the player delta here?
-                    //const p_product = 1 * math.inner(player_d, wall_normal);
-                    //const p_magnitude = math.scale(wall_normal, p_product);
-                    //player_d = math.sub(player_d, p_magnitude);
+                    const p_product = 1 * Vec3.inner(&player_d, &wall_normal);
+                    const p_magnitude = Vec3.scale(&wall_normal, p_product);
+                    player_d = Vec3.sub(&player_d, &p_magnitude);
 
                     const d_product = 1 * Vec3.inner(&entity.d_pos, &wall_normal);
                     const d_magnitude = Vec3.scale(&wall_normal, d_product);
@@ -742,9 +793,15 @@ pub fn moveEntity(
     }
 
     // TODO: This has to become real height handling
-    if (entity.pos.z() < ground) {
+    if (entity.pos.z() <= ground or
+        (entity.flags.z_supported and
+        entity.d_pos.z() == 0))
+    {
         entity.pos.v[2] = ground;
         entity.d_pos.v[2] = 0;
+        entity.flags.z_supported = true;
+    } else {
+        entity.flags.z_supported = false;
     }
 
     if (entity.distance_limit != 0) {
