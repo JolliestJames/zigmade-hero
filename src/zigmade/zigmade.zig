@@ -4,10 +4,13 @@
 // ARCHITECTURE EXPLORATION
 //
 // - Z
+//   - Debug drawing of Z levels and inclusion of Z to make sure
+//     there are no bugs (because there are some now)
+//   - Go through and define how tall everything should be
+//   - Make sure flying things can go over low walls
 //   - Need to make a solid concept of ground levels so the camera can
 //     be freely placed in Z and have multiple ground levels in one sim
 //     region
-//   - 3D collision detection working properly
 //   - Figure out how you go up and down and how is this rendered?
 //     "Frinstances"
 //     z_fudge
@@ -27,10 +30,12 @@
 //   - Sim region merging? Multiple players?
 //   - Simple zoomed-out view for testing?
 //
-// - Debug
+// - Debug code
 //   - Logging
 //   - Diagramming
 //   - (Just enough GUI) Switches/sliders/etc.
+//   - Draw tile chunks so we can verify that things are aligned/in the
+//     chunks we want them to be in/etc.
 //
 // - Audio
 //   - Sound effect triggers
@@ -546,6 +551,30 @@ fn addLowEntity(
     return result;
 }
 
+fn addGroundedEntity(
+    game_state: *GameState,
+    t: EntityType,
+    pos: *WorldPosition,
+    dim: Vec3,
+) AddLowEntityResult {
+    var result: AddLowEntityResult = undefined;
+
+    if (game_state.world) |game_world| {
+        var offset_p = world.mapIntoChunkSpace(
+            game_world,
+            pos.*,
+            Vec3.init(0, 0, 0.5 * dim.z()),
+        );
+
+        var entity = addLowEntity(game_state, t, &offset_p);
+        entity.low.sim.dim = dim;
+
+        result = entity;
+    } else unreachable;
+
+    return result;
+}
+
 fn addWall(
     game_state: *GameState,
     abs_tile_x: i32,
@@ -553,6 +582,12 @@ fn addWall(
     abs_tile_z: i32,
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
+
+    const dim = Vec3.init(
+        game_world.tile_side_in_meters,
+        game_world.tile_side_in_meters,
+        game_world.tile_depth_in_meters,
+    );
 
     var pos = world.chunkPosFromTilePos(
         game_world,
@@ -562,10 +597,7 @@ fn addWall(
         Vec3.splat(0),
     );
 
-    const entity = addLowEntity(game_state, .wall, &pos);
-
-    entity.low.sim.dim.v[0] = game_world.tile_side_in_meters;
-    entity.low.sim.dim.v[1] = entity.low.sim.dim.v[0];
+    var entity = addGroundedEntity(game_state, .wall, &pos, dim);
     entity.low.sim.flags.collides = true;
 
     return entity;
@@ -579,19 +611,21 @@ fn addStair(
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
 
+    const dim = Vec3.init(
+        game_world.tile_side_in_meters,
+        2 * game_world.tile_side_in_meters,
+        game_world.tile_depth_in_meters,
+    );
+
     var pos = world.chunkPosFromTilePos(
         game_world,
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
-        Vec3.init(0, 0, 0.5 * game_world.tile_depth_in_meters),
+        Vec3.splat(0),
     );
 
-    const entity = addLowEntity(game_state, .stairwell, &pos);
-
-    entity.low.sim.dim.v[0] = game_world.tile_side_in_meters;
-    entity.low.sim.dim.v[1] = 2 * entity.low.sim.dim.v[0];
-    entity.low.sim.dim.v[2] = game_world.tile_depth_in_meters;
+    const entity = addGroundedEntity(game_state, .stairwell, &pos, dim);
     entity.low.sim.flags.collides = true;
 
     return entity;
@@ -609,19 +643,17 @@ fn initHitPoints(low: *LowEntity, count: u32) void {
 }
 
 fn addPlayer(game_state: *GameState) AddLowEntityResult {
-    var pos = game_state.camera_p;
-    const entity = addLowEntity(game_state, .hero, &pos);
+    const dim = Vec3.init(1.0, 0.5, 1.2);
 
-    entity.low.sim.dim.v[1] = 0.5;
-    entity.low.sim.dim.v[0] = 1.0;
+    var pos = game_state.camera_p;
+    const entity = addGroundedEntity(game_state, .hero, &pos, dim);
     entity.low.sim.flags.collides = true;
     entity.low.sim.flags.movable = true;
+
     initHitPoints(entity.low, 3);
 
     const sword = addSword(game_state);
     entity.low.sim.sword.index = sword.low_index;
-
-    addCollisionRule(game_state, sword.low_index, entity.low_index, false);
 
     if (game_state.camera_entity_index == 0) {
         game_state.camera_entity_index = entity.low_index;
@@ -636,6 +668,8 @@ fn addMonster(
     abs_tile_y: i32,
     abs_tile_z: i32,
 ) AddLowEntityResult {
+    const dim = Vec3.init(1.0, 0.5, 0.5);
+
     const game_world = game_state.world.?;
 
     var pos = world.chunkPosFromTilePos(
@@ -646,11 +680,10 @@ fn addMonster(
         Vec3.splat(0),
     );
 
-    const entity = addLowEntity(game_state, .monster, &pos);
-    entity.low.sim.dim.v[1] = 0.5;
-    entity.low.sim.dim.v[0] = 1.0;
+    const entity = addGroundedEntity(game_state, .monster, &pos, dim);
     entity.low.sim.flags.collides = true;
     entity.low.sim.flags.movable = true;
+
     initHitPoints(entity.low, 3);
 
     return entity;
@@ -662,6 +695,7 @@ fn addSword(game_state: *GameState) AddLowEntityResult {
 
     entity.low.sim.dim.v[1] = 0.5;
     entity.low.sim.dim.v[0] = 1.0;
+    entity.low.sim.dim.v[2] = 0.1;
     entity.low.sim.flags.movable = true;
 
     return entity;
@@ -673,6 +707,8 @@ fn addFamiliar(
     abs_tile_y: i32,
     abs_tile_z: i32,
 ) AddLowEntityResult {
+    const dim = Vec3.init(1.0, 0.5, 0.5);
+
     const game_world = game_state.world.?;
 
     var pos = world.chunkPosFromTilePos(
@@ -683,10 +719,7 @@ fn addFamiliar(
         Vec3.splat(0),
     );
 
-    const entity = addLowEntity(game_state, .familiar, &pos);
-
-    entity.low.sim.dim.v[1] = 0.5;
-    entity.low.sim.dim.v[0] = 1.0;
+    const entity = addGroundedEntity(game_state, .familiar, &pos, dim);
     entity.low.sim.flags.collides = true;
     entity.low.sim.flags.movable = true;
 
@@ -1000,7 +1033,7 @@ pub export fn updateAndRender(
         game_state.world = pushStruct(&game_state.world_arena, World);
         const game_world = game_state.world.?;
 
-        world.initializeWorld(game_world, 1.4);
+        world.initializeWorld(game_world, 1.4, 3.0);
 
         const tile_side_in_pixels: i32 = 60;
         game_state.meters_to_pixels =
@@ -1447,7 +1480,6 @@ pub export fn updateAndRender(
 
             const eg_x = screen_center_x + meters_to_pixels * z_fudge * entity.pos.x();
             const eg_y = screen_center_y - meters_to_pixels * z_fudge * entity.pos.y();
-
             const entity_z = -meters_to_pixels * entity.pos.z();
 
             // NOTE: With Casey's implementation, there will be one iteration of the game

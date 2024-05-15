@@ -706,40 +706,43 @@ pub fn moveEntity(
                         const max_c = Vec3.scale(&minkowski_diameter, 0.5);
                         const rel = Vec3.sub(&entity.pos, &test_entity.pos);
 
-                        var t_min_test = t_min;
-                        var test_wall_normal = Vec3.splat(0);
-                        var hit_this = false;
+                        // TODO: Do we want an open inclusion at the max corner?
+                        if (rel.z() >= min_c.z() and rel.z() < max_c.z()) {
+                            var t_min_test = t_min;
+                            var test_wall_normal = Vec3.splat(0);
+                            var hit_this = false;
 
-                        if (testWall(min_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
-                            test_wall_normal = Vec3.init(-1, 0, 0);
-                            hit_this = true;
-                        }
+                            if (testWall(min_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
+                                test_wall_normal = Vec3.init(-1, 0, 0);
+                                hit_this = true;
+                            }
 
-                        if (testWall(max_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
-                            test_wall_normal = Vec3.init(1, 0, 0);
-                            hit_this = true;
-                        }
+                            if (testWall(max_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
+                                test_wall_normal = Vec3.init(1, 0, 0);
+                                hit_this = true;
+                            }
 
-                        if (testWall(min_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
-                            test_wall_normal = Vec3.init(0, -1, 0);
-                            hit_this = true;
-                        }
+                            if (testWall(min_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
+                                test_wall_normal = Vec3.init(0, -1, 0);
+                                hit_this = true;
+                            }
 
-                        if (testWall(max_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
-                            test_wall_normal = Vec3.init(0, 1, 0);
-                            hit_this = true;
-                        }
+                            if (testWall(max_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
+                                test_wall_normal = Vec3.init(0, 1, 0);
+                                hit_this = true;
+                            }
 
-                        // TODO: We need a concept of stepping onto vs stepping off
-                        // of here so that we can prevent you from _leaving_
-                        // stairs intead of just preventing you from getting onto them
-                        if (hit_this) {
-                            //const test_p = Vec3.add(&entity.pos, &Vec3.scale(&player_d, t_min_test),);
+                            // TODO: We need a concept of stepping onto vs stepping off
+                            // of here so that we can prevent you from _leaving_
+                            // stairs intead of just preventing you from getting onto them
+                            if (hit_this) {
+                                //const test_p = Vec3.add(&entity.pos, &Vec3.scale(&player_d, t_min_test),);
 
-                            if (speculativeCollide(entity, test_entity)) {
-                                t_min = t_min_test;
-                                wall_normal = test_wall_normal;
-                                hit_entity = test_entity;
+                                if (speculativeCollide(entity, test_entity)) {
+                                    t_min = t_min_test;
+                                    wall_normal = test_wall_normal;
+                                    hit_entity = test_entity;
+                                }
                             }
                         }
                     }

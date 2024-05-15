@@ -53,14 +53,18 @@ pub const World = struct {
     first_free: ?*WorldEntityBlock = null,
 };
 
-pub fn initializeWorld(world: *World, tile_side_in_meters: f32) void {
+pub fn initializeWorld(
+    world: *World,
+    tile_side_in_meters: f32,
+    tile_depth_in_meters: f32,
+) void {
     world.tile_side_in_meters = tile_side_in_meters;
     world.chunk_dim_in_meters = Vec3.init(
         TILES_PER_CHUNK * tile_side_in_meters,
         TILES_PER_CHUNK * tile_side_in_meters,
-        tile_side_in_meters,
+        tile_depth_in_meters,
     );
-    world.tile_depth_in_meters = tile_side_in_meters;
+    world.tile_depth_in_meters = tile_depth_in_meters;
     world.first_free = null;
 
     for (0..world.chunk_hash.len) |index| {
@@ -396,9 +400,15 @@ pub fn chunkPosFromTilePos(
 ) WorldPosition {
     const base_pos: WorldPosition = .{};
 
-    const offset = Vec3.scale(
-        &Vec3.fromInt(abs_tile_x, abs_tile_y, abs_tile_z),
+    const tile_dim = Vec3.init(
         world.tile_side_in_meters,
+        world.tile_side_in_meters,
+        world.tile_depth_in_meters,
+    );
+
+    const offset = Vec3.hadamard(
+        &tile_dim,
+        &Vec3.fromInt(abs_tile_x, abs_tile_y, abs_tile_z),
     );
 
     const result = mapIntoChunkSpace(

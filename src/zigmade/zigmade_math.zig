@@ -249,12 +249,12 @@ pub fn Rectangle(comptime VecN: type) type {
                     return result;
                 }
                 pub inline fn rectanglesIntersect(a: RectangleN, b: RectangleN) bool {
-                    const result = !(a.min.x() > b.max.x() or
-                        a.max.x() < b.min.x() or
-                        a.min.y() > b.max.y() or
-                        a.max.y() < b.min.y() or
-                        a.min.z() > b.max.z() or
-                        a.max.z() < b.min.z());
+                    const result = !(a.min.x() >= b.max.x() or
+                        a.max.x() <= b.min.x() or
+                        a.min.y() >= b.max.y() or
+                        a.max.y() <= b.min.y() or
+                        a.min.z() >= b.max.z() or
+                        a.max.z() <= b.min.z());
 
                     return result;
                 }
