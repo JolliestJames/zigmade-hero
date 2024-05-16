@@ -76,6 +76,8 @@ pub const Entity = struct {
     hit_point_max: u32 = 0,
     hit_points: [16]HitPoint = undefined,
     sword: EntityReference = .{ .index = 0 },
+    // TODO: Only for stairwells
+    walkable_height: f32 = 0,
     // TODO: Generation index so we know how "up to date" this entity is
 };
 
@@ -564,6 +566,33 @@ fn canOverlap(
     return result;
 }
 
+inline fn getStairGround(entity: *Entity, at_ground_point: Vec3) f32 {
+    assert(entity.type == .stairwell);
+
+    const region_rect = Rectangle3.centerDim(entity.pos, entity.dim);
+
+    const bary = Vec3.clamp01(&Rectangle3.getBarycentric(
+        region_rect,
+        at_ground_point,
+    ));
+
+    const result =
+        region_rect.min.z() +
+        bary.y() *
+        entity.walkable_height;
+
+    return result;
+}
+
+pub inline fn getEntityGroundPoint(entity: *Entity) Vec3 {
+    const result = Vec3.add(
+        &entity.pos,
+        &Vec3.init(0, 0, -0.5 * entity.dim.z()),
+    );
+
+    return result;
+}
+
 fn handleOverlap(
     _: *GameState,
     mover: *Entity,
@@ -572,18 +601,7 @@ fn handleOverlap(
     ground: *f32,
 ) void {
     if (region.type == .stairwell) {
-        const region_rect = Rectangle3.centerDim(region.pos, region.dim);
-
-        const bary = Vec3.clamp01(&Rectangle3.getBarycentric(
-            region_rect,
-            mover.pos,
-        ));
-
-        ground.* = math.lerp(
-            region_rect.min.z(),
-            bary.y(),
-            region_rect.max.z(),
-        );
+        ground.* = getStairGround(region, getEntityGroundPoint(mover));
     }
 }
 
@@ -594,24 +612,20 @@ pub fn speculativeCollide(
     var result = true;
 
     if (region.type == .stairwell) {
-        const region_rect = Rectangle3.centerDim(region.pos, region.dim);
-
-        const bary = Vec3.clamp01(&Rectangle3.getBarycentric(
-            region_rect,
-            mover.pos,
-        ));
 
         // TODO: Needs work
-        const ground = math.lerp(
-            region_rect.min.z(),
-            bary.y(),
-            region_rect.max.z(),
-        );
-
         const step_height = 0.1;
 
-        result = (@abs(mover.pos.z() - ground) > step_height) or
-            (bary.y() > 0.1 and bary.y() < 0.9);
+        if (false) {
+            //const ground_diff = getEntityGroundPoint(mover).z() - ground;
+            //result = (@abs(ground_diff) > step_height) or
+            //    (bary.y() > 0.1 and bary.y() < 0.9);
+        }
+
+        const mover_ground_point = getEntityGroundPoint(mover);
+        const ground = getStairGround(region, mover_ground_point);
+
+        result = @abs(mover_ground_point.z() - ground) > step_height;
     }
 
     return result;
@@ -794,6 +808,8 @@ pub fn moveEntity(
             }
         }
     }
+
+    ground += entity.pos.z() - getEntityGroundPoint(entity).z();
 
     // TODO: This has to become real height handling
     if (entity.pos.z() <= ground or

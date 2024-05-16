@@ -4,13 +4,12 @@
 // ARCHITECTURE EXPLORATION
 //
 // - Z
-//   - Debug drawing of Z levels and inclusion of Z to make sure
-//     there are no bugs (because there are some now)
-//   - Go through and define how tall everything should be
-//   - Make sure flying things can go over low walls
 //   - Need to make a solid concept of ground levels so the camera can
 //     be freely placed in Z and have multiple ground levels in one sim
 //     region
+//   - Concept of ground in the collision loop so it can handle collisions
+//     coming onto and off of stairwells
+//   - Make sure flying things can go over low walls
 //   - Figure out how you go up and down and how is this rendered?
 //     "Frinstances"
 //     z_fudge
@@ -142,12 +141,6 @@ const ControlledHero = struct {
     dz: f32 = 0,
 };
 
-//pub const PairwiseCollisionRuleFlag = packed struct(u32) {
-//    can_collide: bool = false,
-//    temporary: bool = false,
-//    _padding: u32 = 0,
-//};
-
 pub const PairwiseCollisionRule = struct {
     can_collide: bool,
     storage_index_a: u32,
@@ -165,8 +158,6 @@ pub const GameState = struct {
     low_entity_count: u32 = 0,
     // TODO: Change name to StoredEntity
     low_entities: [100000]LowEntity,
-    //high_entity_count: u32 = 0,
-    //high_entities_: [256]HighEntity,
     backdrop: Bitmap,
     shadow: Bitmap,
     hero_bitmaps: [4]HeroBitmaps,
@@ -614,7 +605,7 @@ fn addStair(
     const dim = Vec3.init(
         game_world.tile_side_in_meters,
         2 * game_world.tile_side_in_meters,
-        game_world.tile_depth_in_meters,
+        1.1 * game_world.tile_depth_in_meters,
     );
 
     var pos = world.chunkPosFromTilePos(
@@ -627,6 +618,7 @@ fn addStair(
 
     const entity = addGroundedEntity(game_state, .stairwell, &pos, dim);
     entity.low.sim.flags.collides = true;
+    entity.low.sim.walkable_height = game_world.tile_depth_in_meters;
 
     return entity;
 }
@@ -750,7 +742,7 @@ fn pushPiece(
         &alignment,
     );
 
-    piece.offset_z = group.game_state.meters_to_pixels * offset_z;
+    piece.offset_z = offset_z;
     piece.entity_zc = entity_zc;
     piece.r = color.r();
     piece.g = color.g();
@@ -856,7 +848,6 @@ pub fn addCollisionRule(
     storage_index_a: u32,
     storage_index_b: u32,
     can_collide: bool,
-    //flags: PairwiseCollisionRuleFlag,
 ) void {
     var a = storage_index_a;
     var b = storage_index_b;
@@ -1316,7 +1307,7 @@ pub export fn updateAndRender(
             const dt = input.dt_for_frame;
 
             // TODO: This is incorrect, should be computed after update
-            var shadow_alpha = 1.0 - 0.5 * entity.pos.z();
+            var shadow_alpha = 1.0 - 0.5 * (entity.pos.z() - entity.dim.z());
 
             if (shadow_alpha < 0.0) {
                 shadow_alpha = 0.0;
@@ -1390,7 +1381,8 @@ pub export fn updateAndRender(
                     pushBitmap(&piece_group, &game_state.tree, Vec2.splat(0), 0, Vec2.init(40, 80), 1, 1);
                 },
                 .stairwell => {
-                    pushRect(&piece_group, Vec2.splat(0), 0, entity.dim.xy(), Vec4.init(1, 1, 0, 1), 0);
+                    pushRect(&piece_group, Vec2.splat(0), 0, entity.dim.xy(), Vec4.init(1, 0.5, 0, 1), 0);
+                    pushRect(&piece_group, Vec2.splat(0), entity.dim.z(), entity.dim.xy(), Vec4.init(1, 1, 0, 1), 0);
                 },
                 .sword => {
                     move_spec = .{
@@ -1476,12 +1468,6 @@ pub export fn updateAndRender(
                 sim.moveEntity(game_state, region, entity, input.dt_for_frame, &move_spec, dd_pos);
             }
 
-            const z_fudge = 1.0 + 0.1 * entity.pos.z();
-
-            const eg_x = screen_center_x + meters_to_pixels * z_fudge * entity.pos.x();
-            const eg_y = screen_center_y - meters_to_pixels * z_fudge * entity.pos.y();
-            const entity_z = -meters_to_pixels * entity.pos.z();
-
             // NOTE: With Casey's implementation, there will be one iteration of the game
             // loop when a sword has transitioned from spatial to non_spatial during which
             // a draw attempt will be made without this check for non-spatialness in place.
@@ -1491,15 +1477,24 @@ pub export fn updateAndRender(
             if (!entity.flags.non_spatial) {
                 for (0..piece_group.piece_count) |piece_index| {
                     const piece = piece_group.pieces[piece_index];
+                    const entity_base_p = sim.getEntityGroundPoint(entity);
+                    //const entity_base_p = Vec3.sub(&entity.pos, &Vec3.init(0, 0, 0.5 * entity.dim.z()));
+                    const z_fudge = 1.0 + 0.1 * (entity_base_p.z() + piece.offset_z);
+
+                    const eg_x = screen_center_x + meters_to_pixels * z_fudge * entity_base_p.x();
+                    const eg_y = screen_center_y - meters_to_pixels * z_fudge * entity_base_p.y();
+                    const entity_z = -meters_to_pixels * entity_base_p.z();
+
                     const center = Vec2.init(
                         eg_x + piece.offset.x(),
-                        eg_y + piece.offset.y() + piece.offset_z + piece.entity_zc * entity_z,
+                        eg_y + piece.offset.y() + piece.entity_zc * entity_z,
                     );
 
                     if (piece.bitmap) |bitmap| {
                         drawBitmap(buffer, bitmap, center.x(), center.y(), piece.a);
                     } else {
                         const half_dim = Vec2.scale(&piece.dim, 0.5 * meters_to_pixels);
+
                         drawRectangle(
                             buffer,
                             Vec2.sub(&center, &half_dim),
