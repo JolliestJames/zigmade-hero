@@ -5,7 +5,9 @@ const math = @import("zigmade_math.zig");
 const world = @import("zigmade_world.zig");
 const ety = @import("zigmade_entity.zig");
 
+const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
+const Rectangle2 = math.Rectangle2;
 const Rectangle3 = math.Rectangle3;
 const MemoryArena = game.MemoryArena;
 const LowEntity = game.LowEntity;
@@ -58,17 +60,33 @@ const EntityFlags = packed struct(u32) {
     _padding: u27 = 0,
 };
 
+pub const EntityCollisionVolume = struct {
+    offset_p: Vec3 = Vec3.splat(0),
+    dim: Vec3 = Vec3.splat(0),
+};
+
+pub const EntityCollisionVolumeGroup = struct {
+    total_volume: EntityCollisionVolume,
+    // NOTE: volume_count is always expected to be greater
+    // than zero if the entity has any volume
+    // In the future, this could be compressed if necessary
+    // to say that the volume_count can be zero if the
+    // total_volume should be used as the only collision
+    // volume for the entity
+    volume_count: u32,
+    volumes: ?[*]EntityCollisionVolume,
+};
+
 pub const Entity = struct {
     // NOTE: These are only for the sim region
     storage_index: u32 = 0,
     updatable: bool = false,
     type: EntityType = .none,
     flags: EntityFlags = .{},
-    pos: Vec3 = Vec3.splat(0),
-    d_pos: Vec3 = Vec3.splat(0),
+    p: Vec3 = Vec3.splat(0),
+    dp: Vec3 = Vec3.splat(0),
     distance_limit: f32 = 0,
-    dim: Vec3 = Vec3.splat(0),
-    chunk_z: u32 = 0,
+    collision: *EntityCollisionVolumeGroup = undefined,
     facing_direction: u32 = 0,
     t_bob: f32 = 0,
     d_abs_tile_z: i32 = 0,
@@ -77,6 +95,7 @@ pub const Entity = struct {
     hit_points: [16]HitPoint = undefined,
     sword: EntityReference = .{ .index = 0 },
     // TODO: Only for stairwells
+    walkable_dim: Vec2 = Vec2.splat(0),
     walkable_height: f32 = 0,
     // TODO: Generation index so we know how "up to date" this entity is
 };
@@ -222,16 +241,27 @@ inline fn getSimSpaceP(
 
     if (maybe_stored) |stored| {
         if (!stored.sim.flags.non_spatial) {
-            result = world.subtract(sim_region.world, &stored.pos, &sim_region.origin);
+            result = world.subtract(sim_region.world, &stored.p, &sim_region.origin);
         }
     }
 
     return result;
 }
 
-pub inline fn entityOverlaps(pos: Vec3, dim: Vec3, rect: Rectangle3) bool {
-    const grown = Rectangle3.addRadius(rect, Vec3.scale(&dim, 0.5));
-    const result = Rectangle3.isInRectangle(grown, pos);
+pub inline fn entityOverlaps(
+    pos: Vec3,
+    volume: EntityCollisionVolume,
+    rect: Rectangle3,
+) bool {
+    const grown = Rectangle3.addRadius(
+        &rect,
+        &Vec3.scale(&volume.dim, 0.5),
+    );
+
+    const result = Rectangle3.isInRectangle(
+        &grown,
+        &Vec3.add(&pos, &volume.offset_p),
+    );
 
     return result;
 }
@@ -247,15 +277,15 @@ fn addEntity(
 
     if (maybe_dest) |dest| {
         if (maybe_sim_pos) |sim_pos| {
-            dest.pos = sim_pos.*;
+            dest.p = sim_pos.*;
 
             dest.updatable = entityOverlaps(
-                dest.pos,
-                dest.dim,
+                dest.p,
+                dest.collision.total_volume,
                 sim_region.updatable_bounds,
             );
         } else {
-            dest.pos = getSimSpaceP(sim_region, source);
+            dest.p = getSimSpaceP(sim_region, source);
         }
 
         maybe_dest = dest;
@@ -292,13 +322,13 @@ pub fn beginSim(
     sim_region.world = game_world;
     sim_region.origin = origin;
     sim_region.updatable_bounds = Rectangle3.addRadius(
-        bounds,
-        Vec3.splat(sim_region.max_entity_radius),
+        &bounds,
+        &Vec3.splat(sim_region.max_entity_radius),
     );
 
     sim_region.bounds = Rectangle3.addRadius(
-        sim_region.updatable_bounds,
-        Vec3.init(
+        &sim_region.updatable_bounds,
+        &Vec3.init(
             update_safety_margin,
             update_safety_margin,
             update_safety_margin_z,
@@ -311,8 +341,8 @@ pub fn beginSim(
 
     sim_region.entities = game.pushArray(arena, sim_region.max_entity_count, Entity);
 
-    const min_corner = Rectangle3.getMinCorner(sim_region.bounds);
-    const max_corner = Rectangle3.getMaxCorner(sim_region.bounds);
+    const min_corner = Rectangle3.getMinCorner(&sim_region.bounds);
+    const max_corner = Rectangle3.getMaxCorner(&sim_region.bounds);
 
     const min_chunk_p = world.mapIntoChunkSpace(
         game_world,
@@ -356,7 +386,7 @@ pub fn beginSim(
 
                                 if (entityOverlaps(
                                     sim_space_p,
-                                    low.sim.dim,
+                                    low.sim.collision.total_volume,
                                     sim_region.bounds,
                                 )) {
                                     _ = addEntity(game_state, sim_region, low_index, low, &sim_space_p);
@@ -396,7 +426,7 @@ pub fn endSim(
             var new_p = if (entity.flags.non_spatial)
                 world.nullPosition()
             else
-                world.mapIntoChunkSpace(game_world, region.origin, entity.pos);
+                world.mapIntoChunkSpace(game_world, region.origin, entity.p);
 
             world.changeEntityLocation(
                 &game_state.world_arena,
@@ -409,7 +439,7 @@ pub fn endSim(
             if (entity.storage_index == game_state.camera_entity_index) {
                 var new_camera_p = game_state.camera_p;
 
-                new_camera_p.chunk_z = stored.pos.chunk_z;
+                new_camera_p.chunk_z = stored.p.chunk_z;
 
                 if (false) {
                     if (stored.pos.x > (9.0 * game_world.tile_side_in_meters)) {
@@ -429,7 +459,7 @@ pub fn endSim(
                     }
                 } else {
                     const z_offset = new_camera_p.offset_.z();
-                    new_camera_p = stored.pos;
+                    new_camera_p = stored.p;
                     new_camera_p.offset_.v[2] = z_offset;
                 }
 
@@ -569,26 +599,20 @@ fn canOverlap(
 inline fn getStairGround(entity: *Entity, at_ground_point: Vec3) f32 {
     assert(entity.type == .stairwell);
 
-    const region_rect = Rectangle3.centerDim(entity.pos, entity.dim);
+    const region_rect = Rectangle2.centerDim(&entity.p.xy(), &entity.walkable_dim);
 
-    const bary = Vec3.clamp01(&Rectangle3.getBarycentric(
-        region_rect,
-        at_ground_point,
+    const bary = Vec2.clamp01(&Rectangle2.getBarycentric(
+        &region_rect,
+        &at_ground_point.xy(),
     ));
 
-    const result =
-        region_rect.min.z() +
-        bary.y() *
-        entity.walkable_height;
+    const result = entity.p.z() + bary.y() * entity.walkable_height;
 
     return result;
 }
 
 pub inline fn getEntityGroundPoint(entity: *Entity) Vec3 {
-    const result = Vec3.add(
-        &entity.pos,
-        &Vec3.init(0, 0, -0.5 * entity.dim.z()),
-    );
+    const result = entity.p;
 
     return result;
 }
@@ -654,10 +678,9 @@ pub fn moveEntity(
     acceleration = Vec3.scale(&acceleration, move_spec.speed);
 
     // TODO: ODE here
-    acceleration = Vec3.add(
-        &acceleration,
-        &Vec3.scale(&entity.d_pos, -move_spec.drag),
-    );
+    var drag = Vec3.scale(&entity.dp, -move_spec.drag);
+    drag.v[2] = 0;
+    acceleration = Vec3.add(&acceleration, &drag);
 
     if (!entity.flags.z_supported) {
         acceleration = Vec3.add(&acceleration, &Vec3.init(0, 0, -9.8));
@@ -665,17 +688,17 @@ pub fn moveEntity(
 
     var player_d = Vec3.add(
         &Vec3.scale(&acceleration, 0.5 * math.square(dt)),
-        &Vec3.scale(&entity.d_pos, dt),
+        &Vec3.scale(&entity.dp, dt),
     );
 
-    entity.d_pos = Vec3.add(
+    entity.dp = Vec3.add(
         &Vec3.scale(&acceleration, dt),
-        &entity.d_pos,
+        &entity.dp,
     );
 
     // TODO: Upgrade physical motion routines to handle capping
     // max velocity?
-    assert(Vec3.lengthSquared(&entity.d_pos) <=
+    assert(Vec3.lengthSquared(&entity.dp) <=
         math.square(region.max_entity_velocity));
 
     var distance_remaining = entity.distance_limit;
@@ -699,7 +722,7 @@ pub fn moveEntity(
             var wall_normal = Vec3.splat(0);
             var hit_entity: ?*Entity = null;
 
-            const desired_position = Vec3.add(&entity.pos, &player_d);
+            const desired_position = Vec3.add(&entity.p, &player_d);
 
             // NOTE: This is just an optimization to avoid entering the
             // loop in the case where the test entity is non spatial
@@ -709,53 +732,68 @@ pub fn moveEntity(
                     const test_entity = &region.entities[high_index];
 
                     if (canCollide(game_state, entity, test_entity)) {
-                        // TODO: Entities have height?
-                        const minkowski_diameter = Vec3.init(
-                            test_entity.dim.x() + entity.dim.x(),
-                            test_entity.dim.y() + entity.dim.y(),
-                            test_entity.dim.z() + entity.dim.z(),
-                        );
+                        for (0..entity.collision.volume_count) |volume_index| {
+                            if (entity.collision.volumes) |volumes| {
+                                var volume = &volumes[volume_index];
 
-                        const min_c = Vec3.scale(&minkowski_diameter, -0.5);
-                        const max_c = Vec3.scale(&minkowski_diameter, 0.5);
-                        const rel = Vec3.sub(&entity.pos, &test_entity.pos);
+                                for (0..test_entity.collision.volume_count) |test_volume_index| {
+                                    if (test_entity.collision.volumes) |test_volumes| {
+                                        var test_volume = &test_volumes[test_volume_index];
 
-                        // TODO: Do we want an open inclusion at the max corner?
-                        if (rel.z() >= min_c.z() and rel.z() < max_c.z()) {
-                            var t_min_test = t_min;
-                            var test_wall_normal = Vec3.splat(0);
-                            var hit_this = false;
+                                        const minkowski_diameter = Vec3.init(
+                                            test_volume.dim.x() + volume.dim.x(),
+                                            test_volume.dim.y() + volume.dim.y(),
+                                            test_volume.dim.z() + volume.dim.z(),
+                                        );
 
-                            if (testWall(min_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
-                                test_wall_normal = Vec3.init(-1, 0, 0);
-                                hit_this = true;
-                            }
+                                        const min_c = Vec3.scale(&minkowski_diameter, -0.5);
+                                        const max_c = Vec3.scale(&minkowski_diameter, 0.5);
 
-                            if (testWall(max_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
-                                test_wall_normal = Vec3.init(1, 0, 0);
-                                hit_this = true;
-                            }
+                                        const rel = Vec3.sub(
+                                            &Vec3.add(&entity.p, &volume.offset_p),
+                                            &Vec3.add(&test_entity.p, &test_volume.offset_p),
+                                        );
 
-                            if (testWall(min_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
-                                test_wall_normal = Vec3.init(0, -1, 0);
-                                hit_this = true;
-                            }
+                                        // TODO: Do we want an open inclusion at the max corner?
+                                        if (rel.z() >= min_c.z() and rel.z() < max_c.z()) {
+                                            var t_min_test = t_min;
+                                            var test_wall_normal = Vec3.splat(0);
+                                            var hit_this = false;
 
-                            if (testWall(max_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
-                                test_wall_normal = Vec3.init(0, 1, 0);
-                                hit_this = true;
-                            }
+                                            if (testWall(min_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
+                                                test_wall_normal = Vec3.init(-1, 0, 0);
+                                                hit_this = true;
+                                            }
 
-                            // TODO: We need a concept of stepping onto vs stepping off
-                            // of here so that we can prevent you from _leaving_
-                            // stairs intead of just preventing you from getting onto them
-                            if (hit_this) {
-                                //const test_p = Vec3.add(&entity.pos, &Vec3.scale(&player_d, t_min_test),);
+                                            if (testWall(max_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
+                                                test_wall_normal = Vec3.init(1, 0, 0);
+                                                hit_this = true;
+                                            }
 
-                                if (speculativeCollide(entity, test_entity)) {
-                                    t_min = t_min_test;
-                                    wall_normal = test_wall_normal;
-                                    hit_entity = test_entity;
+                                            if (testWall(min_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
+                                                test_wall_normal = Vec3.init(0, -1, 0);
+                                                hit_this = true;
+                                            }
+
+                                            if (testWall(max_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
+                                                test_wall_normal = Vec3.init(0, 1, 0);
+                                                hit_this = true;
+                                            }
+
+                                            // TODO: We need a concept of stepping onto vs stepping off
+                                            // of here so that we can prevent you from _leaving_
+                                            // stairs intead of just preventing you from getting onto them
+                                            if (hit_this) {
+                                                //const test_p = Vec3.add(&entity.pos, &Vec3.scale(&player_d, t_min_test),);
+
+                                                if (speculativeCollide(entity, test_entity)) {
+                                                    t_min = t_min_test;
+                                                    wall_normal = test_wall_normal;
+                                                    hit_entity = test_entity;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -763,15 +801,15 @@ pub fn moveEntity(
                 }
             }
 
-            entity.pos = Vec3.add(
-                &entity.pos,
+            entity.p = Vec3.add(
+                &entity.p,
                 &Vec3.scale(&player_d, t_min),
             );
 
             distance_remaining -= t_min * player_delta_length;
 
             if (hit_entity) |hit| {
-                player_d = Vec3.sub(&desired_position, &entity.pos);
+                player_d = Vec3.sub(&desired_position, &entity.p);
 
                 const stops_on_collision = handleCollision(game_state, entity, hit);
 
@@ -780,9 +818,9 @@ pub fn moveEntity(
                     const p_magnitude = Vec3.scale(&wall_normal, p_product);
                     player_d = Vec3.sub(&player_d, &p_magnitude);
 
-                    const d_product = 1 * Vec3.inner(&entity.d_pos, &wall_normal);
+                    const d_product = 1 * Vec3.inner(&entity.dp, &wall_normal);
                     const d_magnitude = Vec3.scale(&wall_normal, d_product);
-                    entity.d_pos = Vec3.sub(&entity.d_pos, &d_magnitude);
+                    entity.dp = Vec3.sub(&entity.dp, &d_magnitude);
                 }
             } else break;
         } else break;
@@ -790,34 +828,41 @@ pub fn moveEntity(
 
     var ground: f32 = 0;
 
+    // TODO: Handle multi-volumes here?
     // NOTE: Handle events based on area overlapping
     // TODO: Handle overlapping precisely by moving it into the collision loop?
     {
-        const entity_rect = Rectangle3.centerDim(entity.pos, entity.dim);
+        const entity_rect = Rectangle3.centerDim(
+            &Vec3.add(&entity.p, &entity.collision.total_volume.offset_p),
+            &entity.collision.total_volume.dim,
+        );
 
         // TODO: Spatial partition here!
         for (0..region.entity_count) |high_index| {
             const test_entity = &region.entities[high_index];
 
             if (canOverlap(game_state, entity, test_entity)) {
-                const test_entity_rect = Rectangle3.centerDim(test_entity.pos, test_entity.dim);
+                const test_entity_rect = Rectangle3.centerDim(
+                    &Vec3.add(&test_entity.p, &test_entity.collision.total_volume.offset_p),
+                    &test_entity.collision.total_volume.dim,
+                );
 
-                if (Rectangle3.rectanglesIntersect(entity_rect, test_entity_rect)) {
+                if (Rectangle3.rectanglesIntersect(&entity_rect, &test_entity_rect)) {
                     handleOverlap(game_state, entity, test_entity, dt, &ground);
                 }
             }
         }
     }
 
-    ground += entity.pos.z() - getEntityGroundPoint(entity).z();
+    ground += entity.p.z() - getEntityGroundPoint(entity).z();
 
     // TODO: This has to become real height handling
-    if (entity.pos.z() <= ground or
+    if (entity.p.z() <= ground or
         (entity.flags.z_supported and
-        entity.d_pos.z() == 0))
+        entity.dp.z() == 0))
     {
-        entity.pos.v[2] = ground;
-        entity.d_pos.v[2] = 0;
+        entity.p.v[2] = ground;
+        entity.dp.v[2] = 0;
         entity.flags.z_supported = true;
     } else {
         entity.flags.z_supported = false;
@@ -828,16 +873,16 @@ pub fn moveEntity(
     }
 
     // TODO: Change to using the acceleration vector
-    if (entity.d_pos.x() == 0.0 and entity.d_pos.y() == 0.0) {
+    if (entity.dp.x() == 0.0 and entity.dp.y() == 0.0) {
         // Leave facing_direction alone
-    } else if (@abs(entity.d_pos.x()) > @abs(entity.d_pos.y())) {
-        if (entity.d_pos.x() > 0) {
+    } else if (@abs(entity.dp.x()) > @abs(entity.dp.y())) {
+        if (entity.dp.x() > 0) {
             entity.facing_direction = 0;
         } else {
             entity.facing_direction = 2;
         }
-    } else if (@abs(entity.d_pos.x()) < @abs(entity.d_pos.y())) {
-        if (entity.d_pos.y() > 0) {
+    } else if (@abs(entity.dp.x()) < @abs(entity.dp.y())) {
+        if (entity.dp.y() > 0) {
             entity.facing_direction = 1;
         } else {
             entity.facing_direction = 3;

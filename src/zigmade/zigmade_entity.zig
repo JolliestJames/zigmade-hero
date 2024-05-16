@@ -25,7 +25,7 @@ pub inline fn defaultMoveSpec() MoveSpec {
 
 pub inline fn makeEntityNonSpatial(entity: *Entity) void {
     entity.flags.non_spatial = true;
-    entity.pos = invalidPos();
+    entity.p = invalidPos();
 }
 
 pub inline fn makeEntitySpatial(
@@ -34,6 +34,6 @@ pub inline fn makeEntitySpatial(
     d_pos: Vec3,
 ) void {
     entity.flags.non_spatial = false;
-    entity.pos = pos;
-    entity.d_pos = d_pos;
+    entity.p = pos;
+    entity.dp = d_pos;
 }

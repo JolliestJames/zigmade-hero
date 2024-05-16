@@ -90,6 +90,8 @@ const Entity = sim.Entity;
 const SimRegion = sim.SimRegion;
 const EntityType = sim.EntityType;
 const MoveSpec = sim.MoveSpec;
+const EntityCollisionVolume = sim.EntityCollisionVolume;
+const EntityCollisionVolumeGroup = sim.EntityCollisionVolumeGroup;
 const World = world.World;
 const WorldPosition = world.WorldPosition;
 
@@ -104,8 +106,8 @@ pub const LowEntity = struct {
     // TODO: It's kind of busted that pos can be invalid here
     // and we can store whether they would be invalid in the flags
     // Can we do something better?
-    sim: Entity,
-    pos: WorldPosition = .{},
+    sim: Entity = .{},
+    p: WorldPosition = .{},
 };
 
 const EntityVisiblePiece = struct {
@@ -136,7 +138,7 @@ const AddLowEntityResult = struct {
 
 const ControlledHero = struct {
     entity_index: u32 = 0,
-    dd_pos: Vec2 = Vec2.splat(0),
+    ddp: Vec2 = Vec2.splat(0),
     d_sword: Vec2 = Vec2.splat(0),
     dz: f32 = 0,
 };
@@ -168,6 +170,13 @@ pub const GameState = struct {
     // TODO: Must be power of two
     collision_rule_hash: [256]?*PairwiseCollisionRule,
     first_free_collision_rule: ?*PairwiseCollisionRule,
+    null_collision: *EntityCollisionVolumeGroup,
+    sword_collision: *EntityCollisionVolumeGroup,
+    stair_collision: *EntityCollisionVolumeGroup,
+    player_collision: *EntityCollisionVolumeGroup,
+    familiar_collision: *EntityCollisionVolumeGroup,
+    monster_collision: *EntityCollisionVolumeGroup,
+    wall_collision: *EntityCollisionVolumeGroup,
 };
 
 pub const MemoryArena = struct {
@@ -511,7 +520,7 @@ pub inline fn getLowEntity(
 fn addLowEntity(
     game_state: *GameState,
     t: EntityType,
-    pos: *WorldPosition,
+    p: *const WorldPosition,
 ) AddLowEntityResult {
     assert(game_state.low_entity_count < game_state.low_entities.len);
 
@@ -519,15 +528,17 @@ fn addLowEntity(
     game_state.low_entity_count += 1;
 
     const low = &game_state.low_entities[entity_index];
-    low.pos = world.nullPosition();
-    low.sim = .{ .type = t };
+    low.* = .{};
+    low.sim.type = t;
+    low.sim.collision = game_state.null_collision;
+    low.p = world.nullPosition();
 
     world.changeEntityLocation(
         &game_state.world_arena,
         game_state.world,
         entity_index,
         low,
-        pos,
+        p,
     );
 
     const result = AddLowEntityResult{
@@ -545,23 +556,14 @@ fn addLowEntity(
 fn addGroundedEntity(
     game_state: *GameState,
     t: EntityType,
-    pos: *WorldPosition,
-    dim: Vec3,
+    p: *WorldPosition,
+    collision: *EntityCollisionVolumeGroup,
 ) AddLowEntityResult {
     var result: AddLowEntityResult = undefined;
 
-    if (game_state.world) |game_world| {
-        var offset_p = world.mapIntoChunkSpace(
-            game_world,
-            pos.*,
-            Vec3.init(0, 0, 0.5 * dim.z()),
-        );
-
-        var entity = addLowEntity(game_state, t, &offset_p);
-        entity.low.sim.dim = dim;
-
-        result = entity;
-    } else unreachable;
+    var entity = addLowEntity(game_state, t, p);
+    entity.low.sim.collision = collision;
+    result = entity;
 
     return result;
 }
@@ -572,23 +574,21 @@ fn addWall(
     abs_tile_y: i32,
     abs_tile_z: i32,
 ) AddLowEntityResult {
-    const game_world = game_state.world.?;
-
-    const dim = Vec3.init(
-        game_world.tile_side_in_meters,
-        game_world.tile_side_in_meters,
-        game_world.tile_depth_in_meters,
-    );
-
     var pos = world.chunkPosFromTilePos(
-        game_world,
+        game_state.world.?,
         abs_tile_x,
         abs_tile_y,
         abs_tile_z,
         Vec3.splat(0),
     );
 
-    var entity = addGroundedEntity(game_state, .wall, &pos, dim);
+    var entity = addGroundedEntity(
+        game_state,
+        .wall,
+        &pos,
+        game_state.wall_collision,
+    );
+
     entity.low.sim.flags.collides = true;
 
     return entity;
@@ -602,12 +602,6 @@ fn addStair(
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
 
-    const dim = Vec3.init(
-        game_world.tile_side_in_meters,
-        2 * game_world.tile_side_in_meters,
-        1.1 * game_world.tile_depth_in_meters,
-    );
-
     var pos = world.chunkPosFromTilePos(
         game_world,
         abs_tile_x,
@@ -616,8 +610,15 @@ fn addStair(
         Vec3.splat(0),
     );
 
-    const entity = addGroundedEntity(game_state, .stairwell, &pos, dim);
+    const entity = addGroundedEntity(
+        game_state,
+        .stairwell,
+        &pos,
+        game_state.stair_collision,
+    );
+
     entity.low.sim.flags.collides = true;
+    entity.low.sim.walkable_dim = entity.low.sim.collision.total_volume.dim.xy();
     entity.low.sim.walkable_height = game_world.tile_depth_in_meters;
 
     return entity;
@@ -635,10 +636,13 @@ fn initHitPoints(low: *LowEntity, count: u32) void {
 }
 
 fn addPlayer(game_state: *GameState) AddLowEntityResult {
-    const dim = Vec3.init(1.0, 0.5, 1.2);
-
-    var pos = game_state.camera_p;
-    const entity = addGroundedEntity(game_state, .hero, &pos, dim);
+    var p = game_state.camera_p;
+    const entity = addGroundedEntity(
+        game_state,
+        .hero,
+        &p,
+        game_state.player_collision,
+    );
     entity.low.sim.flags.collides = true;
     entity.low.sim.flags.movable = true;
 
@@ -660,8 +664,6 @@ fn addMonster(
     abs_tile_y: i32,
     abs_tile_z: i32,
 ) AddLowEntityResult {
-    const dim = Vec3.init(1.0, 0.5, 0.5);
-
     const game_world = game_state.world.?;
 
     var pos = world.chunkPosFromTilePos(
@@ -672,7 +674,12 @@ fn addMonster(
         Vec3.splat(0),
     );
 
-    const entity = addGroundedEntity(game_state, .monster, &pos, dim);
+    const entity = addGroundedEntity(
+        game_state,
+        .monster,
+        &pos,
+        game_state.monster_collision,
+    );
     entity.low.sim.flags.collides = true;
     entity.low.sim.flags.movable = true;
 
@@ -682,12 +689,9 @@ fn addMonster(
 }
 
 fn addSword(game_state: *GameState) AddLowEntityResult {
-    var null_pos = world.nullPosition();
-    const entity = addLowEntity(game_state, .sword, &null_pos);
+    const entity = addLowEntity(game_state, .sword, &world.nullPosition());
 
-    entity.low.sim.dim.v[1] = 0.5;
-    entity.low.sim.dim.v[0] = 1.0;
-    entity.low.sim.dim.v[2] = 0.1;
+    entity.low.sim.collision = game_state.sword_collision;
     entity.low.sim.flags.movable = true;
 
     return entity;
@@ -699,8 +703,6 @@ fn addFamiliar(
     abs_tile_y: i32,
     abs_tile_z: i32,
 ) AddLowEntityResult {
-    const dim = Vec3.init(1.0, 0.5, 0.5);
-
     const game_world = game_state.world.?;
 
     var pos = world.chunkPosFromTilePos(
@@ -711,7 +713,12 @@ fn addFamiliar(
         Vec3.splat(0),
     );
 
-    const entity = addGroundedEntity(game_state, .familiar, &pos, dim);
+    var entity = addGroundedEntity(
+        game_state,
+        .familiar,
+        &pos,
+        game_state.familiar_collision,
+    );
     entity.low.sim.flags.collides = true;
     entity.low.sim.flags.movable = true;
 
@@ -896,6 +903,43 @@ pub fn addCollisionRule(
     }
 }
 
+fn makeSimpleGroundedCollision(
+    game_state: *GameState,
+    dim_x: f32,
+    dim_y: f32,
+    dim_z: f32,
+) *EntityCollisionVolumeGroup {
+    // TODO: Do not use world_arena, change to using fundamental_types arena, etc.
+    var group = pushStruct(&game_state.world_arena, EntityCollisionVolumeGroup);
+
+    group.volume_count = 1;
+
+    group.volumes = pushArray(
+        &game_state.world_arena,
+        group.volume_count,
+        EntityCollisionVolume,
+    );
+
+    group.total_volume.offset_p = Vec3.init(0, 0, 0.5 * dim_z);
+    group.total_volume.dim = Vec3.init(dim_x, dim_y, dim_z);
+    group.volumes.?[0] = group.total_volume;
+
+    return group;
+}
+
+fn makeNullCollision(game_state: *GameState) *EntityCollisionVolumeGroup {
+    // TODO: Do not use world_arena, change to using fundamental_types arena, etc.
+    var group = pushStruct(&game_state.world_arena, EntityCollisionVolumeGroup);
+
+    group.volume_count = 0;
+    group.volumes = null;
+    group.total_volume.offset_p = Vec3.splat(0);
+    // TODO: Should this be negative?
+    group.total_volume.dim = Vec3.splat(0);
+
+    return group;
+}
+
 // GAME NEEDS FOUR THINGS
 // - timing
 // - controller/keyboard input
@@ -914,10 +958,46 @@ pub export fn updateAndRender(
     var game_state: *GameState = @alignCast(@ptrCast(memory.permanent_storage));
 
     if (!memory.is_initialized) {
-        var null_pos = world.nullPosition();
+        // TODO: Can we just use Zig's own arena allocator?
+        // TODO: Let's start partitioning our memory space
+        initializeArena(
+            &game_state.world_arena,
+            memory.permanent_storage_size - @sizeOf(GameState),
+            memory.permanent_storage + @sizeOf(GameState),
+        );
 
         // NOTE: Reserve entity slot 0 as the null entity
-        _ = addLowEntity(game_state, .none, &null_pos);
+        _ = addLowEntity(game_state, .none, &world.nullPosition());
+
+        game_state.world = pushStruct(&game_state.world_arena, World);
+        const game_world = game_state.world.?;
+        world.initializeWorld(game_world, 1.4, 3.0);
+
+        const tile_side_in_pixels: i32 = 60;
+        game_state.meters_to_pixels =
+            @as(f32, @floatFromInt(tile_side_in_pixels)) /
+            game_world.tile_side_in_meters;
+
+        game_state.null_collision = makeNullCollision(game_state);
+        game_state.sword_collision = makeSimpleGroundedCollision(game_state, 1, 0.5, 0.1);
+
+        game_state.stair_collision = makeSimpleGroundedCollision(
+            game_state,
+            game_world.tile_side_in_meters,
+            2 * game_world.tile_side_in_meters,
+            1.1 * game_world.tile_depth_in_meters,
+        );
+
+        game_state.player_collision = makeSimpleGroundedCollision(game_state, 1, 0.5, 1.2);
+        game_state.monster_collision = makeSimpleGroundedCollision(game_state, 1, 0.5, 0.5);
+        game_state.familiar_collision = makeSimpleGroundedCollision(game_state, 1, 0.5, 0.5);
+
+        game_state.wall_collision = makeSimpleGroundedCollision(
+            game_state,
+            game_world.tile_side_in_meters,
+            game_world.tile_side_in_meters,
+            game_world.tile_depth_in_meters,
+        );
 
         game_state.backdrop = debugLoadBmp(
             thread,
@@ -1013,23 +1093,6 @@ pub export fn updateAndRender(
             "data/test/test_hero_front_torso.bmp",
         );
         bitmaps[3].alignment = .{ .v = .{ 72, 182 } };
-
-        // TODO: Can we just use Zig's own arena allocator?
-        initializeArena(
-            &game_state.world_arena,
-            memory.permanent_storage_size - @sizeOf(GameState),
-            memory.permanent_storage + @sizeOf(GameState),
-        );
-
-        game_state.world = pushStruct(&game_state.world_arena, World);
-        const game_world = game_state.world.?;
-
-        world.initializeWorld(game_world, 1.4, 3.0);
-
-        const tile_side_in_pixels: i32 = 60;
-        game_state.meters_to_pixels =
-            @as(f32, @floatFromInt(tile_side_in_pixels)) /
-            game_world.tile_side_in_meters;
 
         const tiles_per_width = 17;
         const tiles_per_height = 9;
@@ -1207,29 +1270,29 @@ pub export fn updateAndRender(
             }
         } else {
             hero.dz = 0;
-            hero.dd_pos = Vec2.splat(0);
+            hero.ddp = Vec2.splat(0);
             hero.d_sword = Vec2.splat(0);
 
             if (controller.is_analog) {
                 // NOTE: Use analog movement tuning
-                hero.dd_pos = Vec2.init(controller.stick_average_x, controller.stick_average_y);
+                hero.ddp = Vec2.init(controller.stick_average_x, controller.stick_average_y);
             } else {
                 // NOTE: Use digital movement tuning
 
                 if (controller.buttons.map.move_up.ended_down) {
-                    hero.dd_pos.v[1] = 1.0;
+                    hero.ddp.v[1] = 1.0;
                 }
 
                 if (controller.buttons.map.move_down.ended_down) {
-                    hero.dd_pos.v[1] = -1.0;
+                    hero.ddp.v[1] = -1.0;
                 }
 
                 if (controller.buttons.map.move_left.ended_down) {
-                    hero.dd_pos.v[0] = -1.0;
+                    hero.ddp.v[0] = -1.0;
                 }
 
                 if (controller.buttons.map.move_right.ended_down) {
-                    hero.dd_pos.v[0] = 1.0;
+                    hero.ddp.v[0] = 1.0;
                 }
             }
 
@@ -1259,7 +1322,7 @@ pub export fn updateAndRender(
     const tile_span_x = 17 * 3;
     const tile_span_y = 9 * 3;
     const tile_span_z = 1;
-    const camera_bounds = Rectangle3.centerDim(Vec3.splat(0), Vec3.scale(
+    const camera_bounds = Rectangle3.centerDim(&Vec3.splat(0), &Vec3.scale(
         &Vec3.init(tile_span_x, tile_span_y, tile_span_z),
         game_world.tile_side_in_meters,
     ));
@@ -1307,14 +1370,14 @@ pub export fn updateAndRender(
             const dt = input.dt_for_frame;
 
             // TODO: This is incorrect, should be computed after update
-            var shadow_alpha = 1.0 - 0.5 * (entity.pos.z() - entity.dim.z());
+            var shadow_alpha = 1.0 - 0.5 * entity.p.z();
 
             if (shadow_alpha < 0.0) {
                 shadow_alpha = 0.0;
             }
 
             var move_spec = ety.defaultMoveSpec();
-            var dd_pos = Vec3.splat(0);
+            var ddp = Vec3.splat(0);
 
             var hero_bitmaps = game_state.hero_bitmaps[entity.facing_direction];
 
@@ -1327,7 +1390,7 @@ pub export fn updateAndRender(
 
                         if (entity.storage_index == hero.entity_index) {
                             if (hero.dz != 0) {
-                                entity.d_pos.v[2] = hero.dz;
+                                entity.dp.v[2] = hero.dz;
                             }
 
                             move_spec = .{
@@ -1336,7 +1399,7 @@ pub export fn updateAndRender(
                                 .drag = 8,
                             };
 
-                            dd_pos = Vec3.init(hero.dd_pos.x(), hero.dd_pos.y(), 0);
+                            ddp = Vec3.init(hero.ddp.x(), hero.ddp.y(), 0);
 
                             if (hero.d_sword.x() != 0 or hero.d_sword.y() != 0) {
                                 switch (entity.sword) {
@@ -1346,14 +1409,14 @@ pub export fn updateAndRender(
                                         if (sword.flags.non_spatial) {
                                             sword.distance_limit = 5;
 
-                                            var d_pos = Vec3.scale(
+                                            var dp = Vec3.scale(
                                                 &Vec3.init(hero.d_sword.x(), hero.d_sword.y(), 0),
                                                 5,
                                             );
 
-                                            d_pos = Vec3.add(&entity.d_pos, &d_pos);
+                                            dp = Vec3.add(&entity.dp, &dp);
 
-                                            ety.makeEntitySpatial(sword, entity.pos, d_pos);
+                                            ety.makeEntitySpatial(sword, entity.p, dp);
 
                                             addCollisionRule(
                                                 game_state,
@@ -1370,19 +1433,73 @@ pub export fn updateAndRender(
                     }
 
                     // TODO: z
-                    pushBitmap(&piece_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                    pushBitmap(&piece_group, &hero_bitmaps.torso, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
-                    pushBitmap(&piece_group, &hero_bitmaps.cape, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
-                    pushBitmap(&piece_group, &hero_bitmaps.head, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
+                    pushBitmap(
+                        &piece_group,
+                        &game_state.shadow,
+                        Vec2.splat(0),
+                        0,
+                        hero_bitmaps.alignment,
+                        shadow_alpha,
+                        0,
+                    );
+                    pushBitmap(
+                        &piece_group,
+                        &hero_bitmaps.torso,
+                        Vec2.splat(0),
+                        0,
+                        hero_bitmaps.alignment,
+                        1,
+                        1,
+                    );
+                    pushBitmap(
+                        &piece_group,
+                        &hero_bitmaps.cape,
+                        Vec2.splat(0),
+                        0,
+                        hero_bitmaps.alignment,
+                        1,
+                        1,
+                    );
+                    pushBitmap(
+                        &piece_group,
+                        &hero_bitmaps.head,
+                        Vec2.splat(0),
+                        0,
+                        hero_bitmaps.alignment,
+                        1,
+                        1,
+                    );
 
                     drawHitPoints(entity, &piece_group);
                 },
                 .wall => {
-                    pushBitmap(&piece_group, &game_state.tree, Vec2.splat(0), 0, Vec2.init(40, 80), 1, 1);
+                    pushBitmap(
+                        &piece_group,
+                        &game_state.tree,
+                        Vec2.splat(0),
+                        0,
+                        Vec2.init(40, 80),
+                        1,
+                        1,
+                    );
                 },
                 .stairwell => {
-                    pushRect(&piece_group, Vec2.splat(0), 0, entity.dim.xy(), Vec4.init(1, 0.5, 0, 1), 0);
-                    pushRect(&piece_group, Vec2.splat(0), entity.dim.z(), entity.dim.xy(), Vec4.init(1, 1, 0, 1), 0);
+                    pushRect(
+                        &piece_group,
+                        Vec2.splat(0),
+                        0,
+                        entity.walkable_dim,
+                        Vec4.init(1, 0.5, 0, 1),
+                        0,
+                    );
+                    pushRect(
+                        &piece_group,
+                        Vec2.splat(0),
+                        entity.walkable_height,
+                        entity.walkable_dim,
+                        Vec4.init(1, 1, 0, 1),
+                        0,
+                    );
                 },
                 .sword => {
                     move_spec = .{
@@ -1417,7 +1534,7 @@ pub export fn updateAndRender(
                             const test_entity = &region.entities[test_index];
 
                             if (test_entity.type == .hero) {
-                                const diff = Vec3.sub(&test_entity.pos, &entity.pos);
+                                const diff = Vec3.sub(&test_entity.p, &entity.p);
                                 const test_d_sq = Vec3.lengthSquared(&diff);
 
                                 if (closest_hero_d_sq > test_d_sq) {
@@ -1433,8 +1550,8 @@ pub export fn updateAndRender(
                             const acceleration = 0.5;
                             const one_over_length = acceleration / @sqrt(closest_hero_d_sq);
 
-                            const diff = Vec3.sub(&closest_hero.pos, &entity.pos);
-                            dd_pos = Vec3.scale(&diff, one_over_length);
+                            const diff = Vec3.sub(&closest_hero.p, &entity.p);
+                            ddp = Vec3.scale(&diff, one_over_length);
                         }
                     }
 
@@ -1465,7 +1582,7 @@ pub export fn updateAndRender(
             }
 
             if (!entity.flags.non_spatial and entity.flags.movable) {
-                sim.moveEntity(game_state, region, entity, input.dt_for_frame, &move_spec, dd_pos);
+                sim.moveEntity(game_state, region, entity, input.dt_for_frame, &move_spec, ddp);
             }
 
             // NOTE: With Casey's implementation, there will be one iteration of the game
@@ -1478,7 +1595,6 @@ pub export fn updateAndRender(
                 for (0..piece_group.piece_count) |piece_index| {
                     const piece = piece_group.pieces[piece_index];
                     const entity_base_p = sim.getEntityGroundPoint(entity);
-                    //const entity_base_p = Vec3.sub(&entity.pos, &Vec3.init(0, 0, 0.5 * entity.dim.z()));
                     const z_fudge = 1.0 + 0.1 * (entity_base_p.z() + piece.offset_z);
 
                     const eg_x = screen_center_x + meters_to_pixels * z_fudge * entity_base_p.x();

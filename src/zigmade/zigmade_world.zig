@@ -81,7 +81,7 @@ pub inline fn nullPosition() WorldPosition {
     return result;
 }
 
-pub inline fn isValid(p: *WorldPosition) bool {
+pub inline fn isValid(p: *const WorldPosition) bool {
     const result = p.chunk_x != TILE_CHUNK_UNINITIALIZED;
     return result;
 }
@@ -182,8 +182,8 @@ pub inline fn changeEntityLocationRaw(
     arena: *MemoryArena,
     world: *World,
     low_entity_index: u32,
-    maybe_old_p: ?*WorldPosition,
-    maybe_new_p: ?*WorldPosition,
+    maybe_old_p: ?*const WorldPosition,
+    maybe_new_p: ?*const WorldPosition,
 ) void {
     // TODO: If this moves an entity into the camera bounds, should it
     // automatically go into the high set immediately?
@@ -287,13 +287,13 @@ pub inline fn changeEntityLocation(
     maybe_world: ?*World,
     low_entity_index: u32,
     low: *LowEntity,
-    new_p_init: *WorldPosition,
+    new_p_init: *const WorldPosition,
 ) void {
-    var maybe_old_p: ?*WorldPosition = null;
-    var maybe_new_p: ?*WorldPosition = null;
+    var maybe_old_p: ?*const WorldPosition = null;
+    var maybe_new_p: ?*const WorldPosition = null;
 
-    if (isValid(&low.pos) and !low.sim.flags.non_spatial) {
-        maybe_old_p = &low.pos;
+    if (isValid(&low.p) and !low.sim.flags.non_spatial) {
+        maybe_old_p = &low.p;
     }
 
     if (isValid(new_p_init)) {
@@ -311,10 +311,10 @@ pub inline fn changeEntityLocation(
     }
 
     if (maybe_new_p) |new_p| {
-        low.pos = new_p.*;
+        low.p = new_p.*;
         low.sim.flags.non_spatial = false;
     } else {
-        low.pos = nullPosition();
+        low.p = nullPosition();
         low.sim.flags.non_spatial = true;
     }
 }
@@ -424,8 +424,8 @@ pub fn chunkPosFromTilePos(
 
 pub inline fn inSameChunk(
     world: *World,
-    a: *WorldPosition,
-    b: *WorldPosition,
+    a: *const WorldPosition,
+    b: *const WorldPosition,
 ) bool {
     assert(vecIsCanonical(world, a.offset_));
     assert(vecIsCanonical(world, b.offset_));

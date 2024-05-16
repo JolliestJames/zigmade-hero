@@ -80,6 +80,14 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
                 pub inline fn y(v: *const VecN) Scalar {
                     return v.v[1];
                 }
+                pub inline fn clamp01(v: *const VecN) VecN {
+                    var result: VecN = undefined;
+
+                    result.v[0] = math.clamp01(v.x());
+                    result.v[1] = math.clamp01(v.y());
+
+                    return result;
+                }
             },
             inline 3 => struct {
                 pub inline fn init(xs: Scalar, ys: Scalar, zs: Scalar) VecN {
@@ -228,7 +236,7 @@ pub fn Rectangle(comptime VecN: type) type {
 
         pub usingnamespace switch (VecN.n) {
             inline 2 => struct {
-                pub inline fn isInRectangle(rectangle: RectangleN, vec: VecN) bool {
+                pub inline fn isInRectangle(rectangle: *const RectangleN, vec: *const VecN) bool {
                     const result = (vec.x() >= rectangle.min.x() and
                         vec.y() >= rectangle.min.y() and
                         vec.x() < rectangle.max.x() and
@@ -236,9 +244,17 @@ pub fn Rectangle(comptime VecN: type) type {
 
                     return result;
                 }
+                pub inline fn getBarycentric(a: *const RectangleN, p: *const VecN) VecN {
+                    var result: VecN = undefined;
+
+                    result.v[0] = safeRatio0(p.x() - a.min.x(), a.max.x() - a.min.x());
+                    result.v[1] = safeRatio0(p.y() - a.min.y(), a.max.y() - a.min.y());
+
+                    return result;
+                }
             },
             inline 3 => struct {
-                pub inline fn isInRectangle(rectangle: RectangleN, vec: VecN) bool {
+                pub inline fn isInRectangle(rectangle: *const RectangleN, vec: *const VecN) bool {
                     const result = (vec.x() >= rectangle.min.x() and
                         vec.y() >= rectangle.min.y() and
                         vec.z() >= rectangle.min.z() and
@@ -248,7 +264,7 @@ pub fn Rectangle(comptime VecN: type) type {
 
                     return result;
                 }
-                pub inline fn rectanglesIntersect(a: RectangleN, b: RectangleN) bool {
+                pub inline fn rectanglesIntersect(a: *const RectangleN, b: *const RectangleN) bool {
                     const result = !(a.min.x() >= b.max.x() or
                         a.max.x() <= b.min.x() or
                         a.min.y() >= b.max.y() or
@@ -258,7 +274,7 @@ pub fn Rectangle(comptime VecN: type) type {
 
                     return result;
                 }
-                pub inline fn getBarycentric(a: RectangleN, p: VecN) VecN {
+                pub inline fn getBarycentric(a: *const RectangleN, p: *const VecN) VecN {
                     var result: VecN = undefined;
 
                     result.v[0] = safeRatio0(p.x() - a.min.x(), a.max.x() - a.min.x());
@@ -267,25 +283,33 @@ pub fn Rectangle(comptime VecN: type) type {
 
                     return result;
                 }
+                pub inline fn toRectangleXY(a: RectangleN) Rectangle2 {
+                    var result: Rectangle2 = undefined;
+
+                    result.min = a.min.xy();
+                    result.max = a.max.xy();
+
+                    return result;
+                }
             },
             else => @compileError("Expected Vec2, Vec3, found '" ++ @typeName(VecN) ++ "'"),
         };
 
-        pub inline fn init(min: VecN, max: VecN) VecN {
+        pub inline fn init(min: *const VecN, max: *const VecN) VecN {
             return .{ .min = min, .max = max };
         }
 
-        pub inline fn getMinCorner(rect: RectangleN) VecN {
+        pub inline fn getMinCorner(rect: *const RectangleN) VecN {
             const result = rect.min;
             return result;
         }
 
-        pub inline fn getMaxCorner(rect: RectangleN) VecN {
+        pub inline fn getMaxCorner(rect: *const RectangleN) VecN {
             const result = rect.max;
             return result;
         }
 
-        pub inline fn getCenter(rect: RectangleN) VecN {
+        pub inline fn getCenter(rect: *const RectangleN) VecN {
             const result = VecN.scale(
                 VecN.add(rect.min, rect.max),
                 0.5,
@@ -293,7 +317,7 @@ pub fn Rectangle(comptime VecN: type) type {
             return result;
         }
 
-        pub inline fn rectMinMax(min: VecN, max: VecN) RectangleN {
+        pub inline fn rectMinMax(min: *const VecN, max: *const VecN) RectangleN {
             var result: RectangleN = undefined;
 
             result.min = min;
@@ -302,7 +326,7 @@ pub fn Rectangle(comptime VecN: type) type {
             return result;
         }
 
-        pub inline fn rectMinDim(min: VecN, dim: VecN) RectangleN {
+        pub inline fn rectMinDim(min: *const VecN, dim: *const VecN) RectangleN {
             var result: RectangleN = undefined;
 
             result.min = min;
@@ -311,29 +335,26 @@ pub fn Rectangle(comptime VecN: type) type {
             return result;
         }
 
-        pub inline fn addRadius(
-            rect: RectangleN,
-            radius: VecN,
-        ) RectangleN {
+        pub inline fn addRadius(rect: *const RectangleN, radius: *const VecN) RectangleN {
             var result: RectangleN = undefined;
 
-            result.min = VecN.sub(&rect.min, &radius);
-            result.max = VecN.add(&rect.max, &radius);
+            result.min = VecN.sub(&rect.min, radius);
+            result.max = VecN.add(&rect.max, radius);
 
             return result;
         }
 
-        pub inline fn centerDim(center: VecN, dim: VecN) RectangleN {
-            const result = centerHalfDim(center, VecN.scale(&dim, 0.5));
+        pub inline fn centerDim(center: *const VecN, dim: *const VecN) RectangleN {
+            const result = centerHalfDim(center, &VecN.scale(dim, 0.5));
 
             return result;
         }
 
-        pub inline fn centerHalfDim(center: VecN, half_dim: VecN) RectangleN {
+        pub inline fn centerHalfDim(center: *const VecN, half_dim: *const VecN) RectangleN {
             var result: RectangleN = undefined;
 
-            result.min = VecN.sub(&center, &half_dim);
-            result.max = VecN.add(&center, &half_dim);
+            result.min = VecN.sub(center, half_dim);
+            result.max = VecN.add(center, half_dim);
 
             return result;
         }
