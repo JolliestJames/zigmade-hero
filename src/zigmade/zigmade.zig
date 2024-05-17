@@ -177,6 +177,7 @@ pub const GameState = struct {
     familiar_collision: *EntityCollisionVolumeGroup,
     monster_collision: *EntityCollisionVolumeGroup,
     wall_collision: *EntityCollisionVolumeGroup,
+    standard_room_collision: *EntityCollisionVolumeGroup,
 };
 
 pub const MemoryArena = struct {
@@ -568,6 +569,32 @@ fn addGroundedEntity(
     return result;
 }
 
+fn addStandardRoom(
+    game_state: *GameState,
+    abs_tile_x: i32,
+    abs_tile_y: i32,
+    abs_tile_z: i32,
+) AddLowEntityResult {
+    var pos = world.chunkPosFromTilePos(
+        game_state.world.?,
+        abs_tile_x,
+        abs_tile_y,
+        abs_tile_z,
+        Vec3.splat(0),
+    );
+
+    var entity = addGroundedEntity(
+        game_state,
+        .space,
+        &pos,
+        game_state.standard_room_collision,
+    );
+
+    entity.low.sim.flags.traversable = true;
+
+    return entity;
+}
+
 fn addWall(
     game_state: *GameState,
     abs_tile_x: i32,
@@ -790,6 +817,63 @@ fn pushRect(
     pushPiece(group, null, offset, offset_z, Vec2.splat(0), dim, color, entity_zc);
 }
 
+fn pushRectOutline(
+    group: *EntityVisiblePieceGroup,
+    offset: Vec2,
+    offset_z: f32,
+    dim: Vec2,
+    color: Vec4,
+    entity_zc: f32,
+) void {
+    const thickness = 0.1;
+
+    // NOTE: Top and bottom
+    pushPiece(
+        group,
+        null,
+        Vec2.sub(&offset, &Vec2.init(0, 0.5 * dim.y())),
+        offset_z,
+        Vec2.splat(0),
+        Vec2.init(dim.x(), thickness),
+        color,
+        entity_zc,
+    );
+
+    pushPiece(
+        group,
+        null,
+        Vec2.add(&offset, &Vec2.init(0, 0.5 * dim.y())),
+        offset_z,
+        Vec2.splat(0),
+        Vec2.init(dim.x(), thickness),
+        color,
+        entity_zc,
+    );
+
+    // NOTE: Left and right
+    pushPiece(
+        group,
+        null,
+        Vec2.sub(&offset, &Vec2.init(0.5 * dim.x(), 0)),
+        offset_z,
+        Vec2.splat(0),
+        Vec2.init(thickness, dim.y()),
+        color,
+        entity_zc,
+    );
+
+    pushPiece(
+        group,
+        null,
+        Vec2.add(&offset, &Vec2.init(0.5 * dim.x(), 0)),
+        offset_z,
+        Vec2.splat(0),
+        Vec2.init(thickness, dim.y()),
+        color,
+        entity_zc,
+    );
+}
+
 fn drawHitPoints(
     entity: *Entity,
     piece_group: *EntityVisiblePieceGroup,
@@ -958,6 +1042,9 @@ pub export fn updateAndRender(
     var game_state: *GameState = @alignCast(@ptrCast(memory.permanent_storage));
 
     if (!memory.is_initialized) {
+        const tiles_per_width = 17;
+        const tiles_per_height = 9;
+
         // TODO: Can we just use Zig's own arena allocator?
         // TODO: Let's start partitioning our memory space
         initializeArena(
@@ -997,6 +1084,13 @@ pub export fn updateAndRender(
             game_world.tile_side_in_meters,
             game_world.tile_side_in_meters,
             game_world.tile_depth_in_meters,
+        );
+
+        game_state.standard_room_collision = makeSimpleGroundedCollision(
+            game_state,
+            tiles_per_width * game_world.tile_side_in_meters,
+            tiles_per_height * game_world.tile_side_in_meters,
+            0.9 * game_world.tile_depth_in_meters,
         );
 
         game_state.backdrop = debugLoadBmp(
@@ -1094,9 +1188,6 @@ pub export fn updateAndRender(
         );
         bitmaps[3].alignment = .{ .v = .{ 72, 182 } };
 
-        const tiles_per_width = 17;
-        const tiles_per_height = 9;
-
         // TODO: Waiting for full sparseness
         const screen_base_x: i32 = 0;
         const screen_base_y: i32 = 0;
@@ -1137,6 +1228,13 @@ pub export fn updateAndRender(
             } else {
                 door_top = true;
             }
+
+            _ = addStandardRoom(
+                game_state,
+                screen_x * tiles_per_width + tiles_per_width / 2,
+                screen_y * tiles_per_height + tiles_per_height / 2,
+                abs_tile_z,
+            );
 
             for (0..tiles_per_height) |tile_y| {
                 for (0..tiles_per_width) |tile_x| {
@@ -1575,6 +1673,20 @@ pub export fn updateAndRender(
                     pushBitmap(&piece_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
                     pushBitmap(&piece_group, &hero_bitmaps.torso, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
                     drawHitPoints(entity, &piece_group);
+                },
+                .space => {
+                    for (0..entity.collision.volume_count) |volume_index| {
+                        const volume = &entity.collision.volumes.?[volume_index];
+
+                        pushRectOutline(
+                            &piece_group,
+                            volume.offset_p.xy(),
+                            0,
+                            volume.dim.xy(),
+                            Vec4.init(0, 0.5, 1, 1),
+                            0,
+                        );
+                    }
                 },
                 else => {
                     invalidCodePath();

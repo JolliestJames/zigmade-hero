@@ -32,6 +32,7 @@ pub const MoveSpec = struct {
 
 pub const EntityType = enum {
     none,
+    space,
     hero,
     wall,
     familiar,
@@ -52,12 +53,14 @@ const EntityReference = union(EntityReferenceTag) {
 
 const EntityFlags = packed struct(u32) {
     // TODO: Does it make more sense for this flag to be non_colliding?
+    // TODO: collides and z_supported can probably be removed soon
     collides: bool = false,
     non_spatial: bool = false,
     movable: bool = false,
     simming: bool = false,
     z_supported: bool = false,
-    _padding: u27 = 0,
+    traversable: bool = false,
+    _padding: u26 = 0,
 };
 
 pub const EntityCollisionVolume = struct {
@@ -514,23 +517,27 @@ fn canCollide(
             b = temp;
         }
 
-        if (!a.flags.non_spatial and
-            !b.flags.non_spatial)
+        if (a.flags.collides and
+            b.flags.collides)
         {
-            // TODO: Property-based logic goes here
-            result = true;
-        }
-
-        // TODO: BETTER HASH FUNCTION
-        const bucket = a.storage_index & (game_state.collision_rule_hash.len - 1);
-        var maybe_rule = game_state.collision_rule_hash[bucket];
-
-        while (maybe_rule) |rule| : (maybe_rule = rule.next_in_hash) {
-            if (rule.storage_index_a == a.storage_index and
-                rule.storage_index_b == b.storage_index)
+            if (!a.flags.non_spatial and
+                !b.flags.non_spatial)
             {
-                result = rule.can_collide;
-                break;
+                // TODO: Property-based logic goes here
+                result = true;
+            }
+
+            // TODO: BETTER HASH FUNCTION
+            const bucket = a.storage_index & (game_state.collision_rule_hash.len - 1);
+            var maybe_rule = game_state.collision_rule_hash[bucket];
+
+            while (maybe_rule) |rule| : (maybe_rule = rule.next_in_hash) {
+                if (rule.storage_index_a == a.storage_index and
+                    rule.storage_index_b == b.storage_index)
+                {
+                    result = rule.can_collide;
+                    break;
+                }
             }
         }
     }
