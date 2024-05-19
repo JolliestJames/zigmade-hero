@@ -14,6 +14,7 @@
 //     "Frinstances"
 //     z_fudge
 // - Collision detection?
+//   - Fix sword collisions
 //   - Clean up predicate proliferation. Can we make a nice clean
 //     set of flags/rules so that it's easy to understand how things work
 //     in terms of special handling. This may involve making the iteration
@@ -36,11 +37,12 @@
 //   - Draw tile chunks so we can verify that things are aligned/in the
 //     chunks we want them to be in/etc.
 //
+// - Asset streaming
+//
 // - Audio
 //   - Sound effect triggers
 //   - Ambience sounds
 //   - Music
-// - Asset streaming
 //
 // - Metagame/save game?
 //   - How do you enter "save slot"?
@@ -1204,7 +1206,7 @@ pub export fn updateAndRender(
         var door_up = false;
         var door_down = false;
 
-        for (0..2000) |_| {
+        for (0..2000) |screen_index| {
             var random_choice: usize = undefined;
 
             if (door_up or door_down) {
@@ -1264,7 +1266,9 @@ pub export fn updateAndRender(
                     }
 
                     if (should_be_door) {
-                        _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
+                        if (screen_index == 0) {
+                            _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
+                        }
                     } else if (created_z_door) {
                         if (tile_x == 10 and tile_y == 5) {
                             _ = addStair(

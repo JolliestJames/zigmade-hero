@@ -472,6 +472,39 @@ pub fn endSim(
     }
 }
 
+const TestWall = struct {
+    x: f32,
+    rel_x: f32,
+    rel_y: f32,
+    dx: f32,
+    dy: f32,
+    min_y: f32,
+    max_y: f32,
+    normal: Vec3,
+
+    fn init(
+        x: f32,
+        rel_x: f32,
+        rel_y: f32,
+        dx: f32,
+        dy: f32,
+        min_y: f32,
+        max_y: f32,
+        normal: Vec3,
+    ) TestWall {
+        return .{
+            .x = x,
+            .rel_x = rel_x,
+            .rel_y = rel_y,
+            .dx = dx,
+            .dy = dy,
+            .min_y = min_y,
+            .max_y = max_y,
+            .normal = normal,
+        };
+    }
+};
+
 fn testWall(
     wall: f32,
     rel_x: f32,
@@ -662,6 +695,43 @@ pub fn speculativeCollide(
     return result;
 }
 
+fn entitiesOverlap(
+    entity: *Entity,
+    test_entity: *Entity,
+    epsilon: Vec3,
+) bool {
+    var result = false;
+
+    for (0..entity.collision.volume_count) |volume_index| {
+        if (result) break;
+
+        var volume = &entity.collision.volumes.?[volume_index];
+
+        for (0..test_entity.collision.volume_count) |test_volume_index| {
+            if (result) break;
+
+            var test_volume = &test_entity.collision.volumes.?[test_volume_index];
+
+            const entity_rect = Rectangle3.centerDim(
+                &Vec3.add(&entity.p, &volume.offset_p),
+                &Vec3.add(&volume.dim, &epsilon),
+            );
+
+            const test_entity_rect = Rectangle3.centerDim(
+                &Vec3.add(&test_entity.p, &test_volume.offset_p),
+                &test_volume.dim,
+            );
+
+            result = Rectangle3.rectanglesIntersect(
+                &entity_rect,
+                &test_entity_rect,
+            );
+        }
+    }
+
+    return result;
+}
+
 pub fn moveEntity(
     game_state: *GameState,
     region: *SimRegion,
@@ -716,7 +786,9 @@ pub fn moveEntity(
     }
 
     for (0..4) |_| {
-        var t_min: f32 = 1.0;
+        var t_min: f32 = 1;
+        var t_max: f32 = 0;
+
         const player_delta_length = Vec3.length(&player_d);
 
         // TODO: What do we want to do for epsilons here?
@@ -726,8 +798,10 @@ pub fn moveEntity(
                 t_min = distance_remaining / player_delta_length;
             }
 
-            var wall_normal = Vec3.splat(0);
-            var hit_entity: ?*Entity = null;
+            var wall_normal_min = Vec3.splat(0);
+            var wall_normal_max = Vec3.splat(0);
+            var hit_entity_min: ?*Entity = null;
+            var hit_entity_max: ?*Entity = null;
 
             const desired_position = Vec3.add(&entity.p, &player_d);
 
@@ -738,66 +812,139 @@ pub fn moveEntity(
                 for (0..region.entity_count) |high_index| {
                     const test_entity = &region.entities[high_index];
 
-                    if (canCollide(game_state, entity, test_entity)) {
+                    // TODO: Robustness
+                    const overlap_epsilon = 0.001;
+
+                    if ((test_entity.flags.traversable and
+                        entitiesOverlap(entity, test_entity, Vec3.splat(overlap_epsilon))) or
+                        canCollide(game_state, entity, test_entity))
+                    {
                         for (0..entity.collision.volume_count) |volume_index| {
-                            if (entity.collision.volumes) |volumes| {
-                                var volume = &volumes[volume_index];
+                            var volume = &entity.collision.volumes.?[volume_index];
 
-                                for (0..test_entity.collision.volume_count) |test_volume_index| {
-                                    if (test_entity.collision.volumes) |test_volumes| {
-                                        var test_volume = &test_volumes[test_volume_index];
+                            for (0..test_entity.collision.volume_count) |test_volume_index| {
+                                var test_volume = &test_entity.collision.volumes.?[test_volume_index];
 
-                                        const minkowski_diameter = Vec3.init(
-                                            test_volume.dim.x() + volume.dim.x(),
-                                            test_volume.dim.y() + volume.dim.y(),
-                                            test_volume.dim.z() + volume.dim.z(),
-                                        );
+                                const minkowski_diameter = Vec3.init(
+                                    test_volume.dim.x() + volume.dim.x(),
+                                    test_volume.dim.y() + volume.dim.y(),
+                                    test_volume.dim.z() + volume.dim.z(),
+                                );
 
-                                        const min_c = Vec3.scale(&minkowski_diameter, -0.5);
-                                        const max_c = Vec3.scale(&minkowski_diameter, 0.5);
+                                const min_c = Vec3.scale(&minkowski_diameter, -0.5);
+                                const max_c = Vec3.scale(&minkowski_diameter, 0.5);
 
-                                        const rel = Vec3.sub(
-                                            &Vec3.add(&entity.p, &volume.offset_p),
-                                            &Vec3.add(&test_entity.p, &test_volume.offset_p),
-                                        );
+                                const rel = Vec3.sub(
+                                    &Vec3.add(&entity.p, &volume.offset_p),
+                                    &Vec3.add(&test_entity.p, &test_volume.offset_p),
+                                );
 
-                                        // TODO: Do we want an open inclusion at the max corner?
-                                        if (rel.z() >= min_c.z() and rel.z() < max_c.z()) {
-                                            var t_min_test = t_min;
-                                            var test_wall_normal = Vec3.splat(0);
-                                            var hit_this = false;
+                                // TODO: Do we want an open inclusion at the max corner?
+                                if (rel.z() >= min_c.z() and rel.z() < max_c.z()) {
+                                    const walls = [_]TestWall{
+                                        TestWall.init(
+                                            min_c.x(),
+                                            rel.x(),
+                                            rel.y(),
+                                            player_d.x(),
+                                            player_d.y(),
+                                            min_c.y(),
+                                            max_c.y(),
+                                            Vec3.init(-1, 0, 0),
+                                        ),
+                                        TestWall.init(
+                                            max_c.x(),
+                                            rel.x(),
+                                            rel.y(),
+                                            player_d.x(),
+                                            player_d.y(),
+                                            min_c.y(),
+                                            max_c.y(),
+                                            Vec3.init(1, 0, 0),
+                                        ),
+                                        TestWall.init(
+                                            min_c.y(),
+                                            rel.y(),
+                                            rel.x(),
+                                            player_d.y(),
+                                            player_d.x(),
+                                            min_c.x(),
+                                            max_c.x(),
+                                            Vec3.init(0, -1, 0),
+                                        ),
+                                        TestWall.init(
+                                            max_c.y(),
+                                            rel.y(),
+                                            rel.x(),
+                                            player_d.y(),
+                                            player_d.x(),
+                                            min_c.x(),
+                                            max_c.x(),
+                                            Vec3.init(0, 1, 0),
+                                        ),
+                                    };
 
-                                            if (testWall(min_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
-                                                test_wall_normal = Vec3.init(-1, 0, 0);
-                                                hit_this = true;
-                                            }
+                                    if (test_entity.flags.traversable) {
+                                        var t_max_test: f32 = t_max;
+                                        var hit_this = false;
+                                        var test_wall_normal = Vec3.splat(0);
 
-                                            if (testWall(max_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), &t_min_test, min_c.y(), max_c.y())) {
-                                                test_wall_normal = Vec3.init(1, 0, 0);
-                                                hit_this = true;
-                                            }
+                                        for (0..walls.len) |wall_index| {
+                                            const wall = walls[wall_index];
+                                            const t_epsilon = 0.001;
 
-                                            if (testWall(min_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
-                                                test_wall_normal = Vec3.init(0, -1, 0);
-                                                hit_this = true;
-                                            }
+                                            if (wall.dx != 0.0) {
+                                                const t_result = (wall.x - wall.rel_x) / wall.dx;
+                                                const y = wall.rel_y + t_result * wall.dy;
 
-                                            if (testWall(max_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), &t_min_test, min_c.x(), max_c.x())) {
-                                                test_wall_normal = Vec3.init(0, 1, 0);
-                                                hit_this = true;
-                                            }
-
-                                            // TODO: We need a concept of stepping onto vs stepping off
-                                            // of here so that we can prevent you from _leaving_
-                                            // stairs intead of just preventing you from getting onto them
-                                            if (hit_this) {
-                                                //const test_p = Vec3.add(&entity.pos, &Vec3.scale(&player_d, t_min_test),);
-
-                                                if (speculativeCollide(entity, test_entity)) {
-                                                    t_min = t_min_test;
-                                                    wall_normal = test_wall_normal;
-                                                    hit_entity = test_entity;
+                                                if (t_result >= 0.0 and t_max_test < t_result) {
+                                                    if (y >= wall.min_y and y <= wall.max_y) {
+                                                        t_max_test = @max(0, t_result - t_epsilon);
+                                                        test_wall_normal = wall.normal;
+                                                        hit_this = true;
+                                                    }
                                                 }
+                                            }
+                                        }
+
+                                        if (hit_this) {
+                                            t_max = t_max_test;
+                                            wall_normal_max = test_wall_normal;
+                                            hit_entity_max = test_entity;
+                                        }
+                                    } else {
+                                        var t_min_test = t_min;
+                                        var hit_this = false;
+                                        var test_wall_normal = Vec3.splat(0);
+
+                                        for (0..walls.len) |wall_index| {
+                                            const wall = walls[wall_index];
+                                            const t_epsilon = 0.001;
+
+                                            if (wall.dx != 0.0) {
+                                                const t_result = (wall.x - wall.rel_x) / wall.dx;
+                                                const y = wall.rel_y + t_result * wall.dy;
+
+                                                if (t_result >= 0.0 and t_min_test > t_result) {
+                                                    if (y >= wall.min_y and y <= wall.max_y) {
+                                                        t_min_test = @max(0.0, t_result - t_epsilon);
+                                                        test_wall_normal = wall.normal;
+                                                        hit_this = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // TODO: We need a concept of stepping onto vs stepping off
+                                        // of here so that we can prevent you from _leaving_
+                                        // stairs intead of just preventing you from getting onto them
+                                        if (hit_this) {
+                                            //const test_p = Vec3.add(&entity.pos, &Vec3.scale(&player_d, t_min_test),);
+
+                                            if (speculativeCollide(entity, test_entity)) {
+                                                t_min = t_min_test;
+                                                wall_normal_min = test_wall_normal;
+                                                hit_entity_min = test_entity;
                                             }
                                         }
                                     }
@@ -808,12 +955,26 @@ pub fn moveEntity(
                 }
             }
 
+            var wall_normal = Vec3.splat(0);
+            var hit_entity: ?*Entity = null;
+            var t_stop: f32 = undefined;
+
+            if (t_min < t_max) {
+                t_stop = t_min;
+                hit_entity = hit_entity_min;
+                wall_normal = wall_normal_min;
+            } else {
+                t_stop = t_max;
+                hit_entity = hit_entity_max;
+                wall_normal = wall_normal_max;
+            }
+
             entity.p = Vec3.add(
                 &entity.p,
-                &Vec3.scale(&player_d, t_min),
+                &Vec3.scale(&player_d, t_stop),
             );
 
-            distance_remaining -= t_min * player_delta_length;
+            distance_remaining -= t_stop * player_delta_length;
 
             if (hit_entity) |hit| {
                 player_d = Vec3.sub(&desired_position, &entity.p);
@@ -835,28 +996,17 @@ pub fn moveEntity(
 
     var ground: f32 = 0;
 
-    // TODO: Handle multi-volumes here?
     // NOTE: Handle events based on area overlapping
     // TODO: Handle overlapping precisely by moving it into the collision loop?
     {
-        const entity_rect = Rectangle3.centerDim(
-            &Vec3.add(&entity.p, &entity.collision.total_volume.offset_p),
-            &entity.collision.total_volume.dim,
-        );
-
         // TODO: Spatial partition here!
         for (0..region.entity_count) |high_index| {
             const test_entity = &region.entities[high_index];
 
-            if (canOverlap(game_state, entity, test_entity)) {
-                const test_entity_rect = Rectangle3.centerDim(
-                    &Vec3.add(&test_entity.p, &test_entity.collision.total_volume.offset_p),
-                    &test_entity.collision.total_volume.dim,
-                );
-
-                if (Rectangle3.rectanglesIntersect(&entity_rect, &test_entity_rect)) {
-                    handleOverlap(game_state, entity, test_entity, dt, &ground);
-                }
+            if (canOverlap(game_state, entity, test_entity) and
+                entitiesOverlap(entity, test_entity, Vec3.splat(0)))
+            {
+                handleOverlap(game_state, entity, test_entity, dt, &ground);
             }
         }
     }
