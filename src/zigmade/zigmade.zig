@@ -162,6 +162,9 @@ pub const GameState = struct {
     low_entity_count: u32 = 0,
     // TODO: Change name to StoredEntity
     low_entities: [100000]LowEntity,
+    grass: [2]Bitmap,
+    stone: [4]Bitmap,
+    tuft: [3]Bitmap,
     backdrop: Bitmap,
     shadow: Bitmap,
     hero_bitmaps: [4]HeroBitmaps,
@@ -1026,6 +1029,100 @@ fn makeNullCollision(game_state: *GameState) *EntityCollisionVolumeGroup {
     return group;
 }
 
+fn drawTestGround(game_state: *GameState, buffer: *platform.GameOffscreenBuffer) void {
+    const state = struct {
+        var offsets: [100]Vec2 = undefined;
+        var stamps: [100]*Bitmap = undefined;
+        var tuft_offsets: [100]Vec2 = undefined;
+        var tuft_stamps: [100]*Bitmap = undefined;
+        var initialized: bool = false;
+    };
+
+    // TODO: Maybe make random number generation more systemic
+    const center = Vec2.scale(&Vec2.fromInt(
+        buffer.width,
+        buffer.height,
+    ), 0.5);
+
+    if (!state.initialized) {
+        for (0..100) |grass_index| {
+            var stamp: *Bitmap = undefined;
+
+            if (rand.random().int(usize) % 2 > 0) {
+                stamp = &game_state.grass[rand.random().int(usize) % game_state.grass.len];
+            } else {
+                stamp = &game_state.stone[rand.random().int(usize) % game_state.stone.len];
+            }
+
+            const tuft_stamp = &game_state.tuft[
+                rand.random().int(usize) %
+                    game_state.tuft.len
+            ];
+
+            const random_x: f32 =
+                @floatFromInt(rand.random().intRangeAtMost(u32, 0, 8192));
+            const random_y: f32 =
+                @floatFromInt(rand.random().intRangeAtMost(u32, 0, 8192));
+
+            const random_tuft_x: f32 =
+                @floatFromInt(rand.random().intRangeAtMost(u32, 0, 8192));
+            const random_tuft_y: f32 =
+                @floatFromInt(rand.random().intRangeAtMost(u32, 0, 8192));
+
+            const offset = Vec2.init(
+                2 * random_x / 8192 - 1,
+                2 * random_y / 8192 - 1,
+            );
+
+            const tuft_offset = Vec2.init(
+                2 * random_tuft_x / 8192 - 1,
+                2 * random_tuft_y / 8192 - 1,
+            );
+
+            state.offsets[grass_index] = offset;
+            state.stamps[grass_index] = stamp;
+            state.tuft_offsets[grass_index] = tuft_offset;
+            state.tuft_stamps[grass_index] = tuft_stamp;
+        }
+
+        state.initialized = true;
+    }
+
+    const radius: f32 = 5;
+
+    for (state.offsets, state.stamps) |offset, stamp| {
+        const bitmap_center = Vec2.scale(
+            &Vec2.fromInt(stamp.width, stamp.height),
+            0.5,
+        );
+
+        var p = Vec2.add(
+            &center,
+            &Vec2.scale(&offset, game_state.meters_to_pixels * radius),
+        );
+
+        p = Vec2.sub(&p, &bitmap_center);
+
+        drawBitmap(buffer, stamp, p.x(), p.y(), 1);
+    }
+
+    for (state.tuft_offsets, state.tuft_stamps) |offset, stamp| {
+        const bitmap_center = Vec2.scale(
+            &Vec2.fromInt(stamp.width, stamp.height),
+            0.5,
+        );
+
+        var p = Vec2.add(
+            &center,
+            &Vec2.scale(&offset, game_state.meters_to_pixels * radius),
+        );
+
+        p = Vec2.sub(&p, &bitmap_center);
+
+        drawBitmap(buffer, stamp, p.x(), p.y(), 1);
+    }
+}
+
 // GAME NEEDS FOUR THINGS
 // - timing
 // - controller/keyboard input
@@ -1095,99 +1192,69 @@ pub export fn updateAndRender(
             0.9 * game_world.tile_depth_in_meters,
         );
 
-        game_state.backdrop = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_background.bmp",
-        );
-        game_state.shadow = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_shadow.bmp",
-        );
-        game_state.tree = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test2/tree00.bmp",
-        );
-        game_state.stairwell = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test2/rock02.bmp",
-        );
-        game_state.sword = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test2/rock03.bmp",
-        );
+        game_state.grass[0] =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/grass00.bmp");
+        game_state.grass[1] =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/grass01.bmp");
+
+        game_state.stone[0] =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/ground00.bmp");
+        game_state.stone[1] =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/ground01.bmp");
+        game_state.stone[2] =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/ground02.bmp");
+        game_state.stone[3] =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/ground03.bmp");
+
+        game_state.tuft[0] =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft00.bmp");
+        game_state.tuft[1] =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft01.bmp");
+        game_state.tuft[2] =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft02.bmp");
+
+        game_state.backdrop =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_background.bmp");
+        game_state.shadow =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_shadow.bmp");
+        game_state.tree =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/tree00.bmp");
+        game_state.stairwell =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/rock02.bmp");
+        game_state.sword =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/rock03.bmp");
 
         var bitmaps = &game_state.hero_bitmaps;
-        bitmaps[0].head = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_right_head.bmp",
-        );
-        bitmaps[0].cape = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_right_cape.bmp",
-        );
-        bitmaps[0].torso = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_right_torso.bmp",
-        );
+        bitmaps[0].head =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_head.bmp");
+        bitmaps[0].cape =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_cape.bmp");
+        bitmaps[0].torso =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_torso.bmp");
         bitmaps[0].alignment = .{ .v = .{ 72, 182 } };
 
-        bitmaps[1].head = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_back_head.bmp",
-        );
-        bitmaps[1].cape = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_back_cape.bmp",
-        );
-        bitmaps[1].torso = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_back_torso.bmp",
-        );
+        bitmaps[1].head =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_head.bmp");
+        bitmaps[1].cape =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_cape.bmp");
+        bitmaps[1].torso =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_torso.bmp");
         bitmaps[1].alignment = .{ .v = .{ 72, 182 } };
 
-        bitmaps[2].head = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_left_head.bmp",
-        );
-        bitmaps[2].cape = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_left_cape.bmp",
-        );
-        bitmaps[2].torso = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_left_torso.bmp",
-        );
+        bitmaps[2].head =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_head.bmp");
+        bitmaps[2].cape =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_cape.bmp");
+        bitmaps[2].torso =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_torso.bmp");
         bitmaps[2].alignment = .{ .v = .{ 72, 182 } };
 
-        bitmaps[3].head = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_front_head.bmp",
-        );
-        bitmaps[3].cape = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_front_cape.bmp",
-        );
-        bitmaps[3].torso = debugLoadBmp(
-            thread,
-            memory.debugPlatformReadEntireFile,
-            "data/test/test_hero_front_torso.bmp",
-        );
+        bitmaps[3].head =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_head.bmp");
+        bitmaps[3].cape =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_cape.bmp");
+        bitmaps[3].torso =
+            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_torso.bmp");
         bitmaps[3].alignment = .{ .v = .{ 72, 182 } };
 
         // TODO: Waiting for full sparseness
@@ -1456,6 +1523,8 @@ pub export fn updateAndRender(
     } else {
         drawBitmap(buffer, &game_state.backdrop, 0.0, 0.0, 0.0, 0.0, 1.0);
     }
+
+    drawTestGround(game_state, buffer);
 
     const screen_center_x = 0.5 * @as(f32, @floatFromInt(buffer.width));
     const screen_center_y = 0.5 * @as(f32, @floatFromInt(buffer.height));
