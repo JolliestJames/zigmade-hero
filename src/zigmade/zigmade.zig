@@ -80,6 +80,7 @@ const math = @import("zigmade_math.zig");
 const sim = @import("zigmade_sim_region.zig");
 const ety = @import("zigmade_entity.zig");
 const intrinsics = @import("zigmade_intrinsics.zig");
+const random = @import("zigmade_random.zig");
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
 const lossyCast = std.math.lossyCast;
@@ -183,6 +184,7 @@ pub const GameState = struct {
     monster_collision: *EntityCollisionVolumeGroup,
     wall_collision: *EntityCollisionVolumeGroup,
     standard_room_collision: *EntityCollisionVolumeGroup,
+    ground_buffer: Bitmap,
 };
 
 pub const MemoryArena = struct {
@@ -194,10 +196,8 @@ pub const MemoryArena = struct {
 const Bitmap = struct {
     width: i32,
     height: i32,
-    content: extern union {
-        bytes: [*]u8,
-        pixels: [*]u32,
-    },
+    pitch: i32,
+    memory: [*]void,
 };
 
 const BitmapHeader = packed struct {
@@ -221,8 +221,6 @@ const BitmapHeader = packed struct {
     green_mask: u32,
     blue_mask: u32,
 };
-
-var rand = std.rand.DefaultPrng.init(8192);
 
 pub fn invalidCodePath() void {
     std.debug.print("Invalid code path\n", .{});
@@ -269,7 +267,7 @@ fn gameOutputSound(
 }
 
 fn drawRectangle(
-    buffer: *platform.GameOffscreenBuffer,
+    buffer: *const Bitmap,
     min: Vec2,
     max: Vec2,
     r: f32,
@@ -295,7 +293,7 @@ fn drawRectangle(
 
     var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
         (@as(u32, @intCast(min_x)) *
-        @as(u32, @intCast(buffer.bytes_per_pixel))) +
+        @as(u32, @intCast(platform.BITMAP_BYTES_PER_PIXEL))) +
         @as(u32, @bitCast(min_y *% buffer.pitch));
 
     for (@intCast(min_y)..@intCast(max_y)) |_| {
@@ -311,7 +309,7 @@ fn drawRectangle(
 }
 
 fn drawBitmap(
-    buffer: *platform.GameOffscreenBuffer,
+    buffer: *const Bitmap,
     bitmap: *Bitmap,
     real_x: f32,
     real_y: f32,
@@ -341,39 +339,51 @@ fn drawBitmap(
     if (min_x > max_x) max_x = min_x;
     if (min_y > max_y) max_y = min_y;
 
-    var source_row = bitmap.content.pixels +
-        @as(u32, @intCast(bitmap.width * (bitmap.height - 1))) -
-        @as(u32, @intCast(bitmap.width * source_offset_y)) +
-        @as(u32, @intCast(source_offset_x));
+    var source_row: [*]u8 = undefined;
+    const bitmap_offset = source_offset_y * bitmap.pitch +
+        platform.BITMAP_BYTES_PER_PIXEL * source_offset_x;
+
+    if (bitmap_offset > 0) {
+        source_row = @as([*]u8, @ptrCast(bitmap.memory)) +
+            @as(usize, @intCast(bitmap_offset));
+    } else {
+        source_row = @as([*]u8, @ptrCast(bitmap.memory)) -
+            @as(usize, @intCast(-bitmap_offset));
+    }
 
     var dest_row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
         (@as(u32, @intCast(min_x)) *
-        @as(u32, @intCast(buffer.bytes_per_pixel))) +
+        @as(u32, @intCast(platform.BITMAP_BYTES_PER_PIXEL))) +
         @as(u32, @bitCast(min_y *% buffer.pitch));
 
     for (@intCast(min_y)..@intCast(max_y)) |_| {
         var dest: [*]u32 = @alignCast(@ptrCast(dest_row));
-        var source = source_row;
+        var source: [*]align(@alignOf(u8)) u32 = @alignCast(@ptrCast(source_row));
 
         for (@intCast(min_x)..@intCast(max_x)) |_| {
-            var a = @as(f32, @floatFromInt(((source[0] >> 24) & 0xFF))) / 255.0;
-            a *= @floatCast(c_alpha);
+            var sa = @as(f32, @floatFromInt(((source[0] >> 24) & 0xFF))) / 255.0;
+            sa *= @floatCast(c_alpha);
 
             const sr: f32 = @floatFromInt((source[0] >> 16) & 0xFF);
             const sg: f32 = @floatFromInt((source[0] >> 8) & 0xFF);
             const sb: f32 = @floatFromInt((source[0] >> 0) & 0xFF);
 
+            const da: f32 = @floatFromInt((dest[0] >> 24) & 0xFF);
             const dr: f32 = @floatFromInt((dest[0] >> 16) & 0xFF);
             const dg: f32 = @floatFromInt((dest[0] >> 8) & 0xFF);
             const db: f32 = @floatFromInt((dest[0] >> 0) & 0xFF);
 
             // TODO: Someday, we need to talk about premultiplied alpha!
             // which this is not
-            const r = (1.0 - a) * dr + a * sr;
-            const g = (1.0 - a) * dg + a * sg;
-            const b = (1.0 - a) * db + a * sb;
 
-            dest[0] = (lossyCast(u32, r + 0.5) << 16) |
+            // TODO: Compute the right alpha here
+            const a = @max(da, 255 * sa);
+            const r = (1.0 - sa) * dr + sa * sr;
+            const g = (1.0 - sa) * dg + sa * sg;
+            const b = (1.0 - sa) * db + sa * sb;
+
+            dest[0] = (lossyCast(u32, a + 0.5) << 24) |
+                (lossyCast(u32, r + 0.5) << 16) |
                 (lossyCast(u32, g + 0.5) << 8) |
                 (lossyCast(u32, b + 0.5) << 0);
 
@@ -382,7 +392,12 @@ fn drawBitmap(
         }
 
         dest_row += @as(usize, @intCast(buffer.pitch));
-        source_row -= @as(usize, @intCast(bitmap.width));
+
+        if (bitmap.pitch > 0) {
+            source_row += @as(usize, @intCast(bitmap.pitch));
+        } else {
+            source_row -= @as(usize, @intCast(-bitmap.pitch));
+        }
     }
 }
 
@@ -397,11 +412,8 @@ fn debugLoadBmp(
 
     if (read_result.size != 0) {
         const header: *BitmapHeader = @alignCast(@ptrCast(read_result.contents));
-        const bytes: [*]u8 =
-            @as([*]u8, @ptrCast(read_result.contents)) +
-            header.bitmap_offset;
-
-        result.content.bytes = bytes;
+        const pixels = @as([*]void, @ptrCast(read_result.contents)) + header.bitmap_offset;
+        result.memory = pixels;
         result.width = @intCast(header.width);
         result.height = @intCast(header.height);
 
@@ -416,7 +428,7 @@ fn debugLoadBmp(
         // NOTE: Byte order memory is determined by the header itself,
         // so we have to read out the masks and convert pixels ourselves
 
-        var source_dest = result.content.pixels;
+        var source_dest: [*]align(@alignOf(u8)) u32 = @ptrCast(pixels);
 
         const red_mask = header.red_mask;
         const green_mask = header.green_mask;
@@ -450,6 +462,12 @@ fn debugLoadBmp(
             }
         }
     }
+
+    result.pitch = -result.width * platform.BITMAP_BYTES_PER_PIXEL;
+    result.memory = @ptrCast(
+        @as([*]u8, @ptrCast(result.memory)) +
+            @as(usize, @intCast(-result.pitch * (result.height - 1))),
+    );
 
     return result;
 }
@@ -1029,7 +1047,9 @@ fn makeNullCollision(game_state: *GameState) *EntityCollisionVolumeGroup {
     return group;
 }
 
-fn drawTestGround(game_state: *GameState, buffer: *platform.GameOffscreenBuffer) void {
+fn drawTestGround(game_state: *GameState, buffer: *const Bitmap) void {
+    var series = random.seed(1234);
+
     const state = struct {
         var offsets: [100]Vec2 = undefined;
         var stamps: [100]*Bitmap = undefined;
@@ -1048,35 +1068,22 @@ fn drawTestGround(game_state: *GameState, buffer: *platform.GameOffscreenBuffer)
         for (0..100) |grass_index| {
             var stamp: *Bitmap = undefined;
 
-            if (rand.random().int(usize) % 2 > 0) {
-                stamp = &game_state.grass[rand.random().int(usize) % game_state.grass.len];
+            if (random.choice(&series, 2) > 0) {
+                stamp = &game_state.grass[random.choice(&series, game_state.grass.len)];
             } else {
-                stamp = &game_state.stone[rand.random().int(usize) % game_state.stone.len];
+                stamp = &game_state.stone[random.choice(&series, game_state.stone.len)];
             }
 
-            const tuft_stamp = &game_state.tuft[
-                rand.random().int(usize) %
-                    game_state.tuft.len
-            ];
-
-            const random_x: f32 =
-                @floatFromInt(rand.random().intRangeAtMost(u32, 0, 8192));
-            const random_y: f32 =
-                @floatFromInt(rand.random().intRangeAtMost(u32, 0, 8192));
-
-            const random_tuft_x: f32 =
-                @floatFromInt(rand.random().intRangeAtMost(u32, 0, 8192));
-            const random_tuft_y: f32 =
-                @floatFromInt(rand.random().intRangeAtMost(u32, 0, 8192));
+            const tuft_stamp = &game_state.tuft[random.choice(&series, game_state.tuft.len)];
 
             const offset = Vec2.init(
-                2 * random_x / 8192 - 1,
-                2 * random_y / 8192 - 1,
+                random.bilateral(&series),
+                random.bilateral(&series),
             );
 
             const tuft_offset = Vec2.init(
-                2 * random_tuft_x / 8192 - 1,
-                2 * random_tuft_y / 8192 - 1,
+                random.bilateral(&series),
+                random.bilateral(&series),
             );
 
             state.offsets[grass_index] = offset;
@@ -1121,6 +1128,19 @@ fn drawTestGround(game_state: *GameState, buffer: *platform.GameOffscreenBuffer)
 
         drawBitmap(buffer, stamp, p.x(), p.y(), 1);
     }
+}
+
+fn makeEmptyBitmap(arena: *MemoryArena, width: i32, height: i32) Bitmap {
+    var result: Bitmap = undefined;
+
+    result.width = width;
+    result.height = height;
+    result.pitch = result.width * platform.BITMAP_BYTES_PER_PIXEL;
+    const total_bitmap_size: u32 = @intCast(width * height * platform.BITMAP_BYTES_PER_PIXEL);
+    result.memory = @ptrCast(pushSize(arena, total_bitmap_size));
+    zeroSize(total_bitmap_size, result.memory);
+
+    return result;
 }
 
 // GAME NEEDS FOUR THINGS
@@ -1257,6 +1277,8 @@ pub export fn updateAndRender(
             debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_torso.bmp");
         bitmaps[3].alignment = .{ .v = .{ 72, 182 } };
 
+        var series = random.seed(0);
+
         // TODO: Waiting for full sparseness
         const screen_base_x: i32 = 0;
         const screen_base_y: i32 = 0;
@@ -1274,17 +1296,16 @@ pub export fn updateAndRender(
         var door_down = false;
 
         for (0..2000) |screen_index| {
-            var random_choice: usize = undefined;
+            var door_direction: usize = undefined;
 
-            if (door_up or door_down) {
-                random_choice = rand.random().int(usize) % 2;
-            } else {
-                random_choice = rand.random().int(usize) % 3;
-            }
+            door_direction = random.choice(
+                &series,
+                if (door_up or door_down) 2 else 3,
+            );
 
             var created_z_door = false;
 
-            if (random_choice == 2) {
+            if (door_direction == 2) {
                 created_z_door = true;
 
                 if (abs_tile_z == screen_base_z) {
@@ -1292,7 +1313,7 @@ pub export fn updateAndRender(
                 } else {
                     door_down = true;
                 }
-            } else if (random_choice == 1) {
+            } else if (door_direction == 1) {
                 door_right = true;
             } else {
                 door_top = true;
@@ -1307,8 +1328,10 @@ pub export fn updateAndRender(
 
             for (0..tiles_per_height) |tile_y| {
                 for (0..tiles_per_width) |tile_x| {
-                    const abs_tile_x = screen_x * tiles_per_width + @as(i32, @intCast(tile_x));
-                    const abs_tile_y = screen_y * tiles_per_height + @as(i32, @intCast(tile_y));
+                    const abs_tile_x = screen_x * tiles_per_width +
+                        @as(i32, @intCast(tile_x));
+                    const abs_tile_y = screen_y * tiles_per_height +
+                        @as(i32, @intCast(tile_y));
 
                     var should_be_door = false;
 
@@ -1363,12 +1386,12 @@ pub export fn updateAndRender(
             door_right = false;
             door_top = false;
 
-            if (random_choice == 2) {
+            if (door_direction == 2) {
                 if (abs_tile_z == screen_base_z)
                     abs_tile_z = screen_base_z + 1
                 else
                     abs_tile_z = screen_base_z;
-            } else if (random_choice == 1) {
+            } else if (door_direction == 1) {
                 screen_x += 1;
             } else {
                 screen_y += 1;
@@ -1401,9 +1424,9 @@ pub export fn updateAndRender(
             camera_tile_z,
         );
 
-        for (0..1) |_| {
-            const familiar_offset_x = @mod(rand.random().int(i32), 10) - 7;
-            const familiar_offset_y = @mod(rand.random().int(i32), 10) - 3;
+        for (0..10) |_| {
+            const familiar_offset_x = random.i32Between(&series, -7, 7);
+            const familiar_offset_y = random.i32Between(&series, -3, -1);
 
             if (familiar_offset_x != 0 or familiar_offset_y != 0) {
                 _ = addFamiliar(
@@ -1414,6 +1437,9 @@ pub export fn updateAndRender(
                 );
             }
         }
+
+        game_state.ground_buffer = makeEmptyBitmap(&game_state.world_arena, 512, 512);
+        drawTestGround(game_state, &game_state.ground_buffer);
 
         memory.is_initialized = true;
     }
@@ -1511,23 +1537,28 @@ pub export fn updateAndRender(
     //
     // NOTE: Render
     //
-    if (true) {
-        drawRectangle(
-            buffer,
-            Vec2.splat(0),
-            Vec2.fromInt(buffer.width, buffer.height),
-            0.5,
-            0.5,
-            0.5,
-        );
-    } else {
-        drawBitmap(buffer, &game_state.backdrop, 0.0, 0.0, 0.0, 0.0, 1.0);
-    }
 
-    drawTestGround(game_state, buffer);
+    const draw_buffer = &Bitmap{
+        .width = buffer.width,
+        .height = buffer.height,
+        .pitch = buffer.pitch,
+        .memory = @ptrCast(buffer.memory),
+    };
 
-    const screen_center_x = 0.5 * @as(f32, @floatFromInt(buffer.width));
-    const screen_center_y = 0.5 * @as(f32, @floatFromInt(buffer.height));
+    drawRectangle(
+        draw_buffer,
+        Vec2.splat(0),
+        Vec2.fromInt(draw_buffer.width, draw_buffer.height),
+        0.5,
+        0.5,
+        0.5,
+    );
+
+    // TODO: Draw this at center
+    drawBitmap(draw_buffer, &game_state.ground_buffer, 0.0, 0.0, 1.0);
+
+    const screen_center_x = 0.5 * @as(f32, @floatFromInt(draw_buffer.width));
+    const screen_center_y = 0.5 * @as(f32, @floatFromInt(draw_buffer.height));
 
     // TODO: Move this out into the zigmade_entity
     var piece_group: EntityVisiblePieceGroup = undefined;
@@ -1748,17 +1779,19 @@ pub export fn updateAndRender(
                     drawHitPoints(entity, &piece_group);
                 },
                 .space => {
-                    for (0..entity.collision.volume_count) |volume_index| {
-                        const volume = &entity.collision.volumes.?[volume_index];
+                    if (false) {
+                        for (0..entity.collision.volume_count) |volume_index| {
+                            const volume = &entity.collision.volumes.?[volume_index];
 
-                        pushRectOutline(
-                            &piece_group,
-                            volume.offset_p.xy(),
-                            0,
-                            volume.dim.xy(),
-                            Vec4.init(0, 0.5, 1, 1),
-                            0,
-                        );
+                            pushRectOutline(
+                                &piece_group,
+                                volume.offset_p.xy(),
+                                0,
+                                volume.dim.xy(),
+                                Vec4.init(0, 0.5, 1, 1),
+                                0,
+                            );
+                        }
                     }
                 },
                 else => {
@@ -1792,12 +1825,12 @@ pub export fn updateAndRender(
                     );
 
                     if (piece.bitmap) |bitmap| {
-                        drawBitmap(buffer, bitmap, center.x(), center.y(), piece.a);
+                        drawBitmap(draw_buffer, bitmap, center.x(), center.y(), piece.a);
                     } else {
                         const half_dim = Vec2.scale(&piece.dim, 0.5 * meters_to_pixels);
 
                         drawRectangle(
-                            buffer,
+                            draw_buffer,
                             Vec2.sub(&center, &half_dim),
                             Vec2.add(&center, &half_dim),
                             piece.r,
@@ -1814,7 +1847,7 @@ pub export fn updateAndRender(
     const diff = world.subtract(region.world, &world_origin, &region.origin);
 
     drawRectangle(
-        buffer,
+        draw_buffer,
         Vec2.init(diff.x(), diff.y()),
         Vec2.init(10, 10),
         1,

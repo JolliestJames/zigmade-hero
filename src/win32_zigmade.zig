@@ -1786,7 +1786,6 @@ pub export fn wWinMain(
                         offscreen_buffer.width = global_back_buffer.width;
                         offscreen_buffer.height = global_back_buffer.height;
                         offscreen_buffer.pitch = global_back_buffer.pitch;
-                        offscreen_buffer.bytes_per_pixel = global_back_buffer.bytes_per_pixel;
 
                         if (win32_state.input_recording_index != 0) {
                             win32RecordInput(&win32_state, new_input);

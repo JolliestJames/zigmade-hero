@@ -48,13 +48,16 @@ pub inline fn getController(
     return (result);
 }
 
+pub const BITMAP_BYTES_PER_PIXEL = 4;
+
 // TODO: rendering will become a three-tiered abstraction
 pub const GameOffscreenBuffer = struct {
+    // NOTE: Pixels are always 32-bits wide
+    // Memory order BB GG RR XX
     memory: ?*void = null,
     width: i32,
     height: i32,
     pitch: i32,
-    bytes_per_pixel: i32,
 };
 
 pub const GameSoundBuffer = struct {
