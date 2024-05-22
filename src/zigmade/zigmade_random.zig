@@ -2,7 +2,7 @@ const std = @import("std");
 const math = @import("zigmade_math.zig");
 const RandomSeries = std.rand.DefaultPrng;
 
-pub fn seed(n: comptime_int) RandomSeries {
+pub fn seed(n: u64) RandomSeries {
     const result = RandomSeries.init(n);
 
     return result;

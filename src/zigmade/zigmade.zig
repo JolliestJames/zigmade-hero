@@ -185,6 +185,7 @@ pub const GameState = struct {
     monster_collision: *EntityCollisionVolumeGroup,
     wall_collision: *EntityCollisionVolumeGroup,
     standard_room_collision: *EntityCollisionVolumeGroup,
+    ground_buffer_p: WorldPosition,
     ground_buffer: Bitmap,
 };
 
@@ -1057,93 +1058,61 @@ fn makeNullCollision(game_state: *GameState) *EntityCollisionVolumeGroup {
     return group;
 }
 
-fn drawTestGround(game_state: *GameState, buffer: *const Bitmap) void {
-    drawRectangle(
-        buffer,
-        Vec2.splat(0),
-        Vec2.fromInt(buffer.width, buffer.height),
-        0,
-        0,
-        0,
+fn drawGroundChunk(
+    game_state: *GameState,
+    buffer: *const Bitmap,
+    chunk_p: *WorldPosition,
+) void {
+    // TODO: Maybe make random number generation more systemic
+    // TODO: Look into wang hashing or some other spatial seed
+    // generation thing
+    var series = random.seed(
+        @intCast(139 * chunk_p.chunk_x +
+            593 * chunk_p.chunk_y +
+            329 * chunk_p.chunk_z),
     );
 
-    var series = random.seed(1234);
+    const width: f32 = @floatFromInt(buffer.width);
+    const height: f32 = @floatFromInt(buffer.height);
 
-    const state = struct {
-        var offsets: [100]Vec2 = undefined;
-        var stamps: [100]*Bitmap = undefined;
-        var tuft_offsets: [100]Vec2 = undefined;
-        var tuft_stamps: [100]*Bitmap = undefined;
-        var initialized: bool = false;
-    };
+    for (0..1000) |_| {
+        var stamp: *Bitmap = undefined;
 
-    // TODO: Maybe make random number generation more systemic
-    const center = Vec2.scale(&Vec2.fromInt(
-        buffer.width,
-        buffer.height,
-    ), 0.5);
-
-    if (!state.initialized) {
-        for (0..100) |grass_index| {
-            var stamp: *Bitmap = undefined;
-
-            if (random.choice(&series, 2) > 0) {
-                stamp = &game_state.grass[random.choice(&series, game_state.grass.len)];
-            } else {
-                stamp = &game_state.stone[random.choice(&series, game_state.stone.len)];
-            }
-
-            const tuft_stamp = &game_state.tuft[random.choice(&series, game_state.tuft.len)];
-
-            const offset = Vec2.init(
-                random.bilateral(&series),
-                random.bilateral(&series),
-            );
-
-            const tuft_offset = Vec2.init(
-                random.bilateral(&series),
-                random.bilateral(&series),
-            );
-
-            state.offsets[grass_index] = offset;
-            state.stamps[grass_index] = stamp;
-            state.tuft_offsets[grass_index] = tuft_offset;
-            state.tuft_stamps[grass_index] = tuft_stamp;
+        if (random.choice(&series, 2) > 0) {
+            stamp = &game_state.grass[random.choice(&series, game_state.grass.len)];
+        } else {
+            stamp = &game_state.stone[random.choice(&series, game_state.stone.len)];
         }
 
-        state.initialized = true;
-    }
+        const offset = Vec2.init(
+            width * random.unilateral(&series),
+            height * random.unilateral(&series),
+        );
 
-    const radius: f32 = 5;
-
-    for (state.offsets, state.stamps) |offset, stamp| {
         const bitmap_center = Vec2.scale(
             &Vec2.fromInt(stamp.width, stamp.height),
             0.5,
         );
 
-        var p = Vec2.add(
-            &center,
-            &Vec2.scale(&offset, game_state.meters_to_pixels * radius),
-        );
-
-        p = Vec2.sub(&p, &bitmap_center);
+        var p = Vec2.sub(&offset, &bitmap_center);
 
         drawBitmap(buffer, stamp, p.x(), p.y(), 1);
     }
 
-    for (state.tuft_offsets, state.tuft_stamps) |offset, stamp| {
+    for (0..1000) |_| {
+        const stamp = &game_state.tuft[random.choice(&series, game_state.tuft.len)];
+
+        const offset = Vec2.init(
+            width * random.unilateral(&series),
+            height * random.unilateral(&series),
+        );
+
         const bitmap_center = Vec2.scale(
             &Vec2.fromInt(stamp.width, stamp.height),
             0.5,
         );
 
-        var p = Vec2.add(
-            &center,
-            &Vec2.scale(&offset, game_state.meters_to_pixels * radius),
-        );
-
-        p = Vec2.sub(&p, &bitmap_center);
+        var p = Vec2.sub(&offset, &bitmap_center);
 
         drawBitmap(buffer, stamp, p.x(), p.y(), 1);
     }
@@ -1313,13 +1282,14 @@ pub export fn updateAndRender(
         var door_up = false;
         var door_down = false;
 
-        for (0..2000) |screen_index| {
+        for (0..2000) |_| {
             var door_direction: usize = undefined;
 
-            door_direction = random.choice(
-                &series,
-                if (door_up or door_down) 2 else 3,
-            );
+            door_direction = random.choice(&series, 2);
+            //door_direction = random.choice(
+            //    &series,
+            //    if (door_up or door_down) 2 else 3,
+            //);
 
             var created_z_door = false;
 
@@ -1374,9 +1344,7 @@ pub export fn updateAndRender(
                     }
 
                     if (should_be_door) {
-                        if (screen_index == 0) {
-                            _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
-                        }
+                        _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
                     } else if (created_z_door) {
                         if (tile_x == 10 and tile_y == 5) {
                             _ = addStair(
@@ -1442,7 +1410,7 @@ pub export fn updateAndRender(
             camera_tile_z,
         );
 
-        for (0..10) |_| {
+        for (0..1) |_| {
             const familiar_offset_x = random.i32Between(&series, -7, 7);
             const familiar_offset_y = random.i32Between(&series, -3, -1);
 
@@ -1456,8 +1424,26 @@ pub export fn updateAndRender(
             }
         }
 
-        game_state.ground_buffer = makeEmptyBitmap(&game_state.world_arena, 512, 512);
-        drawTestGround(game_state, &game_state.ground_buffer);
+        const screen_width = @as(f32, @floatFromInt(buffer.width));
+        const screen_height = @as(f32, @floatFromInt(buffer.height));
+        //const max_z_scale = 0.5;
+        const ground_overscan = 1.5;
+        const ground_buffer_width: i32 = @intFromFloat(@round(ground_overscan * screen_width));
+        const ground_buffer_height: i32 = @intFromFloat(@round(ground_overscan * screen_height));
+
+        game_state.ground_buffer = makeEmptyBitmap(
+            &game_state.world_arena,
+            ground_buffer_width,
+            ground_buffer_height,
+        );
+
+        game_state.ground_buffer_p = game_state.camera_p;
+
+        drawGroundChunk(
+            game_state,
+            &game_state.ground_buffer,
+            &game_state.ground_buffer_p,
+        );
 
         memory.is_initialized = true;
     }
@@ -1572,11 +1558,26 @@ pub export fn updateAndRender(
         0.5,
     );
 
-    // TODO: Draw this at center
-    drawBitmap(draw_buffer, &game_state.ground_buffer, 0.0, 0.0, 1.0);
-
     const screen_center_x = 0.5 * @as(f32, @floatFromInt(draw_buffer.width));
     const screen_center_y = 0.5 * @as(f32, @floatFromInt(draw_buffer.height));
+
+    var ground = Vec2.init(
+        screen_center_x - 0.5 * @as(f32, @floatFromInt(game_state.ground_buffer.width)),
+        screen_center_y - 0.5 * @as(f32, @floatFromInt(game_state.ground_buffer.height)),
+    );
+
+    var delta = world.subtract(game_world, &game_state.ground_buffer_p, &game_state.camera_p);
+    delta.v[1] = -delta.v[1];
+    const delta_xy = Vec2.scale(&delta.xy(), game_state.meters_to_pixels);
+    ground = Vec2.add(&ground, &delta_xy);
+
+    drawBitmap(
+        draw_buffer,
+        &game_state.ground_buffer,
+        ground.x(),
+        ground.y(),
+        1,
+    );
 
     // TODO: Move this out into the zigmade_entity
     var piece_group: EntityVisiblePieceGroup = undefined;
