@@ -31,6 +31,7 @@
 //   - Simple zoomed-out view for testing?
 //
 // - Debug code
+//   - Fonts
 //   - Logging
 //   - Diagramming
 //   - (Just enough GUI) Switches/sliders/etc.
@@ -361,26 +362,24 @@ fn drawBitmap(
         var source: [*]align(@alignOf(u8)) u32 = @alignCast(@ptrCast(source_row));
 
         for (@intCast(min_x)..@intCast(max_x)) |_| {
-            var sa = @as(f32, @floatFromInt(((source[0] >> 24) & 0xFF))) / 255.0;
-            sa *= @floatCast(c_alpha);
-
-            const sr: f32 = @floatFromInt((source[0] >> 16) & 0xFF);
-            const sg: f32 = @floatFromInt((source[0] >> 8) & 0xFF);
-            const sb: f32 = @floatFromInt((source[0] >> 0) & 0xFF);
+            const sa: f32 = @floatFromInt((source[0] >> 24) & 0xFF);
+            const rsa = sa / 255 * c_alpha;
+            const sr: f32 = c_alpha * @as(f32, @floatFromInt((source[0] >> 16) & 0xFF));
+            const sg: f32 = c_alpha * @as(f32, @floatFromInt((source[0] >> 8) & 0xFF));
+            const sb: f32 = c_alpha * @as(f32, @floatFromInt((source[0] >> 0) & 0xFF));
 
             const da: f32 = @floatFromInt((dest[0] >> 24) & 0xFF);
             const dr: f32 = @floatFromInt((dest[0] >> 16) & 0xFF);
             const dg: f32 = @floatFromInt((dest[0] >> 8) & 0xFF);
             const db: f32 = @floatFromInt((dest[0] >> 0) & 0xFF);
+            const rda = da / 255;
 
-            // TODO: Someday, we need to talk about premultiplied alpha!
-            // which this is not
-
-            // TODO: Compute the right alpha here
-            const a = @max(da, 255 * sa);
-            const r = (1.0 - sa) * dr + sa * sr;
-            const g = (1.0 - sa) * dg + sa * sg;
-            const b = (1.0 - sa) * db + sa * sb;
+            const inv_rsa: f32 = 1 - rsa;
+            // TODO: Check this for math errors
+            const a = 255 * (rsa + rda - rsa * rda);
+            const r = inv_rsa * dr + sr;
+            const g = inv_rsa * dg + sg;
+            const b = inv_rsa * db + sb;
 
             dest[0] = (lossyCast(u32, a + 0.5) << 24) |
                 (lossyCast(u32, r + 0.5) << 16) |
@@ -440,10 +439,10 @@ fn debugLoadBmp(
         const blue_scan = intrinsics.findLeastSigSetBit(blue_mask);
         const alpha_scan = intrinsics.findLeastSigSetBit(alpha_mask);
 
-        const red_shift = 16 - @as(i32, @intCast(red_scan.index));
-        const green_shift = 8 - @as(i32, @intCast(green_scan.index));
-        const blue_shift = 0 - @as(i32, @intCast(blue_scan.index));
-        const alpha_shift = 24 - @as(i32, @intCast(alpha_scan.index));
+        const red_shift_down = @as(u5, @intCast(red_scan.index));
+        const green_shift_down = @as(u5, @intCast(green_scan.index));
+        const blue_shift_down = @as(u5, @intCast(blue_scan.index));
+        const alpha_shift_down = @as(u5, @intCast(alpha_scan.index));
 
         assert(red_scan.found);
         assert(green_scan.found);
@@ -452,12 +451,23 @@ fn debugLoadBmp(
 
         for (0..@intCast(header.height)) |_| {
             for (0..@intCast(header.width)) |_| {
-                const coefficient = source_dest[0];
-                source_dest[0] =
-                    (rotl(@TypeOf(coefficient), coefficient & red_mask, red_shift)) |
-                    (rotl(@TypeOf(coefficient), coefficient & green_mask, green_shift)) |
-                    (rotl(@TypeOf(coefficient), coefficient & blue_mask, blue_shift)) |
-                    (rotl(@TypeOf(coefficient), coefficient & alpha_mask, alpha_shift));
+                const c = source_dest[0];
+
+                var r: f32 = @floatFromInt((c & red_mask) >> red_shift_down);
+                var g: f32 = @floatFromInt((c & green_mask) >> green_shift_down);
+                var b: f32 = @floatFromInt((c & blue_mask) >> blue_shift_down);
+                const a: f32 = @floatFromInt((c & alpha_mask) >> alpha_shift_down);
+                const an = a / 255;
+
+                r = r * an;
+                g = g * an;
+                b = b * an;
+
+                source_dest[0] = (lossyCast(u32, a + 0.5) << 24) |
+                    (lossyCast(u32, r + 0.5) << 16) |
+                    (lossyCast(u32, g + 0.5) << 8) |
+                    (lossyCast(u32, b + 0.5) << 0);
+
                 source_dest += 1;
             }
         }
@@ -1048,6 +1058,15 @@ fn makeNullCollision(game_state: *GameState) *EntityCollisionVolumeGroup {
 }
 
 fn drawTestGround(game_state: *GameState, buffer: *const Bitmap) void {
+    drawRectangle(
+        buffer,
+        Vec2.splat(0),
+        Vec2.fromInt(buffer.width, buffer.height),
+        0,
+        0,
+        0,
+    );
+
     var series = random.seed(1234);
 
     const state = struct {
@@ -1279,7 +1298,6 @@ pub export fn updateAndRender(
 
         var series = random.seed(0);
 
-        // TODO: Waiting for full sparseness
         const screen_base_x: i32 = 0;
         const screen_base_y: i32 = 0;
         const screen_base_z: i32 = 0;
