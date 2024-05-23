@@ -154,9 +154,16 @@ pub const PairwiseCollisionRule = struct {
     next_in_hash: ?*PairwiseCollisionRule,
 };
 
+pub const GroundBuffer = struct {
+    // NOTE: An invalid p tells us this GroundBuffer has not been filled
+    // NOTE: This is the center of the bitmap
+    p: WorldPosition,
+    memory: [*]void,
+};
+
 pub const GameState = struct {
-    world: ?*World = null,
     world_arena: MemoryArena,
+    world: ?*World = null,
     // TODO: Should we allow split-screen?
     camera_entity_index: u32,
     camera_p: WorldPosition,
@@ -185,21 +192,33 @@ pub const GameState = struct {
     monster_collision: *EntityCollisionVolumeGroup,
     wall_collision: *EntityCollisionVolumeGroup,
     standard_room_collision: *EntityCollisionVolumeGroup,
-    ground_buffer_p: WorldPosition,
-    ground_buffer: Bitmap,
+};
+
+const TransientState = struct {
+    is_initialized: bool = false,
+    arena: MemoryArena,
+    ground_buffer_count: u32,
+    ground_bitmap_template: Bitmap,
+    ground_buffers: [*]GroundBuffer,
+};
+
+pub const TemporaryMemory = struct {
+    used: u32,
+    arena: *MemoryArena,
 };
 
 pub const MemoryArena = struct {
     size: u32,
     base: [*]u8,
     used: u32,
+    temp_count: i32,
 };
 
 const Bitmap = struct {
     width: i32,
     height: i32,
     pitch: i32,
-    memory: [*]void,
+    memory: ?[*]void,
 };
 
 const BitmapHeader = packed struct {
@@ -491,6 +510,7 @@ inline fn initializeArena(
     arena.size = size;
     arena.base = @as([*]u8, @ptrCast(base));
     arena.used = 0;
+    arena.temp_count = 0;
 }
 
 inline fn pushSize(
@@ -518,6 +538,33 @@ pub inline fn pushArray(
 ) [*]T {
     const result = pushSize(arena, count * @sizeOf(T));
     return @as([*]T, @alignCast(@ptrCast(result)));
+}
+
+inline fn beginTemporaryMemory(arena: *MemoryArena) TemporaryMemory {
+    var result: TemporaryMemory = undefined;
+
+    result.arena = arena;
+    result.used = arena.used;
+
+    arena.temp_count += 1;
+
+    return result;
+}
+
+inline fn endTemporaryMemory(memory: TemporaryMemory) void {
+    var arena = memory.arena;
+
+    assert(arena.used >= memory.used);
+
+    arena.used = memory.used;
+
+    assert(arena.temp_count > 0);
+
+    arena.temp_count -= 1;
+}
+
+inline fn checkArena(arena: *MemoryArena) void {
+    assert(arena.temp_count == 0);
 }
 
 inline fn zeroSize(size: u32, ptr: [*]void) void {
@@ -1058,11 +1105,17 @@ fn makeNullCollision(game_state: *GameState) *EntityCollisionVolumeGroup {
     return group;
 }
 
-fn drawGroundChunk(
+fn fillGroundChunk(
+    transient_state: *TransientState,
     game_state: *GameState,
-    buffer: *const Bitmap,
-    chunk_p: *WorldPosition,
+    ground_buffer: *GroundBuffer,
+    chunk_p: *const WorldPosition,
 ) void {
+    var buffer = transient_state.ground_bitmap_template;
+    buffer.memory = ground_buffer.memory;
+
+    ground_buffer.p = chunk_p.*;
+
     // TODO: Maybe make random number generation more systemic
     // TODO: Look into wang hashing or some other spatial seed
     // generation thing
@@ -1075,7 +1128,7 @@ fn drawGroundChunk(
     const width: f32 = @floatFromInt(buffer.width);
     const height: f32 = @floatFromInt(buffer.height);
 
-    for (0..1000) |_| {
+    for (0..100) |_| {
         var stamp: *Bitmap = undefined;
 
         if (random.choice(&series, 2) > 0) {
@@ -1096,10 +1149,10 @@ fn drawGroundChunk(
 
         var p = Vec2.sub(&offset, &bitmap_center);
 
-        drawBitmap(buffer, stamp, p.x(), p.y(), 1);
+        drawBitmap(&buffer, stamp, p.x(), p.y(), 1);
     }
 
-    for (0..1000) |_| {
+    for (0..100) |_| {
         const stamp = &game_state.tuft[random.choice(&series, game_state.tuft.len)];
 
         const offset = Vec2.init(
@@ -1114,19 +1167,32 @@ fn drawGroundChunk(
 
         var p = Vec2.sub(&offset, &bitmap_center);
 
-        drawBitmap(buffer, stamp, p.x(), p.y(), 1);
+        drawBitmap(&buffer, stamp, p.x(), p.y(), 1);
     }
 }
 
-fn makeEmptyBitmap(arena: *MemoryArena, width: i32, height: i32) Bitmap {
+fn clearBitmap(bitmap: *Bitmap) void {
+    if (bitmap.memory) |memory| {
+        const total_bitmap_size: u32 =
+            @intCast(bitmap.width * bitmap.height * platform.BITMAP_BYTES_PER_PIXEL);
+
+        zeroSize(total_bitmap_size, memory);
+    }
+}
+
+fn makeEmptyBitmap(arena: *MemoryArena, width: i32, height: i32, clear_to_zero: bool) Bitmap {
     var result: Bitmap = undefined;
 
     result.width = width;
     result.height = height;
     result.pitch = result.width * platform.BITMAP_BYTES_PER_PIXEL;
-    const total_bitmap_size: u32 = @intCast(width * height * platform.BITMAP_BYTES_PER_PIXEL);
+    const total_bitmap_size: u32 =
+        @intCast(width * height * platform.BITMAP_BYTES_PER_PIXEL);
     result.memory = @ptrCast(pushSize(arena, total_bitmap_size));
-    zeroSize(total_bitmap_size, result.memory);
+
+    if (clear_to_zero) {
+        clearBitmap(&result);
+    }
 
     return result;
 }
@@ -1424,28 +1490,52 @@ pub export fn updateAndRender(
             }
         }
 
-        const screen_width = @as(f32, @floatFromInt(buffer.width));
-        const screen_height = @as(f32, @floatFromInt(buffer.height));
-        //const max_z_scale = 0.5;
-        const ground_overscan = 1.5;
-        const ground_buffer_width: i32 = @intFromFloat(@round(ground_overscan * screen_width));
-        const ground_buffer_height: i32 = @intFromFloat(@round(ground_overscan * screen_height));
-
-        game_state.ground_buffer = makeEmptyBitmap(
-            &game_state.world_arena,
-            ground_buffer_width,
-            ground_buffer_height,
-        );
-
-        game_state.ground_buffer_p = game_state.camera_p;
-
-        drawGroundChunk(
-            game_state,
-            &game_state.ground_buffer,
-            &game_state.ground_buffer_p,
-        );
-
         memory.is_initialized = true;
+    }
+
+    // NOTE: Transient initialization
+    assert(@sizeOf(TransientState) <= memory.transient_storage_size);
+    var transient_state: *TransientState = @alignCast(@ptrCast(memory.transient_storage));
+
+    if (!transient_state.is_initialized) {
+        initializeArena(
+            &transient_state.arena,
+            memory.transient_storage_size - @sizeOf(TransientState),
+            memory.transient_storage + @sizeOf(TransientState),
+        );
+
+        const ground_buffer_width = 256;
+        const ground_buffer_height = 256;
+        transient_state.ground_buffer_count = 128;
+        transient_state.ground_buffers = pushArray(
+            &transient_state.arena,
+            transient_state.ground_buffer_count,
+            GroundBuffer,
+        );
+
+        for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
+            var ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
+
+            transient_state.ground_bitmap_template = makeEmptyBitmap(
+                &transient_state.arena,
+                ground_buffer_width,
+                ground_buffer_height,
+                false,
+            );
+
+            ground_buffer.memory = transient_state.ground_bitmap_template.memory.?;
+            ground_buffer.p = world.nullPosition();
+        }
+
+        // TODO: This is just a test fill
+        fillGroundChunk(
+            transient_state,
+            game_state,
+            &transient_state.ground_buffers[0],
+            &game_state.camera_p,
+        );
+
+        transient_state.is_initialized = true;
     }
 
     const game_world = game_state.world.?;
@@ -1526,11 +1616,10 @@ pub export fn updateAndRender(
         game_world.tile_side_in_meters,
     ));
 
-    var sim_arena: MemoryArena = undefined;
-    initializeArena(&sim_arena, memory.transient_storage_size, memory.transient_storage);
+    const sim_memory = beginTemporaryMemory(&transient_state.arena);
 
     var region = sim.beginSim(
-        &sim_arena,
+        &transient_state.arena,
         game_state,
         game_world,
         game_state.camera_p,
@@ -1561,23 +1650,33 @@ pub export fn updateAndRender(
     const screen_center_x = 0.5 * @as(f32, @floatFromInt(draw_buffer.width));
     const screen_center_y = 0.5 * @as(f32, @floatFromInt(draw_buffer.height));
 
-    var ground = Vec2.init(
-        screen_center_x - 0.5 * @as(f32, @floatFromInt(game_state.ground_buffer.width)),
-        screen_center_y - 0.5 * @as(f32, @floatFromInt(game_state.ground_buffer.height)),
-    );
+    for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
+        var ground_buffer = transient_state.ground_buffers[ground_buffer_index];
 
-    var delta = world.subtract(game_world, &game_state.ground_buffer_p, &game_state.camera_p);
-    delta.v[1] = -delta.v[1];
-    const delta_xy = Vec2.scale(&delta.xy(), game_state.meters_to_pixels);
-    ground = Vec2.add(&ground, &delta_xy);
+        if (world.isValid(&ground_buffer.p)) {
+            var bitmap = transient_state.ground_bitmap_template;
 
-    drawBitmap(
-        draw_buffer,
-        &game_state.ground_buffer,
-        ground.x(),
-        ground.y(),
-        1,
-    );
+            bitmap.memory = ground_buffer.memory;
+
+            var delta = Vec3.scale(
+                &world.subtract(game_world, &ground_buffer.p, &game_state.camera_p),
+                game_state.meters_to_pixels,
+            );
+
+            var ground = Vec2.init(
+                screen_center_x + delta.x() - 0.5 * @as(f32, @floatFromInt(bitmap.width)),
+                screen_center_y - delta.y() - 0.5 * @as(f32, @floatFromInt(bitmap.height)),
+            );
+
+            drawBitmap(
+                draw_buffer,
+                &bitmap,
+                ground.x(),
+                ground.y(),
+                1,
+            );
+        }
+    }
 
     // TODO: Move this out into the zigmade_entity
     var piece_group: EntityVisiblePieceGroup = undefined;
@@ -1875,6 +1974,9 @@ pub export fn updateAndRender(
     );
 
     sim.endSim(region, game_state);
+    endTemporaryMemory(sim_memory);
+    checkArena(&game_state.world_arena);
+    checkArena(&transient_state.arena);
 }
 
 // NOTE: At the moment, this must be a very fast function
