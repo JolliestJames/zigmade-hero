@@ -344,6 +344,15 @@ pub fn Rectangle(comptime VecN: type) type {
             return result;
         }
 
+        pub inline fn offsetRect(rect: *const RectangleN, offset: *const VecN) RectangleN {
+            var result: RectangleN = undefined;
+
+            result.min = VecN.add(&rect.min, &offset);
+            result.max = VecN.add(&rect.max, &offset);
+
+            return result;
+        }
+
         pub inline fn centerDim(center: *const VecN, dim: *const VecN) RectangleN {
             const result = centerHalfDim(center, &VecN.scale(dim, 0.5));
 

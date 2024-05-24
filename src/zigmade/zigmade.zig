@@ -164,6 +164,7 @@ pub const GroundBuffer = struct {
 pub const GameState = struct {
     world_arena: MemoryArena,
     world: ?*World = null,
+    typical_floor_height: f32,
     // TODO: Should we allow split-screen?
     camera_entity_index: u32,
     camera_p: WorldPosition,
@@ -181,6 +182,7 @@ pub const GameState = struct {
     sword: Bitmap,
     stairwell: Bitmap,
     meters_to_pixels: f32,
+    pixels_to_meters: f32,
     // TODO: Must be power of two
     collision_rule_hash: [256]?*PairwiseCollisionRule,
     first_free_collision_rule: ?*PairwiseCollisionRule,
@@ -327,6 +329,46 @@ fn drawRectangle(
 
         row += @as(u32, @intCast(buffer.pitch));
     }
+}
+
+fn drawRectOutline(buffer: *const Bitmap, min: Vec2, max: Vec2, color: Vec3, r: f32) void {
+    // NOTE: Top and bottom
+    drawRectangle(
+        buffer,
+        Vec2.init(min.x() - r, min.y() - r),
+        Vec2.init(max.x() + r, min.y() + r),
+        color.r(),
+        color.g(),
+        color.b(),
+    );
+
+    drawRectangle(
+        buffer,
+        Vec2.init(min.x() - r, max.y() - r),
+        Vec2.init(max.x() + r, max.y() + r),
+        color.r(),
+        color.g(),
+        color.b(),
+    );
+
+    // NOTE: Left and right
+    drawRectangle(
+        buffer,
+        Vec2.init(min.x() - r, min.y() - r),
+        Vec2.init(min.x() + r, max.y() + r),
+        color.r(),
+        color.g(),
+        color.b(),
+    );
+
+    drawRectangle(
+        buffer,
+        Vec2.init(max.x() - r, min.y() - r),
+        Vec2.init(max.x() + r, max.y() + r),
+        color.r(),
+        color.g(),
+        color.b(),
+    );
 }
 
 fn drawBitmap(
@@ -650,13 +692,46 @@ fn addGroundedEntity(
     return result;
 }
 
+pub fn chunkPosFromTilePos(
+    game_world: *World,
+    abs_tile_x: i32,
+    abs_tile_y: i32,
+    abs_tile_z: i32,
+    additional_offset: Vec3,
+) WorldPosition {
+    const base_pos: WorldPosition = .{};
+    const tile_side_in_meters = 1.4;
+    const tile_depth_in_meters = 3.0;
+
+    const tile_dim = Vec3.init(
+        tile_side_in_meters,
+        tile_side_in_meters,
+        tile_depth_in_meters,
+    );
+
+    const offset = Vec3.hadamard(
+        &tile_dim,
+        &Vec3.fromInt(abs_tile_x, abs_tile_y, abs_tile_z),
+    );
+
+    const result = world.mapIntoChunkSpace(
+        game_world,
+        base_pos,
+        Vec3.add(&additional_offset, &offset),
+    );
+
+    assert(world.vecIsCanonical(game_world, result.offset_));
+
+    return result;
+}
+
 fn addStandardRoom(
     game_state: *GameState,
     abs_tile_x: i32,
     abs_tile_y: i32,
     abs_tile_z: i32,
 ) AddLowEntityResult {
-    var pos = world.chunkPosFromTilePos(
+    var pos = chunkPosFromTilePos(
         game_state.world.?,
         abs_tile_x,
         abs_tile_y,
@@ -682,7 +757,7 @@ fn addWall(
     abs_tile_y: i32,
     abs_tile_z: i32,
 ) AddLowEntityResult {
-    var pos = world.chunkPosFromTilePos(
+    var pos = chunkPosFromTilePos(
         game_state.world.?,
         abs_tile_x,
         abs_tile_y,
@@ -710,7 +785,7 @@ fn addStair(
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
 
-    var pos = world.chunkPosFromTilePos(
+    var pos = chunkPosFromTilePos(
         game_world,
         abs_tile_x,
         abs_tile_y,
@@ -727,7 +802,7 @@ fn addStair(
 
     entity.low.sim.flags.collides = true;
     entity.low.sim.walkable_dim = entity.low.sim.collision.total_volume.dim.xy();
-    entity.low.sim.walkable_height = game_world.tile_depth_in_meters;
+    entity.low.sim.walkable_height = game_state.typical_floor_height;
 
     return entity;
 }
@@ -774,7 +849,7 @@ fn addMonster(
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
 
-    var pos = world.chunkPosFromTilePos(
+    var pos = chunkPosFromTilePos(
         game_world,
         abs_tile_x,
         abs_tile_y,
@@ -813,7 +888,7 @@ fn addFamiliar(
 ) AddLowEntityResult {
     const game_world = game_state.world.?;
 
-    var pos = world.chunkPosFromTilePos(
+    var pos = chunkPosFromTilePos(
         game_world,
         abs_tile_x,
         abs_tile_y,
@@ -1120,7 +1195,7 @@ fn fillGroundChunk(
     // TODO: Look into wang hashing or some other spatial seed
     // generation thing
     var series = random.seed(
-        @intCast(139 * chunk_p.chunk_x +
+        @abs(139 * chunk_p.chunk_x +
             593 * chunk_p.chunk_y +
             329 * chunk_p.chunk_z),
     );
@@ -1197,6 +1272,23 @@ fn makeEmptyBitmap(arena: *MemoryArena, width: i32, height: i32, clear_to_zero: 
     return result;
 }
 
+//fn requestGroundBuffers(transient_state: *TransientState, game_state: *GameState,
+//    center_p: WorldPosition, bounds: Rectangle3,) void {
+//    var aligned_bounds = Rectangle3.offsetRect(&bounds, &center_p.offset_);
+//    center_p.offset_ = Vec3.splat(0);
+//
+//    for () || {
+//    }
+//
+//    // TODO: This is just a test fill
+//    fillGroundChunk(
+//        transient_state,
+//        game_state,
+//        &transient_state.ground_buffers[0],
+//        &game_state.camera_p,
+//    );
+//}
+
 // GAME NEEDS FOUR THINGS
 // - timing
 // - controller/keyboard input
@@ -1210,6 +1302,10 @@ pub export fn updateAndRender(
 ) void {
     assert(@sizeOf(@TypeOf(input.controllers[0].buttons.map)) ==
         @sizeOf(platform.GameButtonState) * input.controllers[0].buttons.array.len);
+
+    const ground_buffer_width = 256;
+    const ground_buffer_height = 256;
+
     assert(@sizeOf(GameState) <= memory.permanent_storage_size);
 
     var game_state: *GameState = @alignCast(@ptrCast(memory.permanent_storage));
@@ -1217,6 +1313,16 @@ pub export fn updateAndRender(
     if (!memory.is_initialized) {
         const tiles_per_width = 17;
         const tiles_per_height = 9;
+
+        game_state.typical_floor_height = 3;
+        game_state.meters_to_pixels = 42;
+        game_state.pixels_to_meters = 1 / game_state.meters_to_pixels;
+
+        const world_chunk_dim_in_meters = Vec3.init(
+            game_state.pixels_to_meters * @as(f32, @floatFromInt(ground_buffer_width)),
+            game_state.pixels_to_meters * @as(f32, @floatFromInt(ground_buffer_height)),
+            game_state.typical_floor_height,
+        );
 
         // TODO: Can we just use Zig's own arena allocator?
         // TODO: Let's start partitioning our memory space
@@ -1231,21 +1337,19 @@ pub export fn updateAndRender(
 
         game_state.world = pushStruct(&game_state.world_arena, World);
         const game_world = game_state.world.?;
-        world.initializeWorld(game_world, 1.4, 3.0);
+        world.initializeWorld(game_world, world_chunk_dim_in_meters);
 
-        const tile_side_in_pixels: i32 = 60;
-        game_state.meters_to_pixels =
-            @as(f32, @floatFromInt(tile_side_in_pixels)) /
-            game_world.tile_side_in_meters;
+        const tile_side_in_meters = 1.4;
+        const tile_depth_in_meters = game_state.typical_floor_height;
 
         game_state.null_collision = makeNullCollision(game_state);
         game_state.sword_collision = makeSimpleGroundedCollision(game_state, 1, 0.5, 0.1);
 
         game_state.stair_collision = makeSimpleGroundedCollision(
             game_state,
-            game_world.tile_side_in_meters,
-            2 * game_world.tile_side_in_meters,
-            1.1 * game_world.tile_depth_in_meters,
+            tile_side_in_meters,
+            2 * tile_side_in_meters,
+            1.1 * tile_depth_in_meters,
         );
 
         game_state.player_collision = makeSimpleGroundedCollision(game_state, 1, 0.5, 1.2);
@@ -1254,16 +1358,16 @@ pub export fn updateAndRender(
 
         game_state.wall_collision = makeSimpleGroundedCollision(
             game_state,
-            game_world.tile_side_in_meters,
-            game_world.tile_side_in_meters,
-            game_world.tile_depth_in_meters,
+            tile_side_in_meters,
+            tile_side_in_meters,
+            tile_depth_in_meters,
         );
 
         game_state.standard_room_collision = makeSimpleGroundedCollision(
             game_state,
-            tiles_per_width * game_world.tile_side_in_meters,
-            tiles_per_height * game_world.tile_side_in_meters,
-            0.9 * game_world.tile_depth_in_meters,
+            tiles_per_width * tile_side_in_meters,
+            tiles_per_height * tile_side_in_meters,
+            0.9 * tile_depth_in_meters,
         );
 
         game_state.grass[0] =
@@ -1459,7 +1563,7 @@ pub export fn updateAndRender(
         const camera_tile_y = screen_base_y * tiles_per_height + 9 / 2;
         const camera_tile_z = screen_base_z;
 
-        const new_camera_p = world.chunkPosFromTilePos(
+        const new_camera_p = chunkPosFromTilePos(
             game_world,
             camera_tile_x,
             camera_tile_y,
@@ -1504,8 +1608,6 @@ pub export fn updateAndRender(
             memory.transient_storage + @sizeOf(TransientState),
         );
 
-        const ground_buffer_width = 256;
-        const ground_buffer_height = 256;
         transient_state.ground_buffer_count = 128;
         transient_state.ground_buffers = pushArray(
             &transient_state.arena,
@@ -1527,20 +1629,13 @@ pub export fn updateAndRender(
             ground_buffer.p = world.nullPosition();
         }
 
-        // TODO: This is just a test fill
-        fillGroundChunk(
-            transient_state,
-            game_state,
-            &transient_state.ground_buffers[0],
-            &game_state.camera_p,
-        );
-
         transient_state.is_initialized = true;
     }
 
     const game_world = game_state.world.?;
 
     const meters_to_pixels = game_state.meters_to_pixels;
+    const pixels_to_meters = 1 / game_state.meters_to_pixels;
 
     //
     // NOTE: Movement
@@ -1607,26 +1702,6 @@ pub export fn updateAndRender(
         }
     }
 
-    // TODO: Dim is chosen randomly
-    const tile_span_x = 17 * 3;
-    const tile_span_y = 9 * 3;
-    const tile_span_z = 1;
-    const camera_bounds = Rectangle3.centerDim(&Vec3.splat(0), &Vec3.scale(
-        &Vec3.init(tile_span_x, tile_span_y, tile_span_z),
-        game_world.tile_side_in_meters,
-    ));
-
-    const sim_memory = beginTemporaryMemory(&transient_state.arena);
-
-    var region = sim.beginSim(
-        &transient_state.arena,
-        game_state,
-        game_world,
-        game_state.camera_p,
-        camera_bounds,
-        input.dt_for_frame,
-    );
-
     //
     // NOTE: Render
     //
@@ -1647,8 +1722,120 @@ pub export fn updateAndRender(
         0.5,
     );
 
-    const screen_center_x = 0.5 * @as(f32, @floatFromInt(draw_buffer.width));
-    const screen_center_y = 0.5 * @as(f32, @floatFromInt(draw_buffer.height));
+    const screen_center = Vec2.init(
+        0.5 * @as(f32, @floatFromInt(draw_buffer.width)),
+        0.5 * @as(f32, @floatFromInt(draw_buffer.height)),
+    );
+
+    const screen_width_in_meters = @as(f32, @floatFromInt(draw_buffer.width)) * pixels_to_meters;
+    const screen_height_in_meters = @as(f32, @floatFromInt(draw_buffer.height)) * pixels_to_meters;
+
+    const camera_bounds_in_meters = Rectangle3.centerDim(
+        &Vec3.splat(0),
+        &Vec3.init(screen_width_in_meters, screen_height_in_meters, 0),
+    );
+
+    {
+        const min_chunk_p = world.mapIntoChunkSpace(
+            game_world,
+            game_state.camera_p,
+            Rectangle3.getMinCorner(&camera_bounds_in_meters),
+        );
+
+        const max_chunk_p = world.mapIntoChunkSpace(
+            game_world,
+            game_state.camera_p,
+            Rectangle3.getMaxCorner(&camera_bounds_in_meters),
+        );
+
+        var chunk_z = min_chunk_p.chunk_z;
+
+        while (chunk_z <= max_chunk_p.chunk_z) : (chunk_z += 1) {
+            var chunk_y = min_chunk_p.chunk_y;
+
+            while (chunk_y <= max_chunk_p.chunk_y) : (chunk_y += 1) {
+                var chunk_x = min_chunk_p.chunk_x;
+
+                while (chunk_x <= max_chunk_p.chunk_x) : (chunk_x += 1) {
+                    //const maybe_chunk = world.getWorldChunk(
+                    //    game_world,
+                    //    chunk_x,
+                    //    chunk_y,
+                    //    chunk_z,
+                    //    null,
+                    //);
+
+                    //if (maybe_chunk) |chunk|
+                    {
+                        var chunk_center_p = world.centeredChunkPoint(chunk_x, chunk_y, chunk_z);
+                        //var chunk_center_p = world.centeredChunk(chunk);
+
+                        const rel_p = world.subtract(
+                            game_world,
+                            &chunk_center_p,
+                            &game_state.camera_p,
+                        );
+
+                        const screen_p = Vec2.init(
+                            screen_center.x() + meters_to_pixels * rel_p.x(),
+                            screen_center.y() - meters_to_pixels * rel_p.y(),
+                        );
+
+                        const screen_dim = Vec2.scale(
+                            &game_world.chunk_dim_in_meters.xy(),
+                            meters_to_pixels,
+                        );
+
+                        // TODO: This is super inefficient, fix tomorrow
+                        var found = false;
+                        var empty_buffer: ?*GroundBuffer = null;
+
+                        for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
+                            const ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
+
+                            if (world.inSameChunk(game_world, &ground_buffer.p, &chunk_center_p)) {
+                                found = true;
+                                break;
+                            } else if (!world.isValid(&ground_buffer.p)) {
+                                empty_buffer = ground_buffer;
+                            }
+                        }
+
+                        if (!found and empty_buffer != null) {
+                            fillGroundChunk(
+                                transient_state,
+                                game_state,
+                                empty_buffer.?,
+                                &chunk_center_p,
+                            );
+                        }
+
+                        drawRectOutline(
+                            draw_buffer,
+                            Vec2.sub(&screen_p, &Vec2.scale(&screen_dim, 0.5)),
+                            Vec2.add(&screen_p, &Vec2.scale(&screen_dim, 0.5)),
+                            Vec3.init(1, 1, 0),
+                            2,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // TODO: How big do we actually want to expand here?
+    const sim_bounds_expansion = Vec3.splat(15);
+    const sim_bounds = Rectangle3.addRadius(&camera_bounds_in_meters, &sim_bounds_expansion);
+    const sim_memory = beginTemporaryMemory(&transient_state.arena);
+
+    var region = sim.beginSim(
+        &transient_state.arena,
+        game_state,
+        game_world,
+        game_state.camera_p,
+        sim_bounds,
+        input.dt_for_frame,
+    );
 
     for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
         var ground_buffer = transient_state.ground_buffers[ground_buffer_index];
@@ -1664,8 +1851,8 @@ pub export fn updateAndRender(
             );
 
             var ground = Vec2.init(
-                screen_center_x + delta.x() - 0.5 * @as(f32, @floatFromInt(bitmap.width)),
-                screen_center_y - delta.y() - 0.5 * @as(f32, @floatFromInt(bitmap.height)),
+                screen_center.x() + delta.x() - 0.5 * @as(f32, @floatFromInt(bitmap.width)),
+                screen_center.y() - delta.y() - 0.5 * @as(f32, @floatFromInt(bitmap.height)),
             );
 
             drawBitmap(
@@ -1933,8 +2120,8 @@ pub export fn updateAndRender(
                     const entity_base_p = sim.getEntityGroundPoint(entity);
                     const z_fudge = 1.0 + 0.1 * (entity_base_p.z() + piece.offset_z);
 
-                    const eg_x = screen_center_x + meters_to_pixels * z_fudge * entity_base_p.x();
-                    const eg_y = screen_center_y - meters_to_pixels * z_fudge * entity_base_p.y();
+                    const eg_x = screen_center.x() + meters_to_pixels * z_fudge * entity_base_p.x();
+                    const eg_y = screen_center.y() - meters_to_pixels * z_fudge * entity_base_p.y();
                     const entity_z = -meters_to_pixels * entity_base_p.z();
 
                     const center = Vec2.init(

@@ -4,7 +4,7 @@ const game = @import("zigmade.zig");
 const math = @import("zigmade_math.zig");
 const TILE_CHUNK_SAFE_MARGIN = std.math.maxInt(i32) / 64;
 const TILE_CHUNK_UNINITIALIZED = std.math.maxInt(i32);
-const TILES_PER_CHUNK = 16;
+const TILES_PER_CHUNK = 8;
 
 const Vec3 = math.Vec3;
 const MemoryArena = game.MemoryArena;
@@ -40,11 +40,7 @@ pub const WorldChunk = struct {
 };
 
 pub const World = struct {
-    tile_side_in_meters: f32,
-    tile_depth_in_meters: f32,
     chunk_dim_in_meters: Vec3,
-    //chunk_side_in_meters: f32,
-    //chunk_depth_in_meters: f32,
     // TODO: tile_chunk_hash should probably switch to pointers if
     // tile entity blocks continue to be store en masse directly
     // inside the tile chunk
@@ -55,16 +51,9 @@ pub const World = struct {
 
 pub fn initializeWorld(
     world: *World,
-    tile_side_in_meters: f32,
-    tile_depth_in_meters: f32,
+    chunk_dim_in_meters: Vec3,
 ) void {
-    world.tile_side_in_meters = tile_side_in_meters;
-    world.chunk_dim_in_meters = Vec3.init(
-        TILES_PER_CHUNK * tile_side_in_meters,
-        TILES_PER_CHUNK * tile_side_in_meters,
-        tile_depth_in_meters,
-    );
-    world.tile_depth_in_meters = tile_depth_in_meters;
+    world.chunk_dim_in_meters = chunk_dim_in_meters;
     world.first_free = null;
 
     for (0..world.chunk_hash.len) |index| {
@@ -165,15 +154,21 @@ pub inline fn subtract(
 }
 
 pub inline fn centeredChunkPoint(
-    chunk_x: u32,
-    chunk_y: u32,
-    chunk_z: u32,
+    chunk_x: i32,
+    chunk_y: i32,
+    chunk_z: i32,
 ) WorldPosition {
     var result: WorldPosition = .{};
 
     result.chunk_x = chunk_x;
     result.chunk_y = chunk_y;
     result.chunk_z = chunk_z;
+
+    return result;
+}
+
+pub inline fn centeredChunk(chunk: *WorldChunk) WorldPosition {
+    const result = centeredChunkPoint(chunk.chunk_x, chunk.chunk_y, chunk.chunk_z);
 
     return result;
 }
@@ -332,7 +327,7 @@ inline fn tileRelIsCanonical(
     return result;
 }
 
-inline fn vecIsCanonical(
+pub inline fn vecIsCanonical(
     world: *World,
     offset: Vec3,
 ) bool {
@@ -387,37 +382,6 @@ pub inline fn mapIntoChunkSpace(
         &result.chunk_z,
         &result.offset_.v[2],
     );
-
-    return result;
-}
-
-pub fn chunkPosFromTilePos(
-    world: *World,
-    abs_tile_x: i32,
-    abs_tile_y: i32,
-    abs_tile_z: i32,
-    additional_offset: Vec3,
-) WorldPosition {
-    const base_pos: WorldPosition = .{};
-
-    const tile_dim = Vec3.init(
-        world.tile_side_in_meters,
-        world.tile_side_in_meters,
-        world.tile_depth_in_meters,
-    );
-
-    const offset = Vec3.hadamard(
-        &tile_dim,
-        &Vec3.fromInt(abs_tile_x, abs_tile_y, abs_tile_z),
-    );
-
-    const result = mapIntoChunkSpace(
-        world,
-        base_pos,
-        Vec3.add(&additional_offset, &offset),
-    );
-
-    assert(vecIsCanonical(world, result.offset_));
 
     return result;
 }
