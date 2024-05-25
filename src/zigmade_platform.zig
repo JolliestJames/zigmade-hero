@@ -103,6 +103,7 @@ pub const GameInput = struct {
     mouse_x: i32 = 0,
     mouse_y: i32 = 0,
     mouse_z: i32 = 0,
+    executable_reloaded: bool = false,
     dt_for_frame: f32 = 0,
     controllers: [5]GameControllerInput,
 };

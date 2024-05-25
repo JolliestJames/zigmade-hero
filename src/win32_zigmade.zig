@@ -599,7 +599,7 @@ fn win32MainWindowCallback(
             }
         },
         win32.WM_ACTIVATEAPP => {
-            if (false) {
+            if (false)
                 if (w_param == win32.TRUE) {
                     _ = win32.SetLayeredWindowAttributes(
                         window,
@@ -614,8 +614,7 @@ fn win32MainWindowCallback(
                         64,
                         win32.LWA_ALPHA,
                     );
-                }
-            }
+                };
         },
         win32.WM_DESTROY => {
             // TODO: Handle as an error--recreate window?
@@ -1549,16 +1548,19 @@ pub export fn wWinMain(
 
                 while (global_running) {
                     new_input.dt_for_frame = target_seconds_per_frame;
-
+                    new_input.executable_reloaded = false;
                     var new_dll_write_time = win32GetLastWriteTime(&source_game_code_dll_path);
 
                     if (win32.CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0) {
                         win32UnloadGameCode(&game);
+
                         game = win32LoadGameCode(
                             &source_game_code_dll_path,
                             &temp_game_code_dll_path,
                             &game_code_lock_path,
                         );
+
+                        new_input.executable_reloaded = true;
                     }
 
                     // TODO: Zeroing "macro" with comptime

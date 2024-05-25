@@ -462,6 +462,91 @@ fn drawBitmap(
     }
 }
 
+fn drawMatte(
+    buffer: *const Bitmap,
+    bitmap: *Bitmap,
+    real_x: f32,
+    real_y: f32,
+    c_alpha: f32,
+) void {
+    var min_x: i32 = @intFromFloat(@round(real_x));
+    var min_y: i32 = @intFromFloat(@round(real_y));
+    var max_x: i32 = min_x + bitmap.width;
+    var max_y: i32 = min_y + bitmap.height;
+
+    var source_offset_x: i32 = 0;
+    if (min_x < 0) {
+        source_offset_x = -min_x;
+        min_x = 0;
+    }
+
+    var source_offset_y: i32 = 0;
+    if (min_y < 0) {
+        source_offset_y = -min_y;
+        min_y = 0;
+    }
+
+    if (max_x > buffer.width) max_x = @intCast(buffer.width);
+    if (max_y > buffer.height) max_y = @intCast(buffer.height);
+    if (min_x > max_x) max_x = min_x;
+    if (min_y > max_y) max_y = min_y;
+
+    var source_row: [*]u8 = undefined;
+    const bitmap_offset = source_offset_y * bitmap.pitch +
+        platform.BITMAP_BYTES_PER_PIXEL * source_offset_x;
+
+    if (bitmap_offset > 0) {
+        source_row = @as([*]u8, @ptrCast(bitmap.memory)) +
+            @as(usize, @intCast(bitmap_offset));
+    } else {
+        source_row = @as([*]u8, @ptrCast(bitmap.memory)) -
+            @as(usize, @intCast(-bitmap_offset));
+    }
+
+    var dest_row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
+        (@as(u32, @intCast(min_x)) *
+        @as(u32, @intCast(platform.BITMAP_BYTES_PER_PIXEL))) +
+        @as(u32, @bitCast(min_y *% buffer.pitch));
+
+    for (@intCast(min_y)..@intCast(max_y)) |_| {
+        var dest: [*]u32 = @alignCast(@ptrCast(dest_row));
+        var source: [*]align(@alignOf(u8)) u32 = @alignCast(@ptrCast(source_row));
+
+        for (@intCast(min_x)..@intCast(max_x)) |_| {
+            const sa: f32 = @floatFromInt((source[0] >> 24) & 0xFF);
+            const rsa = sa / 255 * c_alpha;
+
+            const da: f32 = @floatFromInt((dest[0] >> 24) & 0xFF);
+            const dr: f32 = @floatFromInt((dest[0] >> 16) & 0xFF);
+            const dg: f32 = @floatFromInt((dest[0] >> 8) & 0xFF);
+            const db: f32 = @floatFromInt((dest[0] >> 0) & 0xFF);
+
+            const inv_rsa: f32 = 1 - rsa;
+            // TODO: Check this for math errors
+            const a = inv_rsa * da;
+            const r = inv_rsa * dr;
+            const g = inv_rsa * dg;
+            const b = inv_rsa * db;
+
+            dest[0] = (lossyCast(u32, a + 0.5) << 24) |
+                (lossyCast(u32, r + 0.5) << 16) |
+                (lossyCast(u32, g + 0.5) << 8) |
+                (lossyCast(u32, b + 0.5) << 0);
+
+            dest += 1;
+            source += 1;
+        }
+
+        dest_row += @as(usize, @intCast(buffer.pitch));
+
+        if (bitmap.pitch > 0) {
+            source_row += @as(usize, @intCast(bitmap.pitch));
+        } else {
+            source_row -= @as(usize, @intCast(-bitmap.pitch));
+        }
+    }
+}
+
 fn debugLoadBmp(
     thread: *platform.ThreadContext,
     readEntireFile: platform.debugPlatformReadEntireFile,
@@ -1191,58 +1276,103 @@ fn fillGroundChunk(
 
     ground_buffer.p = chunk_p.*;
 
-    // TODO: Maybe make random number generation more systemic
-    // TODO: Look into wang hashing or some other spatial seed
-    // generation thing
-    var series = random.seed(
-        @abs(139 * chunk_p.chunk_x +
-            593 * chunk_p.chunk_y +
-            329 * chunk_p.chunk_z),
-    );
-
     const width: f32 = @floatFromInt(buffer.width);
     const height: f32 = @floatFromInt(buffer.height);
 
-    for (0..100) |_| {
-        var stamp: *Bitmap = undefined;
+    var chunk_offset_y: i32 = -1;
 
-        if (random.choice(&series, 2) > 0) {
-            stamp = &game_state.grass[random.choice(&series, game_state.grass.len)];
-        } else {
-            stamp = &game_state.stone[random.choice(&series, game_state.stone.len)];
+    while (chunk_offset_y <= 1) : (chunk_offset_y += 1) {
+        var chunk_offset_x: i32 = -1;
+
+        while (chunk_offset_x <= 1) : (chunk_offset_x += 1) {
+            const chunk_x = chunk_p.chunk_x + chunk_offset_x;
+            const chunk_y = chunk_p.chunk_y + chunk_offset_y;
+            const chunk_z = chunk_p.chunk_z;
+
+            // TODO: Maybe make random number generation more systemic
+            // TODO: Look into wang hashing or some other spatial seed
+            // generation thing
+            var series = random.seed(
+                @abs(139 * chunk_x +
+                    593 * chunk_y +
+                    329 * chunk_z),
+            );
+
+            const center = Vec2.init(
+                @as(f32, @floatFromInt(chunk_offset_x)) * width,
+                -@as(f32, @floatFromInt(chunk_offset_y)) * height,
+            );
+
+            for (0..100) |_| {
+                var stamp: *Bitmap = undefined;
+
+                if (random.choice(&series, 2) > 0) {
+                    stamp = &game_state.grass[random.choice(&series, game_state.grass.len)];
+                } else {
+                    stamp = &game_state.stone[random.choice(&series, game_state.stone.len)];
+                }
+
+                const offset = Vec2.init(
+                    width * random.unilateral(&series),
+                    height * random.unilateral(&series),
+                );
+
+                const bitmap_center = Vec2.scale(
+                    &Vec2.fromInt(stamp.width, stamp.height),
+                    0.5,
+                );
+
+                var p = Vec2.sub(&offset, &bitmap_center);
+                p = Vec2.add(&p, &center);
+
+                drawBitmap(&buffer, stamp, p.x(), p.y(), 1);
+            }
         }
-
-        const offset = Vec2.init(
-            width * random.unilateral(&series),
-            height * random.unilateral(&series),
-        );
-
-        const bitmap_center = Vec2.scale(
-            &Vec2.fromInt(stamp.width, stamp.height),
-            0.5,
-        );
-
-        var p = Vec2.sub(&offset, &bitmap_center);
-
-        drawBitmap(&buffer, stamp, p.x(), p.y(), 1);
     }
 
-    for (0..100) |_| {
-        const stamp = &game_state.tuft[random.choice(&series, game_state.tuft.len)];
+    chunk_offset_y = -1;
 
-        const offset = Vec2.init(
-            width * random.unilateral(&series),
-            height * random.unilateral(&series),
-        );
+    while (chunk_offset_y <= 1) : (chunk_offset_y += 1) {
+        var chunk_offset_x: i32 = -1;
 
-        const bitmap_center = Vec2.scale(
-            &Vec2.fromInt(stamp.width, stamp.height),
-            0.5,
-        );
+        while (chunk_offset_x <= 1) : (chunk_offset_x += 1) {
+            const chunk_x = chunk_p.chunk_x + chunk_offset_x;
+            const chunk_y = chunk_p.chunk_y + chunk_offset_y;
+            const chunk_z = chunk_p.chunk_z;
 
-        var p = Vec2.sub(&offset, &bitmap_center);
+            // TODO: Maybe make random number generation more systemic
+            // TODO: Look into wang hashing or some other spatial seed
+            // generation thing
+            var series = random.seed(
+                @abs(139 * chunk_x +
+                    593 * chunk_y +
+                    329 * chunk_z),
+            );
 
-        drawBitmap(&buffer, stamp, p.x(), p.y(), 1);
+            const center = Vec2.init(
+                @as(f32, @floatFromInt(chunk_offset_x)) * width,
+                -@as(f32, @floatFromInt(chunk_offset_y)) * height,
+            );
+
+            for (0..50) |_| {
+                const stamp = &game_state.tuft[random.choice(&series, game_state.tuft.len)];
+
+                const offset = Vec2.init(
+                    width * random.unilateral(&series),
+                    height * random.unilateral(&series),
+                );
+
+                const bitmap_center = Vec2.scale(
+                    &Vec2.fromInt(stamp.width, stamp.height),
+                    0.5,
+                );
+
+                var p = Vec2.sub(&offset, &bitmap_center);
+                p = Vec2.add(&p, &center);
+
+                drawBitmap(&buffer, stamp, p.x(), p.y(), 1);
+            }
+        }
     }
 }
 
@@ -1271,23 +1401,6 @@ fn makeEmptyBitmap(arena: *MemoryArena, width: i32, height: i32, clear_to_zero: 
 
     return result;
 }
-
-//fn requestGroundBuffers(transient_state: *TransientState, game_state: *GameState,
-//    center_p: WorldPosition, bounds: Rectangle3,) void {
-//    var aligned_bounds = Rectangle3.offsetRect(&bounds, &center_p.offset_);
-//    center_p.offset_ = Vec3.splat(0);
-//
-//    for () || {
-//    }
-//
-//    // TODO: This is just a test fill
-//    fillGroundChunk(
-//        transient_state,
-//        game_state,
-//        &transient_state.ground_buffers[0],
-//        &game_state.camera_p,
-//    );
-//}
 
 // GAME NEEDS FOUR THINGS
 // - timing
@@ -1608,7 +1721,8 @@ pub export fn updateAndRender(
             memory.transient_storage + @sizeOf(TransientState),
         );
 
-        transient_state.ground_buffer_count = 128;
+        // TODO: Pick a real number here
+        transient_state.ground_buffer_count = 32; // 128;
         transient_state.ground_buffers = pushArray(
             &transient_state.arena,
             transient_state.ground_buffer_count,
@@ -1630,6 +1744,13 @@ pub export fn updateAndRender(
         }
 
         transient_state.is_initialized = true;
+    }
+
+    if (input.executable_reloaded) {
+        for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
+            var ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
+            ground_buffer.p = world.nullPosition();
+        }
     }
 
     const game_world = game_state.world.?;
@@ -1717,9 +1838,9 @@ pub export fn updateAndRender(
         draw_buffer,
         Vec2.splat(0),
         Vec2.fromInt(draw_buffer.width, draw_buffer.height),
-        0.5,
-        0.5,
-        0.5,
+        1.0,
+        0.0,
+        1.0,
     );
 
     const screen_center = Vec2.init(
@@ -1734,6 +1855,34 @@ pub export fn updateAndRender(
         &Vec3.splat(0),
         &Vec3.init(screen_width_in_meters, screen_height_in_meters, 0),
     );
+
+    for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
+        var ground_buffer = transient_state.ground_buffers[ground_buffer_index];
+
+        if (world.isValid(&ground_buffer.p)) {
+            var bitmap = &transient_state.ground_bitmap_template;
+
+            bitmap.memory = ground_buffer.memory;
+
+            var delta = Vec3.scale(
+                &world.subtract(game_world, &ground_buffer.p, &game_state.camera_p),
+                game_state.meters_to_pixels,
+            );
+
+            var ground = Vec2.init(
+                screen_center.x() + delta.x() - 0.5 * @as(f32, @floatFromInt(bitmap.width)),
+                screen_center.y() - delta.y() - 0.5 * @as(f32, @floatFromInt(bitmap.height)),
+            );
+
+            drawBitmap(
+                draw_buffer,
+                bitmap,
+                ground.x(),
+                ground.y(),
+                1,
+            );
+        }
+    }
 
     {
         const min_chunk_p = world.mapIntoChunkSpace(
@@ -1768,9 +1917,8 @@ pub export fn updateAndRender(
                     //if (maybe_chunk) |chunk|
                     {
                         var chunk_center_p = world.centeredChunkPoint(chunk_x, chunk_y, chunk_z);
-                        //var chunk_center_p = world.centeredChunk(chunk);
 
-                        const rel_p = world.subtract(
+                        var rel_p = world.subtract(
                             game_world,
                             &chunk_center_p,
                             &game_state.camera_p,
@@ -1786,37 +1934,52 @@ pub export fn updateAndRender(
                             meters_to_pixels,
                         );
 
-                        // TODO: This is super inefficient, fix tomorrow
-                        var found = false;
-                        var empty_buffer: ?*GroundBuffer = null;
+                        // TODO: This is super inefficient, fix it
+                        var furthest_buffer_length_sq: f32 = 0;
+                        var maybe_furthest_buffer: ?*GroundBuffer = null;
 
                         for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
                             const ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
 
                             if (world.inSameChunk(game_world, &ground_buffer.p, &chunk_center_p)) {
-                                found = true;
+                                maybe_furthest_buffer = null;
                                 break;
-                            } else if (!world.isValid(&ground_buffer.p)) {
-                                empty_buffer = ground_buffer;
+                            } else if (world.isValid(&ground_buffer.p)) {
+                                var d = world.subtract(
+                                    game_world,
+                                    &ground_buffer.p,
+                                    &game_state.camera_p,
+                                );
+
+                                const buffer_length_sq = Vec2.lengthSquared(&d.xy());
+
+                                if (furthest_buffer_length_sq < buffer_length_sq) {
+                                    furthest_buffer_length_sq = buffer_length_sq;
+                                    maybe_furthest_buffer = ground_buffer;
+                                }
+                            } else {
+                                furthest_buffer_length_sq = std.math.floatMax(f32);
+                                maybe_furthest_buffer = ground_buffer;
                             }
                         }
 
-                        if (!found and empty_buffer != null) {
+                        if (maybe_furthest_buffer) |furthest_buffer| {
                             fillGroundChunk(
                                 transient_state,
                                 game_state,
-                                empty_buffer.?,
+                                furthest_buffer,
                                 &chunk_center_p,
                             );
                         }
 
-                        drawRectOutline(
-                            draw_buffer,
-                            Vec2.sub(&screen_p, &Vec2.scale(&screen_dim, 0.5)),
-                            Vec2.add(&screen_p, &Vec2.scale(&screen_dim, 0.5)),
-                            Vec3.init(1, 1, 0),
-                            2,
-                        );
+                        if (false)
+                            drawRectOutline(
+                                draw_buffer,
+                                Vec2.sub(&screen_p, &Vec2.scale(&screen_dim, 0.5)),
+                                Vec2.add(&screen_p, &Vec2.scale(&screen_dim, 0.5)),
+                                Vec3.init(1, 1, 0),
+                                2,
+                            );
                     }
                 }
             }
@@ -1836,34 +1999,6 @@ pub export fn updateAndRender(
         sim_bounds,
         input.dt_for_frame,
     );
-
-    for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
-        var ground_buffer = transient_state.ground_buffers[ground_buffer_index];
-
-        if (world.isValid(&ground_buffer.p)) {
-            var bitmap = transient_state.ground_bitmap_template;
-
-            bitmap.memory = ground_buffer.memory;
-
-            var delta = Vec3.scale(
-                &world.subtract(game_world, &ground_buffer.p, &game_state.camera_p),
-                game_state.meters_to_pixels,
-            );
-
-            var ground = Vec2.init(
-                screen_center.x() + delta.x() - 0.5 * @as(f32, @floatFromInt(bitmap.width)),
-                screen_center.y() - delta.y() - 0.5 * @as(f32, @floatFromInt(bitmap.height)),
-            );
-
-            drawBitmap(
-                draw_buffer,
-                &bitmap,
-                ground.x(),
-                ground.y(),
-                1,
-            );
-        }
-    }
 
     // TODO: Move this out into the zigmade_entity
     var piece_group: EntityVisiblePieceGroup = undefined;
@@ -2035,7 +2170,7 @@ pub export fn updateAndRender(
                     var maybe_closest_hero: ?*Entity = null;
                     var closest_hero_d_sq = math.square(10); // NOTE: Ten meter max search
 
-                    if (false) {
+                    if (false)
                         // TODO: Make spatial queries easy for things
                         for (0..region.entity_count) |test_index| {
                             const test_entity = &region.entities[test_index];
@@ -2049,8 +2184,7 @@ pub export fn updateAndRender(
                                     closest_hero_d_sq = test_d_sq;
                                 }
                             }
-                        }
-                    }
+                        };
 
                     if (maybe_closest_hero) |closest_hero| {
                         if (closest_hero_d_sq > math.square(3)) {

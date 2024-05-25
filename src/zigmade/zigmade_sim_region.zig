@@ -680,11 +680,9 @@ pub fn speculativeCollide(
         // TODO: Needs work
         const step_height = 0.1;
 
-        if (false) {
-            //const ground_diff = getEntityGroundPoint(mover).z() - ground;
-            //result = (@abs(ground_diff) > step_height) or
-            //    (bary.y() > 0.1 and bary.y() < 0.9);
-        }
+        // const ground_diff = getEntityGroundPoint(mover).z() - ground;
+        // result = (@abs(ground_diff) > step_height) or
+        //     (bary.y() > 0.1 and bary.y() < 0.9);
 
         const mover_ground_point = getEntityGroundPoint(mover);
         const ground = getStairGround(region, mover_ground_point);
