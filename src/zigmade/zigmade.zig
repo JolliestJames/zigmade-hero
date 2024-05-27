@@ -81,6 +81,7 @@ const math = @import("zigmade_math.zig");
 const sim = @import("zigmade_sim_region.zig");
 const ety = @import("zigmade_entity.zig");
 const intrinsics = @import("zigmade_intrinsics.zig");
+const render = @import("zigmade_render.zig");
 const random = @import("zigmade_random.zig");
 const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
@@ -98,6 +99,9 @@ const EntityCollisionVolume = sim.EntityCollisionVolume;
 const EntityCollisionVolumeGroup = sim.EntityCollisionVolumeGroup;
 const World = world.World;
 const WorldPosition = world.WorldPosition;
+const EntityVisiblePiece = render.EntityVisiblePiece;
+const RenderGroup = render.RenderGroup;
+const RenderBasis = render.RenderBasis;
 
 const HeroBitmaps = struct {
     head: Bitmap,
@@ -112,27 +116,6 @@ pub const LowEntity = struct {
     // Can we do something better?
     sim: Entity = .{},
     p: WorldPosition = .{},
-};
-
-const EntityVisiblePiece = struct {
-    bitmap: ?*Bitmap = null,
-    offset: Vec2,
-    offset_z: f32,
-    entity_zc: f32,
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
-    dim: Vec2,
-};
-
-// TODO: This is dumb, this should just be part of
-// the renderer pushbuffer. Add correction of coordinates
-// in there and be done with it
-const EntityVisiblePieceGroup = struct {
-    piece_count: u32 = 0,
-    pieces: [32]EntityVisiblePiece,
-    game_state: *GameState,
 };
 
 const AddLowEntityResult = struct {
@@ -158,7 +141,7 @@ pub const GroundBuffer = struct {
     // NOTE: An invalid p tells us this GroundBuffer has not been filled
     // NOTE: This is the center of the bitmap
     p: WorldPosition,
-    memory: [*]void,
+    bitmap: Bitmap,
 };
 
 pub const GameState = struct {
@@ -200,23 +183,22 @@ const TransientState = struct {
     is_initialized: bool = false,
     arena: MemoryArena,
     ground_buffer_count: u32,
-    ground_bitmap_template: Bitmap,
     ground_buffers: [*]GroundBuffer,
 };
 
 pub const TemporaryMemory = struct {
-    used: u32,
+    used: usize,
     arena: *MemoryArena,
 };
 
 pub const MemoryArena = struct {
-    size: u32,
+    size: usize,
     base: [*]u8,
-    used: u32,
-    temp_count: i32,
+    used: usize,
+    temp_count: usize,
 };
 
-const Bitmap = struct {
+pub const Bitmap = struct {
     width: i32,
     height: i32,
     pitch: i32,
@@ -640,13 +622,23 @@ inline fn initializeArena(
     arena.temp_count = 0;
 }
 
-inline fn pushSize(
+pub inline fn pushSize(
     arena: *MemoryArena,
-    size: u32,
-) [*]u8 {
-    assert((arena.used + size) <= arena.size);
-    const result = arena.base + arena.used;
-    arena.used += size;
+    alignment: comptime_int,
+    size: usize,
+) [*]align(alignment) u8 {
+    const address = arena.base + arena.used;
+    const masked = @as(usize, @intFromPtr(address)) & alignment - 1;
+    const offset = if (masked != 0) alignment - masked else 0;
+    const alignment_correct_size = size + offset;
+
+    assert((arena.used + alignment_correct_size) <= arena.size);
+
+    const result: [*]align(alignment) u8 =
+        @alignCast(@ptrCast(arena.base + arena.used + offset));
+
+    arena.used += alignment_correct_size;
+
     return result;
 }
 
@@ -654,7 +646,7 @@ pub inline fn pushStruct(
     arena: *MemoryArena,
     comptime T: type,
 ) *T {
-    const result = pushSize(arena, @sizeOf(T));
+    const result = pushSize(arena, @alignOf(T), @sizeOf(T));
     return @as(*T, @alignCast(@ptrCast(result)));
 }
 
@@ -663,7 +655,7 @@ pub inline fn pushArray(
     count: u32,
     comptime T: type,
 ) [*]T {
-    const result = pushSize(arena, count * @sizeOf(T));
+    const result = pushSize(arena, @alignOf(T), count * @sizeOf(T));
     return @as([*]T, @alignCast(@ptrCast(result)));
 }
 
@@ -993,131 +985,9 @@ fn addFamiliar(
     return entity;
 }
 
-fn pushPiece(
-    group: *EntityVisiblePieceGroup,
-    bitmap: ?*Bitmap,
-    offset: Vec2,
-    offset_z: f32,
-    alignment: Vec2,
-    dim: Vec2,
-    color: Vec4,
-    entity_zc: f32,
-) void {
-    assert(group.piece_count < group.pieces.len);
-
-    var piece = &group.pieces[group.piece_count];
-    group.piece_count += 1;
-    piece.bitmap = bitmap;
-
-    piece.offset = Vec2.sub(
-        &Vec2.scale(
-            &Vec2.init(offset.x(), -offset.y()),
-            group.game_state.meters_to_pixels,
-        ),
-        &alignment,
-    );
-
-    piece.offset_z = offset_z;
-    piece.entity_zc = entity_zc;
-    piece.r = color.r();
-    piece.g = color.g();
-    piece.b = color.b();
-    piece.a = color.a();
-    piece.dim = dim;
-}
-
-fn pushBitmap(
-    group: *EntityVisiblePieceGroup,
-    bitmap: *Bitmap,
-    offset: Vec2,
-    offset_z: f32,
-    alignment: Vec2,
-    alpha: f32,
-    entity_zc: f32,
-) void {
-    pushPiece(
-        group,
-        bitmap,
-        offset,
-        offset_z,
-        alignment,
-        Vec2.splat(0),
-        Vec4.init(1, 1, 1, alpha),
-        entity_zc,
-    );
-}
-
-fn pushRect(
-    group: *EntityVisiblePieceGroup,
-    offset: Vec2,
-    offset_z: f32,
-    dim: Vec2,
-    color: Vec4,
-    entity_zc: f32,
-) void {
-    pushPiece(group, null, offset, offset_z, Vec2.splat(0), dim, color, entity_zc);
-}
-
-fn pushRectOutline(
-    group: *EntityVisiblePieceGroup,
-    offset: Vec2,
-    offset_z: f32,
-    dim: Vec2,
-    color: Vec4,
-    entity_zc: f32,
-) void {
-    const thickness = 0.1;
-
-    // NOTE: Top and bottom
-    pushPiece(
-        group,
-        null,
-        Vec2.sub(&offset, &Vec2.init(0, 0.5 * dim.y())),
-        offset_z,
-        Vec2.splat(0),
-        Vec2.init(dim.x(), thickness),
-        color,
-        entity_zc,
-    );
-
-    pushPiece(
-        group,
-        null,
-        Vec2.add(&offset, &Vec2.init(0, 0.5 * dim.y())),
-        offset_z,
-        Vec2.splat(0),
-        Vec2.init(dim.x(), thickness),
-        color,
-        entity_zc,
-    );
-
-    // NOTE: Left and right
-    pushPiece(
-        group,
-        null,
-        Vec2.sub(&offset, &Vec2.init(0.5 * dim.x(), 0)),
-        offset_z,
-        Vec2.splat(0),
-        Vec2.init(thickness, dim.y()),
-        color,
-        entity_zc,
-    );
-
-    pushPiece(
-        group,
-        null,
-        Vec2.add(&offset, &Vec2.init(0.5 * dim.x(), 0)),
-        offset_z,
-        Vec2.splat(0),
-        Vec2.init(thickness, dim.y()),
-        color,
-        entity_zc,
-    );
-}
-
 fn drawHitPoints(
     entity: *Entity,
-    piece_group: *EntityVisiblePieceGroup,
+    piece_group: *RenderGroup,
 ) void {
     if (entity.hit_point_max >= 1) {
         const health_dim = Vec2.splat(0.2);
@@ -1139,7 +1009,7 @@ fn drawHitPoints(
                 color.v[2] = 0.2;
             }
 
-            pushRect(piece_group, hit_p, 0, health_dim, color, 0);
+            render.pushRect(piece_group, hit_p, 0, health_dim, color, 0);
             hit_p = Vec2.add(&hit_p, &d_hit_p);
         }
     }
@@ -1266,13 +1136,11 @@ fn makeNullCollision(game_state: *GameState) *EntityCollisionVolumeGroup {
 }
 
 fn fillGroundChunk(
-    transient_state: *TransientState,
     game_state: *GameState,
     ground_buffer: *GroundBuffer,
     chunk_p: *const WorldPosition,
 ) void {
-    var buffer = transient_state.ground_bitmap_template;
-    buffer.memory = ground_buffer.memory;
+    const buffer = &ground_buffer.bitmap;
 
     ground_buffer.p = chunk_p.*;
 
@@ -1325,7 +1193,7 @@ fn fillGroundChunk(
                 var p = Vec2.sub(&offset, &bitmap_center);
                 p = Vec2.add(&p, &center);
 
-                drawBitmap(&buffer, stamp, p.x(), p.y(), 1);
+                drawBitmap(buffer, stamp, p.x(), p.y(), 1);
             }
         }
     }
@@ -1370,7 +1238,7 @@ fn fillGroundChunk(
                 var p = Vec2.sub(&offset, &bitmap_center);
                 p = Vec2.add(&p, &center);
 
-                drawBitmap(&buffer, stamp, p.x(), p.y(), 1);
+                drawBitmap(buffer, stamp, p.x(), p.y(), 1);
             }
         }
     }
@@ -1391,9 +1259,15 @@ fn makeEmptyBitmap(arena: *MemoryArena, width: i32, height: i32, clear_to_zero: 
     result.width = width;
     result.height = height;
     result.pitch = result.width * platform.BITMAP_BYTES_PER_PIXEL;
+
     const total_bitmap_size: u32 =
         @intCast(width * height * platform.BITMAP_BYTES_PER_PIXEL);
-    result.memory = @ptrCast(pushSize(arena, total_bitmap_size));
+
+    result.memory = @ptrCast(pushSize(
+        arena,
+        @alignOf(@TypeOf(total_bitmap_size)),
+        total_bitmap_size,
+    ));
 
     if (clear_to_zero) {
         clearBitmap(&result);
@@ -1568,11 +1442,10 @@ pub export fn updateAndRender(
         for (0..2000) |_| {
             var door_direction: usize = undefined;
 
-            door_direction = random.choice(&series, 2);
-            //door_direction = random.choice(
-            //    &series,
-            //    if (door_up or door_down) 2 else 3,
-            //);
+            door_direction = random.choice(
+                &series,
+                if (true or door_up or door_down) 2 else 3,
+            );
 
             var created_z_door = false;
 
@@ -1722,7 +1595,7 @@ pub export fn updateAndRender(
         );
 
         // TODO: Pick a real number here
-        transient_state.ground_buffer_count = 32; // 128;
+        transient_state.ground_buffer_count = 64; // 128;
         transient_state.ground_buffers = pushArray(
             &transient_state.arena,
             transient_state.ground_buffer_count,
@@ -1732,14 +1605,13 @@ pub export fn updateAndRender(
         for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
             var ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
 
-            transient_state.ground_bitmap_template = makeEmptyBitmap(
+            ground_buffer.bitmap = makeEmptyBitmap(
                 &transient_state.arena,
                 ground_buffer_width,
                 ground_buffer_height,
                 false,
             );
 
-            ground_buffer.memory = transient_state.ground_bitmap_template.memory.?;
             ground_buffer.p = world.nullPosition();
         }
 
@@ -1827,6 +1699,15 @@ pub export fn updateAndRender(
     // NOTE: Render
     //
 
+    const render_memory = beginTemporaryMemory(&transient_state.arena);
+
+    // TODO: Decide what our pushbuffer size is
+    var render_group = render.allocateRenderGroup(
+        &transient_state.arena,
+        platform.Megabytes(4),
+        game_state.meters_to_pixels,
+    );
+
     const draw_buffer = &Bitmap{
         .width = buffer.width,
         .height = buffer.height,
@@ -1857,28 +1738,22 @@ pub export fn updateAndRender(
     );
 
     for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
-        var ground_buffer = transient_state.ground_buffers[ground_buffer_index];
+        var ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
 
         if (world.isValid(&ground_buffer.p)) {
-            var bitmap = &transient_state.ground_bitmap_template;
+            const bitmap = &ground_buffer.bitmap;
+            const delta = &world.subtract(game_world, &ground_buffer.p, &game_state.camera_p);
 
-            bitmap.memory = ground_buffer.memory;
-
-            var delta = Vec3.scale(
-                &world.subtract(game_world, &ground_buffer.p, &game_state.camera_p),
-                game_state.meters_to_pixels,
-            );
-
-            var ground = Vec2.init(
-                screen_center.x() + delta.x() - 0.5 * @as(f32, @floatFromInt(bitmap.width)),
-                screen_center.y() - delta.y() - 0.5 * @as(f32, @floatFromInt(bitmap.height)),
-            );
-
-            drawBitmap(
-                draw_buffer,
+            render.pushBitmap(
+                render_group,
                 bitmap,
-                ground.x(),
-                ground.y(),
+                delta.xy(),
+                delta.z(),
+                Vec2.scale(
+                    &Vec2.fromInt(bitmap.width, bitmap.height),
+                    0.5,
+                ),
+                1,
                 1,
             );
         }
@@ -1965,7 +1840,6 @@ pub export fn updateAndRender(
 
                         if (maybe_furthest_buffer) |furthest_buffer| {
                             fillGroundChunk(
-                                transient_state,
                                 game_state,
                                 furthest_buffer,
                                 &chunk_center_p,
@@ -2001,14 +1875,10 @@ pub export fn updateAndRender(
     );
 
     // TODO: Move this out into the zigmade_entity
-    var piece_group: EntityVisiblePieceGroup = undefined;
-    piece_group.game_state = game_state;
-
     for (0..region.entity_count) |index| {
         var entity = &region.entities[index];
 
         if (entity.updatable) {
-            piece_group.piece_count = 0;
             const dt = input.dt_for_frame;
 
             // TODO: This is incorrect, should be computed after update
@@ -2021,7 +1891,10 @@ pub export fn updateAndRender(
             var move_spec = ety.defaultMoveSpec();
             var ddp = Vec3.splat(0);
 
-            var hero_bitmaps = game_state.hero_bitmaps[entity.facing_direction];
+            var basis: *RenderBasis = pushStruct(&transient_state.arena, RenderBasis);
+            render_group.default_basis = basis;
+
+            var hero_bitmaps = &game_state.hero_bitmaps[entity.facing_direction];
 
             switch (entity.type) {
                 .hero => {
@@ -2075,8 +1948,8 @@ pub export fn updateAndRender(
                     }
 
                     // TODO: z
-                    pushBitmap(
-                        &piece_group,
+                    render.pushBitmap(
+                        render_group,
                         &game_state.shadow,
                         Vec2.splat(0),
                         0,
@@ -2084,8 +1957,8 @@ pub export fn updateAndRender(
                         shadow_alpha,
                         0,
                     );
-                    pushBitmap(
-                        &piece_group,
+                    render.pushBitmap(
+                        render_group,
                         &hero_bitmaps.torso,
                         Vec2.splat(0),
                         0,
@@ -2093,8 +1966,8 @@ pub export fn updateAndRender(
                         1,
                         1,
                     );
-                    pushBitmap(
-                        &piece_group,
+                    render.pushBitmap(
+                        render_group,
                         &hero_bitmaps.cape,
                         Vec2.splat(0),
                         0,
@@ -2102,8 +1975,8 @@ pub export fn updateAndRender(
                         1,
                         1,
                     );
-                    pushBitmap(
-                        &piece_group,
+                    render.pushBitmap(
+                        render_group,
                         &hero_bitmaps.head,
                         Vec2.splat(0),
                         0,
@@ -2112,11 +1985,11 @@ pub export fn updateAndRender(
                         1,
                     );
 
-                    drawHitPoints(entity, &piece_group);
+                    drawHitPoints(entity, render_group);
                 },
                 .wall => {
-                    pushBitmap(
-                        &piece_group,
+                    render.pushBitmap(
+                        render_group,
                         &game_state.tree,
                         Vec2.splat(0),
                         0,
@@ -2126,16 +1999,16 @@ pub export fn updateAndRender(
                     );
                 },
                 .stairwell => {
-                    pushRect(
-                        &piece_group,
+                    render.pushRect(
+                        render_group,
                         Vec2.splat(0),
                         0,
                         entity.walkable_dim,
                         Vec4.init(1, 0.5, 0, 1),
                         0,
                     );
-                    pushRect(
-                        &piece_group,
+                    render.pushRect(
+                        render_group,
                         Vec2.splat(0),
                         entity.walkable_height,
                         entity.walkable_dim,
@@ -2163,8 +2036,8 @@ pub export fn updateAndRender(
                         ety.makeEntityNonSpatial(entity);
                     }
 
-                    pushBitmap(&piece_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                    pushBitmap(&piece_group, &game_state.sword, Vec2.splat(0), 0, Vec2.init(29, 10), 1, 1);
+                    render.pushBitmap(render_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
+                    render.pushBitmap(render_group, &game_state.sword, Vec2.splat(0), 0, Vec2.init(29, 10), 1, 1);
                 },
                 .familiar => {
                     var maybe_closest_hero: ?*Entity = null;
@@ -2209,21 +2082,21 @@ pub export fn updateAndRender(
                     }
 
                     const bob_sin = @sin(2 * entity.t_bob);
-                    pushBitmap(&piece_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, 0.5 * shadow_alpha + 0.2 * bob_sin, 0);
-                    pushBitmap(&piece_group, &hero_bitmaps.head, Vec2.splat(0), 0.25 * bob_sin, hero_bitmaps.alignment, 1, 1);
+                    render.pushBitmap(render_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, 0.5 * shadow_alpha + 0.2 * bob_sin, 0);
+                    render.pushBitmap(render_group, &hero_bitmaps.head, Vec2.splat(0), 0.25 * bob_sin, hero_bitmaps.alignment, 1, 1);
                 },
                 .monster => {
-                    pushBitmap(&piece_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                    pushBitmap(&piece_group, &hero_bitmaps.torso, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
-                    drawHitPoints(entity, &piece_group);
+                    render.pushBitmap(render_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
+                    render.pushBitmap(render_group, &hero_bitmaps.torso, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
+                    drawHitPoints(entity, render_group);
                 },
                 .space => {
                     if (false) {
                         for (0..entity.collision.volume_count) |volume_index| {
                             const volume = &entity.collision.volumes.?[volume_index];
 
-                            pushRectOutline(
-                                &piece_group,
+                            render.pushRectOutline(
+                                render_group,
                                 volume.offset_p.xy(),
                                 0,
                                 volume.dim.xy(),
@@ -2242,60 +2115,59 @@ pub export fn updateAndRender(
                 sim.moveEntity(game_state, region, entity, input.dt_for_frame, &move_spec, ddp);
             }
 
-            // NOTE: With Casey's implementation, there will be one iteration of the game
-            // loop when a sword has transitioned from spatial to non_spatial during which
-            // a draw attempt will be made without this check for non-spatialness in place.
-            // This makes it clear why avoiding use of a non spatial entity's position is
-            // important. An attempt to draw at that position in this case will create an
-            // integer part of floating point value out of bounds panic.
-            if (!entity.flags.non_spatial) {
-                for (0..piece_group.piece_count) |piece_index| {
-                    const piece = piece_group.pieces[piece_index];
-                    const entity_base_p = sim.getEntityGroundPoint(entity);
-                    const z_fudge = 1.0 + 0.1 * (entity_base_p.z() + piece.offset_z);
+            basis.p = sim.getEntityGroundPoint(entity);
+        }
+    }
 
-                    const eg_x = screen_center.x() + meters_to_pixels * z_fudge * entity_base_p.x();
-                    const eg_y = screen_center.y() - meters_to_pixels * z_fudge * entity_base_p.y();
-                    const entity_z = -meters_to_pixels * entity_base_p.z();
+    // NOTE: With Casey's implementation, there will be one iteration of the game
+    // loop when a sword has transitioned from spatial to non_spatial during which
+    // a draw attempt will be made without this check for non-spatialness in place.
+    // This makes it clear why avoiding use of a non spatial entity's position is
+    // important. An attempt to draw at that position in this case will create an
+    // integer part of floating point value out of bounds panic.
+    if (true) {
+        var base: usize = 0;
 
-                    const center = Vec2.init(
-                        eg_x + piece.offset.x(),
-                        eg_y + piece.offset.y() + piece.entity_zc * entity_z,
+        while (base < render_group.push_buffer_size) : (base += @sizeOf(EntityVisiblePiece)) {
+            const piece = @as(
+                *EntityVisiblePiece,
+                @alignCast(@ptrCast(render_group.push_buffer_base + base)),
+            );
+
+            if (!std.meta.eql(piece.basis.p.v, ety.invalidPos().v)) {
+                const entity_base_p = piece.basis.p;
+                const z_fudge = 1.0 + 0.1 * (entity_base_p.z() + piece.offset_z);
+
+                const eg_x = screen_center.x() + meters_to_pixels * z_fudge * entity_base_p.x();
+                const eg_y = screen_center.y() - meters_to_pixels * z_fudge * entity_base_p.y();
+                const entity_z = -meters_to_pixels * entity_base_p.z();
+
+                const center = Vec2.init(
+                    eg_x + piece.offset.x(),
+                    eg_y + piece.offset.y() + piece.entity_zc * entity_z,
+                );
+
+                if (piece.bitmap) |bitmap| {
+                    drawBitmap(draw_buffer, bitmap, center.x(), center.y(), piece.a);
+                } else {
+                    const half_dim = Vec2.scale(&piece.dim, 0.5 * meters_to_pixels);
+
+                    drawRectangle(
+                        draw_buffer,
+                        Vec2.sub(&center, &half_dim),
+                        Vec2.add(&center, &half_dim),
+                        piece.r,
+                        piece.g,
+                        piece.b,
                     );
-
-                    if (piece.bitmap) |bitmap| {
-                        drawBitmap(draw_buffer, bitmap, center.x(), center.y(), piece.a);
-                    } else {
-                        const half_dim = Vec2.scale(&piece.dim, 0.5 * meters_to_pixels);
-
-                        drawRectangle(
-                            draw_buffer,
-                            Vec2.sub(&center, &half_dim),
-                            Vec2.add(&center, &half_dim),
-                            piece.r,
-                            piece.g,
-                            piece.b,
-                        );
-                    }
                 }
             }
         }
     }
 
-    var world_origin: WorldPosition = .{};
-    const diff = world.subtract(region.world, &world_origin, &region.origin);
-
-    drawRectangle(
-        draw_buffer,
-        Vec2.init(diff.x(), diff.y()),
-        Vec2.init(10, 10),
-        1,
-        1,
-        0,
-    );
-
     sim.endSim(region, game_state);
     endTemporaryMemory(sim_memory);
+    endTemporaryMemory(render_memory);
     checkArena(&game_state.world_arena);
     checkArena(&transient_state.arena);
 }

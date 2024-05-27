@@ -651,8 +651,14 @@ inline fn getStairGround(entity: *Entity, at_ground_point: Vec3) f32 {
     return result;
 }
 
+pub inline fn getEntityGroundPointFromP(_: *Entity, for_entity_p: Vec3) Vec3 {
+    const result = for_entity_p;
+
+    return result;
+}
+
 pub inline fn getEntityGroundPoint(entity: *Entity) Vec3 {
-    const result = entity.p;
+    const result = getEntityGroundPointFromP(entity, entity.p);
 
     return result;
 }
@@ -665,13 +671,17 @@ fn handleOverlap(
     ground: *f32,
 ) void {
     if (region.type == .stairwell) {
-        ground.* = getStairGround(region, getEntityGroundPoint(mover));
+        ground.* = getStairGround(
+            region,
+            getEntityGroundPoint(mover),
+        );
     }
 }
 
 pub fn speculativeCollide(
     mover: *Entity,
     region: *Entity,
+    test_p: Vec3,
 ) bool {
     var result = true;
 
@@ -684,7 +694,7 @@ pub fn speculativeCollide(
         // result = (@abs(ground_diff) > step_height) or
         //     (bary.y() > 0.1 and bary.y() < 0.9);
 
-        const mover_ground_point = getEntityGroundPoint(mover);
+        const mover_ground_point = getEntityGroundPointFromP(mover, test_p);
         const ground = getStairGround(region, mover_ground_point);
 
         result = @abs(mover_ground_point.z() - ground) > step_height;
@@ -937,9 +947,12 @@ pub fn moveEntity(
                                         // of here so that we can prevent you from _leaving_
                                         // stairs intead of just preventing you from getting onto them
                                         if (hit_this) {
-                                            //const test_p = Vec3.add(&entity.pos, &Vec3.scale(&player_d, t_min_test),);
+                                            const test_p = Vec3.add(
+                                                &entity.p,
+                                                &Vec3.scale(&player_d, t_min_test),
+                                            );
 
-                                            if (speculativeCollide(entity, test_entity)) {
+                                            if (speculativeCollide(entity, test_entity, test_p)) {
                                                 t_min = t_min_test;
                                                 wall_normal_min = test_wall_normal;
                                                 hit_entity_min = test_entity;
