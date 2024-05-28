@@ -38,10 +38,7 @@ pub const RenderGroupEntryHeader = extern struct {
 
 pub const RenderEntryClear = extern struct {
     header: RenderGroupEntryHeader,
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
+    color: Vec4,
 };
 
 pub const RenderEntryBitmap = extern struct {
@@ -79,14 +76,10 @@ pub inline fn pushRenderElement(
     group: *RenderGroup,
     comptime T: type,
     comptime entry_type: RenderGroupEntryType,
-) ?*T {
-    var result: ?*T = null;
+) ?*align(@alignOf(void)) T {
+    var result: ?*align(@alignOf(void)) T = null;
 
-    const header = pushRenderElement_(
-        group,
-        @sizeOf(T),
-        entry_type,
-    );
+    const header = pushRenderElement_(group, @sizeOf(T), entry_type);
 
     result = @alignCast(@ptrCast(header));
 
@@ -118,11 +111,7 @@ pub inline fn pushPiece(
     color: Vec4,
     entity_zc: f32,
 ) void {
-    const maybe_piece = pushRenderElement(
-        group,
-        RenderEntryBitmap,
-        .bitmap,
-    );
+    const maybe_piece = pushRenderElement(group, RenderEntryBitmap, .bitmap);
 
     if (maybe_piece) |piece| {
         piece.entity_basis.basis = group.default_basis;
@@ -173,11 +162,7 @@ pub inline fn pushRect(
     color: Vec4,
     entity_zc: f32,
 ) void {
-    const maybe_piece = pushRenderElement(
-        group,
-        RenderEntryRectangle,
-        .rectangle,
-    );
+    const maybe_piece = pushRenderElement(group, RenderEntryRectangle, .rectangle);
 
     if (maybe_piece) |piece| {
         const half_dim = Vec2.scale(&dim, 0.5 * group.meters_to_pixels);
@@ -202,7 +187,7 @@ pub inline fn pushRect(
     }
 }
 
-inline fn pushRectOutline(
+pub inline fn pushRectOutline(
     group: *RenderGroup,
     offset: Vec2,
     offset_z: f32,
@@ -213,50 +198,50 @@ inline fn pushRectOutline(
     const thickness = 0.1;
 
     // NOTE: Top and bottom
-    pushPiece(
+    pushRect(
         group,
-        null,
         Vec2.sub(&offset, &Vec2.init(0, 0.5 * dim.y())),
         offset_z,
-        Vec2.splat(0),
         Vec2.init(dim.x(), thickness),
         color,
         entity_zc,
     );
 
-    pushPiece(
+    pushRect(
         group,
-        null,
         Vec2.add(&offset, &Vec2.init(0, 0.5 * dim.y())),
         offset_z,
-        Vec2.splat(0),
         Vec2.init(dim.x(), thickness),
         color,
         entity_zc,
     );
 
     // NOTE: Left and right
-    pushPiece(
+    pushRect(
         group,
-        null,
         Vec2.sub(&offset, &Vec2.init(0.5 * dim.x(), 0)),
         offset_z,
-        Vec2.splat(0),
         Vec2.init(thickness, dim.y()),
         color,
         entity_zc,
     );
 
-    pushPiece(
+    pushRect(
         group,
-        null,
         Vec2.add(&offset, &Vec2.init(0.5 * dim.x(), 0)),
         offset_z,
-        Vec2.splat(0),
         Vec2.init(thickness, dim.y()),
         color,
         entity_zc,
     );
+}
+
+pub inline fn clear(group: *RenderGroup, color: Vec4) void {
+    const maybe_entry = pushRenderElement(group, RenderEntryClear, .clear);
+
+    if (maybe_entry) |entry| {
+        entry.color = color;
+    }
 }
 
 inline fn getRenderEntityBasisP(
@@ -294,7 +279,17 @@ pub fn renderGroupToOutput(
 
         switch (header.type) {
             .clear => {
-                const entry = @as(*RenderEntryClear, @alignCast(@ptrCast(header)));
+                const entry = @as(*align(@alignOf(void)) RenderEntryClear, @alignCast(@ptrCast(header)));
+
+                drawRectangle(
+                    output_target,
+                    Vec2.splat(0),
+                    Vec2.fromInt(output_target.width, output_target.height),
+                    entry.color.v[0],
+                    entry.color.v[1],
+                    entry.color.v[2],
+                    entry.color.v[3],
+                );
 
                 base += @sizeOf(@TypeOf(entry.*));
             },
@@ -327,6 +322,7 @@ pub fn renderGroupToOutput(
                     entry.r,
                     entry.g,
                     entry.b,
+                    1,
                 );
 
                 base += @sizeOf(@TypeOf(entry.*));
@@ -364,6 +360,7 @@ pub fn drawRectangle(
     r: f32,
     g: f32,
     b: f32,
+    a: f32,
 ) void {
     var min_x: i32 = @intFromFloat(@round(min.x()));
     var min_y: i32 = @intFromFloat(@round(min.y()));
@@ -378,6 +375,7 @@ pub fn drawRectangle(
     if (min_y > max_y) max_y = min_y;
 
     const color: u32 =
+        (@as(u32, (@intFromFloat(@round(a * 255.0)))) << 24) |
         (@as(u32, (@intFromFloat(@round(r * 255.0)))) << 16) |
         (@as(u32, (@intFromFloat(@round(g * 255.0)))) << 8) |
         (@as(u32, (@intFromFloat(@round(b * 255.0)))) << 0);
@@ -399,7 +397,7 @@ pub fn drawRectangle(
     }
 }
 
-fn drawRectOutline(buffer: *const Bitmap, min: Vec2, max: Vec2, color: Vec3, r: f32) void {
+pub fn drawRectOutline(buffer: *const Bitmap, min: Vec2, max: Vec2, color: Vec3, r: f32) void {
     // NOTE: Top and bottom
     drawRectangle(
         buffer,
@@ -408,6 +406,7 @@ fn drawRectOutline(buffer: *const Bitmap, min: Vec2, max: Vec2, color: Vec3, r: 
         color.r(),
         color.g(),
         color.b(),
+        1,
     );
 
     drawRectangle(
@@ -417,6 +416,7 @@ fn drawRectOutline(buffer: *const Bitmap, min: Vec2, max: Vec2, color: Vec3, r: 
         color.r(),
         color.g(),
         color.b(),
+        1,
     );
 
     // NOTE: Left and right
@@ -427,6 +427,7 @@ fn drawRectOutline(buffer: *const Bitmap, min: Vec2, max: Vec2, color: Vec3, r: 
         color.r(),
         color.g(),
         color.b(),
+        1,
     );
 
     drawRectangle(
@@ -436,6 +437,7 @@ fn drawRectOutline(buffer: *const Bitmap, min: Vec2, max: Vec2, color: Vec3, r: 
         color.r(),
         color.g(),
         color.b(),
+        1,
     );
 }
 

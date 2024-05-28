@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 
 pub inline fn Kilobytes(comptime value: comptime_int) comptime_int {
     return (1024 * value);
@@ -18,7 +19,7 @@ pub inline fn Terabytes(comptime value: comptime_int) comptime_int {
 
 pub inline fn safeTruncateu64(value: u64) u32 {
     // TODO: consts for maximum values
-    std.debug.assert(value <= 0xffffffff);
+    assert(value <= 0xffffffff);
     return @as(u32, @truncate(value));
 }
 
@@ -43,7 +44,7 @@ pub inline fn getController(
     input: *GameInput,
     index: usize,
 ) !*GameControllerInput {
-    std.debug.assert(index < input.controllers.len);
+    assert(index < input.controllers.len);
     const result = &input.controllers[index];
     return (result);
 }

@@ -204,8 +204,6 @@ pub inline fn changeEntityLocationRaw(
                 null,
             );
 
-            assert(chunk != null);
-
             if (chunk) |c| {
                 const first_block = &c.first_block;
                 var block: ?*WorldEntityBlock = first_block;
@@ -237,7 +235,7 @@ pub inline fn changeEntityLocationRaw(
                         }
                     }
                 }
-            }
+            } else unreachable;
         }
 
         if (maybe_new_p) |new_p| {
@@ -249,8 +247,6 @@ pub inline fn changeEntityLocationRaw(
                 new_p.chunk_z,
                 arena,
             );
-
-            assert(chunk != null);
 
             if (chunk) |c| {
                 var block = &c.first_block;
@@ -272,7 +268,7 @@ pub inline fn changeEntityLocationRaw(
                 assert(block.entity_count < block.low_entity_index.len);
                 block.low_entity_index[block.entity_count] = low_entity_index;
                 block.entity_count += 1;
-            }
+            } else unreachable;
         }
     }
 }

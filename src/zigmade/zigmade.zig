@@ -873,10 +873,21 @@ fn makeNullCollision(game_state: *GameState) *EntityCollisionVolumeGroup {
 }
 
 fn fillGroundChunk(
+    transient_state: *TransientState,
     game_state: *GameState,
     ground_buffer: *GroundBuffer,
     chunk_p: *const WorldPosition,
 ) void {
+    // TODO: Decide what our pushbuffer size is
+    const ground_memory = beginTemporaryMemory(&transient_state.arena);
+    const render_group = render.allocateRenderGroup(
+        &transient_state.arena,
+        platform.Megabytes(4),
+        1,
+    );
+
+    render.clear(render_group, Vec4.init(1, 1, 0, 1));
+
     const buffer = &ground_buffer.bitmap;
 
     ground_buffer.p = chunk_p.*;
@@ -930,7 +941,7 @@ fn fillGroundChunk(
                 var p = Vec2.sub(&offset, &bitmap_center);
                 p = Vec2.add(&p, &center);
 
-                render.drawBitmap(buffer, stamp, p.x(), p.y(), 1);
+                render.pushBitmap(render_group, stamp, p, 0, Vec2.splat(0), 1, 1);
             }
         }
     }
@@ -975,10 +986,13 @@ fn fillGroundChunk(
                 var p = Vec2.sub(&offset, &bitmap_center);
                 p = Vec2.add(&p, &center);
 
-                render.drawBitmap(buffer, stamp, p.x(), p.y(), 1);
+                render.pushBitmap(render_group, stamp, p, 0, Vec2.splat(0), 1, 1);
             }
         }
     }
+
+    render.renderGroupToOutput(render_group, buffer);
+    endTemporaryMemory(ground_memory);
 }
 
 fn clearBitmap(bitmap: *Bitmap) void {
@@ -1364,7 +1378,6 @@ pub export fn updateAndRender(
 
     const game_world = game_state.world.?;
 
-    const meters_to_pixels = game_state.meters_to_pixels;
     const pixels_to_meters = 1 / game_state.meters_to_pixels;
 
     //
@@ -1452,19 +1465,7 @@ pub export fn updateAndRender(
         .memory = @ptrCast(buffer.memory),
     };
 
-    render.drawRectangle(
-        draw_buffer,
-        Vec2.splat(0),
-        Vec2.fromInt(draw_buffer.width, draw_buffer.height),
-        1.0,
-        0.0,
-        1.0,
-    );
-
-    const screen_center = Vec2.init(
-        0.5 * @as(f32, @floatFromInt(draw_buffer.width)),
-        0.5 * @as(f32, @floatFromInt(draw_buffer.height)),
-    );
+    render.clear(render_group, Vec4.init(1, 0, 1, 0));
 
     const screen_width_in_meters = @as(f32, @floatFromInt(draw_buffer.width)) * pixels_to_meters;
     const screen_height_in_meters = @as(f32, @floatFromInt(draw_buffer.height)) * pixels_to_meters;
@@ -1536,16 +1537,6 @@ pub export fn updateAndRender(
                             &game_state.camera_p,
                         );
 
-                        const screen_p = Vec2.init(
-                            screen_center.x() + meters_to_pixels * rel_p.x(),
-                            screen_center.y() - meters_to_pixels * rel_p.y(),
-                        );
-
-                        const screen_dim = Vec2.scale(
-                            &game_world.chunk_dim_in_meters.xy(),
-                            meters_to_pixels,
-                        );
-
                         // TODO: This is super inefficient, fix it
                         var furthest_buffer_length_sq: f32 = 0;
                         var maybe_furthest_buffer: ?*GroundBuffer = null;
@@ -1577,20 +1568,21 @@ pub export fn updateAndRender(
 
                         if (maybe_furthest_buffer) |furthest_buffer| {
                             fillGroundChunk(
+                                transient_state,
                                 game_state,
                                 furthest_buffer,
                                 &chunk_center_p,
                             );
                         }
 
-                        if (false)
-                            render.drawRectOutline(
-                                draw_buffer,
-                                Vec2.sub(&screen_p, &Vec2.scale(&screen_dim, 0.5)),
-                                Vec2.add(&screen_p, &Vec2.scale(&screen_dim, 0.5)),
-                                Vec3.init(1, 1, 0),
-                                2,
-                            );
+                        render.pushRectOutline(
+                            render_group,
+                            rel_p.xy(),
+                            0,
+                            game_world.chunk_dim_in_meters.xy(),
+                            Vec4.init(1, 1, 0, 1),
+                            1,
+                        );
                     }
                 }
             }
@@ -1828,19 +1820,17 @@ pub export fn updateAndRender(
                     drawHitPoints(entity, render_group);
                 },
                 .space => {
-                    if (false) {
-                        for (0..entity.collision.volume_count) |volume_index| {
-                            const volume = &entity.collision.volumes.?[volume_index];
+                    for (0..entity.collision.volume_count) |volume_index| {
+                        const volume = &entity.collision.volumes.?[volume_index];
 
-                            render.pushRectOutline(
-                                render_group,
-                                volume.offset_p.xy(),
-                                0,
-                                volume.dim.xy(),
-                                Vec4.init(0, 0.5, 1, 1),
-                                0,
-                            );
-                        }
+                        render.pushRectOutline(
+                            render_group,
+                            volume.offset_p.xy(),
+                            0,
+                            volume.dim.xy(),
+                            Vec4.init(0, 0.5, 1, 1),
+                            0,
+                        );
                     }
                 },
                 else => unreachable,

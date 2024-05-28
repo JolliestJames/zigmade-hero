@@ -17,6 +17,7 @@
 //
 
 const std = @import("std");
+const assert = std.debug.assert;
 const platform = @import("zigmade_platform");
 
 const DWORD = std.os.windows.DWORD;
@@ -710,7 +711,7 @@ fn win32FillSoundBuffer(
         &region_2_size,
         0,
     ))) {
-        std.debug.assert(region_1_size + region_2_size == bytes_to_write);
+        assert(region_1_size + region_2_size == bytes_to_write);
 
         const source_sample = source_buffer.samples;
         const region_1_sample_count: DWORD = region_1_size /
@@ -1011,12 +1012,12 @@ inline fn win32DebugSyncDisplay(
     );
 
     for (markers, 0..) |marker, i| {
-        std.debug.assert(marker.output_write_cursor < sound_output.secondary_buffer_size);
-        std.debug.assert(marker.output_write_cursor < sound_output.secondary_buffer_size);
-        std.debug.assert(marker.output_location < sound_output.secondary_buffer_size);
-        std.debug.assert(marker.output_byte_count < sound_output.secondary_buffer_size);
-        std.debug.assert(marker.flip_play_cursor < sound_output.secondary_buffer_size);
-        std.debug.assert(marker.flip_play_cursor < sound_output.secondary_buffer_size);
+        assert(marker.output_write_cursor < sound_output.secondary_buffer_size);
+        assert(marker.output_write_cursor < sound_output.secondary_buffer_size);
+        assert(marker.output_location < sound_output.secondary_buffer_size);
+        assert(marker.output_byte_count < sound_output.secondary_buffer_size);
+        assert(marker.flip_play_cursor < sound_output.secondary_buffer_size);
+        assert(marker.flip_play_cursor < sound_output.secondary_buffer_size);
 
         const play_color = 0xFFFFFFFF;
         const write_color = 0xFFFF0000;
@@ -1145,8 +1146,8 @@ fn win32GetInputFileLocation(
 }
 
 fn win32GetReplayBuffer(state: *Win32State, index: u32) *Win32ReplayBuffer {
-    std.debug.assert(index > 0);
-    std.debug.assert(index < state.replay_buffers.len);
+    assert(index > 0);
+    assert(index < state.replay_buffers.len);
 
     const result = &state.replay_buffers[index];
 
@@ -1882,7 +1883,7 @@ pub export fn wWinMain(
                                 safe_write_cursor += sound_output.secondary_buffer_size;
                             }
 
-                            std.debug.assert(safe_write_cursor >= play_cursor);
+                            assert(safe_write_cursor >= play_cursor);
 
                             safe_write_cursor += sound_output.safety_bytes;
                             const audio_card_is_low_latency = safe_write_cursor < expected_frame_boundary_byte;
@@ -2048,7 +2049,7 @@ pub export fn wWinMain(
                                 &play_cursor,
                                 &write_cursor,
                             ))) {
-                                std.debug.assert(debug_time_marker_index < debug_time_markers.len);
+                                assert(debug_time_marker_index < debug_time_markers.len);
                                 var marker = &debug_time_markers[debug_time_marker_index];
                                 marker.flip_play_cursor = play_cursor;
                                 marker.flip_write_cursor = write_cursor;
