@@ -224,9 +224,7 @@ fn addEntityRaw(
             entity.storage_index = storage_index;
             entity.updatable = false;
             maybe_entity = entity;
-        } else {
-            game.invalidCodePath();
-        }
+        } else unreachable;
     }
 
     return maybe_entity;

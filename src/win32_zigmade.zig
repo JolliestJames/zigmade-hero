@@ -625,8 +625,7 @@ fn win32MainWindowCallback(
         win32.WM_KEYDOWN,
         win32.WM_KEYUP,
         => {
-            std.debug.print("Keyboard input came in through a non-dispatch message!", .{});
-            std.debug.assert(false);
+            @panic("Keyboard input came in through a non-dispatch message!");
         },
         win32.WM_PAINT => {
             var paint = std.mem.zeroInit(win32.PAINTSTRUCT, .{});

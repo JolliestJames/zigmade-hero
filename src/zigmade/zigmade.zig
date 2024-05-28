@@ -99,7 +99,7 @@ const EntityCollisionVolume = sim.EntityCollisionVolume;
 const EntityCollisionVolumeGroup = sim.EntityCollisionVolumeGroup;
 const World = world.World;
 const WorldPosition = world.WorldPosition;
-const EntityVisiblePiece = render.EntityVisiblePiece;
+const RenderGroupEntry = render.RenderGroupEntry;
 const RenderGroup = render.RenderGroup;
 const RenderBasis = render.RenderBasis;
 
@@ -227,11 +227,6 @@ const BitmapHeader = packed struct {
     blue_mask: u32,
 };
 
-pub fn invalidCodePath() void {
-    std.debug.print("Invalid code path\n", .{});
-    assert(false);
-}
-
 fn gameOutputSound(
     sound_buffer: *platform.GameSoundBuffer,
     game_state: *GameState,
@@ -268,264 +263,6 @@ fn gameOutputSound(
         //if (game_state.t_sine > 2.0 * std.math.pi) {
         //    game_state.t_sine -= 2.0 * std.math.pi;
         //}
-    }
-}
-
-fn drawRectangle(
-    buffer: *const Bitmap,
-    min: Vec2,
-    max: Vec2,
-    r: f32,
-    g: f32,
-    b: f32,
-) void {
-    var min_x: i32 = @intFromFloat(@round(min.x()));
-    var min_y: i32 = @intFromFloat(@round(min.y()));
-    var max_x: i32 = @intFromFloat(@round(max.x()));
-    var max_y: i32 = @intFromFloat(@round(max.y()));
-
-    if (min_x < 0) min_x = 0;
-    if (min_y < 0) min_y = 0;
-    if (max_x > buffer.width) max_x = buffer.width;
-    if (max_y > buffer.height) max_y = buffer.height;
-    if (min_x > max_x) max_x = min_x;
-    if (min_y > max_y) max_y = min_y;
-
-    const color: u32 =
-        (@as(u32, (@intFromFloat(@round(r * 255.0)))) << 16) |
-        (@as(u32, (@intFromFloat(@round(g * 255.0)))) << 8) |
-        (@as(u32, (@intFromFloat(@round(b * 255.0)))) << 0);
-
-    var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
-        (@as(u32, @intCast(min_x)) *
-        @as(u32, @intCast(platform.BITMAP_BYTES_PER_PIXEL))) +
-        @as(u32, @bitCast(min_y *% buffer.pitch));
-
-    for (@intCast(min_y)..@intCast(max_y)) |_| {
-        var pixel: [*]u32 = @alignCast(@ptrCast(row));
-
-        for (@intCast(min_x)..@intCast(max_x)) |_| {
-            pixel[0] = color;
-            pixel += 1;
-        }
-
-        row += @as(u32, @intCast(buffer.pitch));
-    }
-}
-
-fn drawRectOutline(buffer: *const Bitmap, min: Vec2, max: Vec2, color: Vec3, r: f32) void {
-    // NOTE: Top and bottom
-    drawRectangle(
-        buffer,
-        Vec2.init(min.x() - r, min.y() - r),
-        Vec2.init(max.x() + r, min.y() + r),
-        color.r(),
-        color.g(),
-        color.b(),
-    );
-
-    drawRectangle(
-        buffer,
-        Vec2.init(min.x() - r, max.y() - r),
-        Vec2.init(max.x() + r, max.y() + r),
-        color.r(),
-        color.g(),
-        color.b(),
-    );
-
-    // NOTE: Left and right
-    drawRectangle(
-        buffer,
-        Vec2.init(min.x() - r, min.y() - r),
-        Vec2.init(min.x() + r, max.y() + r),
-        color.r(),
-        color.g(),
-        color.b(),
-    );
-
-    drawRectangle(
-        buffer,
-        Vec2.init(max.x() - r, min.y() - r),
-        Vec2.init(max.x() + r, max.y() + r),
-        color.r(),
-        color.g(),
-        color.b(),
-    );
-}
-
-fn drawBitmap(
-    buffer: *const Bitmap,
-    bitmap: *Bitmap,
-    real_x: f32,
-    real_y: f32,
-    c_alpha: f32,
-) void {
-    var min_x: i32 = @intFromFloat(@round(real_x));
-    var min_y: i32 = @intFromFloat(@round(real_y));
-    var max_x: i32 = min_x + bitmap.width;
-    var max_y: i32 = min_y + bitmap.height;
-    //var max_x: i32 = @intFromFloat(@round(real_x + @as(f32, @floatFromInt(bitmap.width))));
-    //var max_y: i32 = @intFromFloat(@round(real_y + @as(f32, @floatFromInt(bitmap.height))));
-
-    var source_offset_x: i32 = 0;
-    if (min_x < 0) {
-        source_offset_x = -min_x;
-        min_x = 0;
-    }
-
-    var source_offset_y: i32 = 0;
-    if (min_y < 0) {
-        source_offset_y = -min_y;
-        min_y = 0;
-    }
-
-    if (max_x > buffer.width) max_x = @intCast(buffer.width);
-    if (max_y > buffer.height) max_y = @intCast(buffer.height);
-    if (min_x > max_x) max_x = min_x;
-    if (min_y > max_y) max_y = min_y;
-
-    var source_row: [*]u8 = undefined;
-    const bitmap_offset = source_offset_y * bitmap.pitch +
-        platform.BITMAP_BYTES_PER_PIXEL * source_offset_x;
-
-    if (bitmap_offset > 0) {
-        source_row = @as([*]u8, @ptrCast(bitmap.memory)) +
-            @as(usize, @intCast(bitmap_offset));
-    } else {
-        source_row = @as([*]u8, @ptrCast(bitmap.memory)) -
-            @as(usize, @intCast(-bitmap_offset));
-    }
-
-    var dest_row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
-        (@as(u32, @intCast(min_x)) *
-        @as(u32, @intCast(platform.BITMAP_BYTES_PER_PIXEL))) +
-        @as(u32, @bitCast(min_y *% buffer.pitch));
-
-    for (@intCast(min_y)..@intCast(max_y)) |_| {
-        var dest: [*]u32 = @alignCast(@ptrCast(dest_row));
-        var source: [*]align(@alignOf(u8)) u32 = @alignCast(@ptrCast(source_row));
-
-        for (@intCast(min_x)..@intCast(max_x)) |_| {
-            const sa: f32 = @floatFromInt((source[0] >> 24) & 0xFF);
-            const rsa = sa / 255 * c_alpha;
-            const sr: f32 = c_alpha * @as(f32, @floatFromInt((source[0] >> 16) & 0xFF));
-            const sg: f32 = c_alpha * @as(f32, @floatFromInt((source[0] >> 8) & 0xFF));
-            const sb: f32 = c_alpha * @as(f32, @floatFromInt((source[0] >> 0) & 0xFF));
-
-            const da: f32 = @floatFromInt((dest[0] >> 24) & 0xFF);
-            const dr: f32 = @floatFromInt((dest[0] >> 16) & 0xFF);
-            const dg: f32 = @floatFromInt((dest[0] >> 8) & 0xFF);
-            const db: f32 = @floatFromInt((dest[0] >> 0) & 0xFF);
-            const rda = da / 255;
-
-            const inv_rsa: f32 = 1 - rsa;
-            // TODO: Check this for math errors
-            const a = 255 * (rsa + rda - rsa * rda);
-            const r = inv_rsa * dr + sr;
-            const g = inv_rsa * dg + sg;
-            const b = inv_rsa * db + sb;
-
-            dest[0] = (lossyCast(u32, a + 0.5) << 24) |
-                (lossyCast(u32, r + 0.5) << 16) |
-                (lossyCast(u32, g + 0.5) << 8) |
-                (lossyCast(u32, b + 0.5) << 0);
-
-            dest += 1;
-            source += 1;
-        }
-
-        dest_row += @as(usize, @intCast(buffer.pitch));
-
-        if (bitmap.pitch > 0) {
-            source_row += @as(usize, @intCast(bitmap.pitch));
-        } else {
-            source_row -= @as(usize, @intCast(-bitmap.pitch));
-        }
-    }
-}
-
-fn drawMatte(
-    buffer: *const Bitmap,
-    bitmap: *Bitmap,
-    real_x: f32,
-    real_y: f32,
-    c_alpha: f32,
-) void {
-    var min_x: i32 = @intFromFloat(@round(real_x));
-    var min_y: i32 = @intFromFloat(@round(real_y));
-    var max_x: i32 = min_x + bitmap.width;
-    var max_y: i32 = min_y + bitmap.height;
-
-    var source_offset_x: i32 = 0;
-    if (min_x < 0) {
-        source_offset_x = -min_x;
-        min_x = 0;
-    }
-
-    var source_offset_y: i32 = 0;
-    if (min_y < 0) {
-        source_offset_y = -min_y;
-        min_y = 0;
-    }
-
-    if (max_x > buffer.width) max_x = @intCast(buffer.width);
-    if (max_y > buffer.height) max_y = @intCast(buffer.height);
-    if (min_x > max_x) max_x = min_x;
-    if (min_y > max_y) max_y = min_y;
-
-    var source_row: [*]u8 = undefined;
-    const bitmap_offset = source_offset_y * bitmap.pitch +
-        platform.BITMAP_BYTES_PER_PIXEL * source_offset_x;
-
-    if (bitmap_offset > 0) {
-        source_row = @as([*]u8, @ptrCast(bitmap.memory)) +
-            @as(usize, @intCast(bitmap_offset));
-    } else {
-        source_row = @as([*]u8, @ptrCast(bitmap.memory)) -
-            @as(usize, @intCast(-bitmap_offset));
-    }
-
-    var dest_row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
-        (@as(u32, @intCast(min_x)) *
-        @as(u32, @intCast(platform.BITMAP_BYTES_PER_PIXEL))) +
-        @as(u32, @bitCast(min_y *% buffer.pitch));
-
-    for (@intCast(min_y)..@intCast(max_y)) |_| {
-        var dest: [*]u32 = @alignCast(@ptrCast(dest_row));
-        var source: [*]align(@alignOf(u8)) u32 = @alignCast(@ptrCast(source_row));
-
-        for (@intCast(min_x)..@intCast(max_x)) |_| {
-            const sa: f32 = @floatFromInt((source[0] >> 24) & 0xFF);
-            const rsa = sa / 255 * c_alpha;
-
-            const da: f32 = @floatFromInt((dest[0] >> 24) & 0xFF);
-            const dr: f32 = @floatFromInt((dest[0] >> 16) & 0xFF);
-            const dg: f32 = @floatFromInt((dest[0] >> 8) & 0xFF);
-            const db: f32 = @floatFromInt((dest[0] >> 0) & 0xFF);
-
-            const inv_rsa: f32 = 1 - rsa;
-            // TODO: Check this for math errors
-            const a = inv_rsa * da;
-            const r = inv_rsa * dr;
-            const g = inv_rsa * dg;
-            const b = inv_rsa * db;
-
-            dest[0] = (lossyCast(u32, a + 0.5) << 24) |
-                (lossyCast(u32, r + 0.5) << 16) |
-                (lossyCast(u32, g + 0.5) << 8) |
-                (lossyCast(u32, b + 0.5) << 0);
-
-            dest += 1;
-            source += 1;
-        }
-
-        dest_row += @as(usize, @intCast(buffer.pitch));
-
-        if (bitmap.pitch > 0) {
-            source_row += @as(usize, @intCast(bitmap.pitch));
-        } else {
-            source_row -= @as(usize, @intCast(-bitmap.pitch));
-        }
     }
 }
 
@@ -1193,7 +930,7 @@ fn fillGroundChunk(
                 var p = Vec2.sub(&offset, &bitmap_center);
                 p = Vec2.add(&p, &center);
 
-                drawBitmap(buffer, stamp, p.x(), p.y(), 1);
+                render.drawBitmap(buffer, stamp, p.x(), p.y(), 1);
             }
         }
     }
@@ -1238,7 +975,7 @@ fn fillGroundChunk(
                 var p = Vec2.sub(&offset, &bitmap_center);
                 p = Vec2.add(&p, &center);
 
-                drawBitmap(buffer, stamp, p.x(), p.y(), 1);
+                render.drawBitmap(buffer, stamp, p.x(), p.y(), 1);
             }
         }
     }
@@ -1715,7 +1452,7 @@ pub export fn updateAndRender(
         .memory = @ptrCast(buffer.memory),
     };
 
-    drawRectangle(
+    render.drawRectangle(
         draw_buffer,
         Vec2.splat(0),
         Vec2.fromInt(draw_buffer.width, draw_buffer.height),
@@ -1847,7 +1584,7 @@ pub export fn updateAndRender(
                         }
 
                         if (false)
-                            drawRectOutline(
+                            render.drawRectOutline(
                                 draw_buffer,
                                 Vec2.sub(&screen_p, &Vec2.scale(&screen_dim, 0.5)),
                                 Vec2.add(&screen_p, &Vec2.scale(&screen_dim, 0.5)),
@@ -2106,9 +1843,7 @@ pub export fn updateAndRender(
                         }
                     }
                 },
-                else => {
-                    invalidCodePath();
-                },
+                else => unreachable,
             }
 
             if (!entity.flags.non_spatial and entity.flags.movable) {
@@ -2119,51 +1854,10 @@ pub export fn updateAndRender(
         }
     }
 
-    // NOTE: With Casey's implementation, there will be one iteration of the game
-    // loop when a sword has transitioned from spatial to non_spatial during which
-    // a draw attempt will be made without this check for non-spatialness in place.
-    // This makes it clear why avoiding use of a non spatial entity's position is
-    // important. An attempt to draw at that position in this case will create an
-    // integer part of floating point value out of bounds panic.
-    if (true) {
-        var base: usize = 0;
-
-        while (base < render_group.push_buffer_size) : (base += @sizeOf(EntityVisiblePiece)) {
-            const piece = @as(
-                *EntityVisiblePiece,
-                @alignCast(@ptrCast(render_group.push_buffer_base + base)),
-            );
-
-            if (!std.meta.eql(piece.basis.p.v, ety.invalidPos().v)) {
-                const entity_base_p = piece.basis.p;
-                const z_fudge = 1.0 + 0.1 * (entity_base_p.z() + piece.offset_z);
-
-                const eg_x = screen_center.x() + meters_to_pixels * z_fudge * entity_base_p.x();
-                const eg_y = screen_center.y() - meters_to_pixels * z_fudge * entity_base_p.y();
-                const entity_z = -meters_to_pixels * entity_base_p.z();
-
-                const center = Vec2.init(
-                    eg_x + piece.offset.x(),
-                    eg_y + piece.offset.y() + piece.entity_zc * entity_z,
-                );
-
-                if (piece.bitmap) |bitmap| {
-                    drawBitmap(draw_buffer, bitmap, center.x(), center.y(), piece.a);
-                } else {
-                    const half_dim = Vec2.scale(&piece.dim, 0.5 * meters_to_pixels);
-
-                    drawRectangle(
-                        draw_buffer,
-                        Vec2.sub(&center, &half_dim),
-                        Vec2.add(&center, &half_dim),
-                        piece.r,
-                        piece.g,
-                        piece.b,
-                    );
-                }
-            }
-        }
-    }
+    render.renderGroupToOutput(
+        render_group,
+        draw_buffer,
+    );
 
     sim.endSim(region, game_state);
     endTemporaryMemory(sim_memory);
