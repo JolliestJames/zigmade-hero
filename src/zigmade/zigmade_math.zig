@@ -60,7 +60,7 @@ pub inline fn safeRatio1(numerator: f32, divisor: f32) f32 {
 // Heavily inspired by Mach engine's math.vec
 pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
     return extern struct {
-        v: Vector,
+        v: [n_value]Scalar,
         pub const n = n_value;
         pub const T = Scalar;
         pub const Vector = @Vector(n_value, Scalar);
@@ -165,13 +165,17 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
         pub inline fn scale(a: *const VecN, s: Scalar) VecN {
             var result: VecN = undefined;
 
-            result.v = a.v * VecN.splat(s).v;
+            const av: Vector = a.v;
+            const bv: Vector = VecN.splat(s).v;
+
+            result.v = av * bv;
 
             return result;
         }
 
         pub inline fn splat(scalar: Scalar) VecN {
-            return .{ .v = @splat(scalar) };
+            const vec: Vector = @splat(scalar);
+            return .{ .v = vec };
         }
 
         pub inline fn negate(a: *const VecN) VecN {
@@ -186,7 +190,10 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
         pub inline fn add(a: *const VecN, b: *const VecN) VecN {
             var result: VecN = undefined;
 
-            result.v = a.v + b.v;
+            const av: Vector = a.v;
+            const bv: Vector = b.v;
+
+            result.v = av + bv;
 
             return result;
         }
@@ -194,7 +201,10 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
         pub inline fn sub(a: *const VecN, b: *const VecN) VecN {
             var result: VecN = undefined;
 
-            result.v = a.v - b.v;
+            const av: Vector = a.v;
+            const bv: Vector = b.v;
+
+            result.v = av - bv;
 
             return result;
         }
@@ -202,13 +212,18 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
         pub inline fn hadamard(a: *const VecN, b: *const VecN) VecN {
             var result: VecN = undefined;
 
-            result.v = a.v * b.v;
+            const av: Vector = a.v;
+            const bv: Vector = b.v;
+
+            result.v = av * bv;
 
             return result;
         }
 
         pub inline fn inner(a: *const VecN, b: *const VecN) f32 {
-            const result = @reduce(.Add, a.v * b.v);
+            const a_vec: Vector = a.v;
+            const b_vec: Vector = b.v;
+            const result = @reduce(.Add, a_vec * b_vec);
 
             return result;
         }

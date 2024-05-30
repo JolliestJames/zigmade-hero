@@ -13,7 +13,7 @@ const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
 
-pub const RenderBasis = struct {
+pub const RenderBasis = extern struct {
     p: Vec3 = Vec3.splat(0),
 };
 
@@ -26,10 +26,12 @@ const RenderEntityBasis = extern struct {
 
 // NOTE: Is there a better approximation for what a
 // "compact discriminated union" should look like in Zig?
+// TODO: Remove the header
 pub const RenderGroupEntryType = enum(u8) {
     clear,
     bitmap,
     rectangle,
+    coordinate_system,
 };
 
 pub const RenderGroupEntryHeader = extern struct {
@@ -39,6 +41,15 @@ pub const RenderGroupEntryHeader = extern struct {
 pub const RenderEntryClear = extern struct {
     header: RenderGroupEntryHeader,
     color: Vec4,
+};
+
+pub const RenderEntryCoordinateSystem = extern struct {
+    header: RenderGroupEntryHeader,
+    origin: Vec2,
+    x_axis: Vec2,
+    y_axis: Vec2,
+    color: Vec4,
+    points: [16]Vec2,
 };
 
 pub const RenderEntryBitmap = extern struct {
@@ -81,7 +92,7 @@ pub inline fn pushRenderElement(
 
     const header = pushRenderElement_(group, @sizeOf(T), entry_type);
 
-    result = @alignCast(@ptrCast(header));
+    result = @ptrCast(header);
 
     return result;
 }
@@ -244,9 +255,32 @@ pub inline fn clear(group: *RenderGroup, color: Vec4) void {
     }
 }
 
+pub inline fn coordinateSystem(
+    group: *RenderGroup,
+    origin: Vec2,
+    x_axis: Vec2,
+    y_axis: Vec2,
+    color: Vec4,
+) *align(@alignOf(void)) RenderEntryCoordinateSystem {
+    const maybe_entry = pushRenderElement(
+        group,
+        RenderEntryCoordinateSystem,
+        .coordinate_system,
+    );
+
+    if (maybe_entry) |entry| {
+        entry.origin = origin;
+        entry.x_axis = x_axis;
+        entry.y_axis = y_axis;
+        entry.color = color;
+    }
+
+    return maybe_entry.?;
+}
+
 inline fn getRenderEntityBasisP(
     render_group: *RenderGroup,
-    entity_basis: *RenderEntityBasis,
+    entity_basis: *align(@alignOf(void)) RenderEntityBasis,
     screen_center: Vec2,
 ) Vec2 {
     const entity_base_p = entity_basis.basis.p;
@@ -257,8 +291,8 @@ inline fn getRenderEntityBasisP(
     const entity_z = -render_group.meters_to_pixels * entity_base_p.z();
 
     const result = Vec2.init(
-        eg_x + entity_basis.offset.x(),
-        eg_y + entity_basis.offset.y() + entity_basis.entity_zc * entity_z,
+        eg_x + entity_basis.offset.v[0],
+        eg_y + entity_basis.offset.v[1] + entity_basis.entity_zc * entity_z,
     );
 
     return result;
@@ -279,22 +313,22 @@ pub fn renderGroupToOutput(
 
         switch (header.type) {
             .clear => {
-                const entry = @as(*align(@alignOf(void)) RenderEntryClear, @alignCast(@ptrCast(header)));
+                const entry: *RenderEntryClear = @alignCast(@ptrCast(header));
 
                 drawRectangle(
                     output_target,
                     Vec2.splat(0),
                     Vec2.fromInt(output_target.width, output_target.height),
-                    entry.color.v[0],
-                    entry.color.v[1],
-                    entry.color.v[2],
-                    entry.color.v[3],
+                    entry.color.r(),
+                    entry.color.g(),
+                    entry.color.b(),
+                    entry.color.a(),
                 );
 
                 base += @sizeOf(@TypeOf(entry.*));
             },
             .bitmap => {
-                const entry = @as(*RenderEntryBitmap, @alignCast(@ptrCast(header)));
+                const entry = @as(*align(@alignOf(void)) RenderEntryBitmap, @ptrCast(header));
                 const p = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
 
                 if (entry.bitmap) |bitmap| {
@@ -312,18 +346,81 @@ pub fn renderGroupToOutput(
                 base += @sizeOf(@TypeOf(entry.*));
             },
             .rectangle => {
-                const entry = @as(*RenderEntryRectangle, @alignCast(@ptrCast(header)));
+                const entry: *align(@alignOf(void)) RenderEntryRectangle = @ptrCast(header);
                 const p = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
 
                 drawRectangle(
                     output_target,
                     p,
-                    Vec2.add(&p, &entry.dim),
+                    Vec2.add(@alignCast(&p), @alignCast(&entry.dim)),
                     entry.r,
                     entry.g,
                     entry.b,
                     1,
                 );
+
+                base += @sizeOf(@TypeOf(entry.*));
+            },
+            .coordinate_system => {
+                const entry: *RenderEntryCoordinateSystem = @alignCast(@ptrCast(header));
+                const dim = Vec2.splat(2);
+                var p = entry.origin;
+
+                drawRectangle(
+                    output_target,
+                    Vec2.sub(&p, &dim),
+                    Vec2.add(&p, &dim),
+                    entry.color.r(),
+                    entry.color.g(),
+                    entry.color.b(),
+                    1,
+                );
+
+                p = Vec2.add(&entry.origin, &entry.x_axis);
+
+                drawRectangle(
+                    output_target,
+                    Vec2.sub(&p, &dim),
+                    Vec2.add(&p, &dim),
+                    entry.color.r(),
+                    entry.color.g(),
+                    entry.color.b(),
+                    1,
+                );
+
+                p = Vec2.add(&entry.origin, &entry.y_axis);
+
+                drawRectangle(
+                    output_target,
+                    Vec2.sub(&p, &dim),
+                    Vec2.add(&p, &dim),
+                    entry.color.r(),
+                    entry.color.g(),
+                    entry.color.b(),
+                    1,
+                );
+
+                for (0..entry.points.len) |p_index| {
+                    p = entry.points[p_index];
+
+                    p = Vec2.add(
+                        &Vec2.add(
+                            &entry.origin,
+                            &Vec2.scale(&entry.x_axis, p.x()),
+                        ),
+                        &Vec2.scale(&entry.y_axis, p.y()),
+                    );
+
+                    drawRectangle(
+                        output_target,
+                        Vec2.sub(&p, &dim),
+                        Vec2.add(&p, &dim),
+                        entry.color.r(),
+                        entry.color.g(),
+                        entry.color.b(),
+                        entry.color.a(),
+                    );
+                }
 
                 base += @sizeOf(@TypeOf(entry.*));
             },
@@ -491,7 +588,7 @@ pub fn drawBitmap(
 
     for (@intCast(min_y)..@intCast(max_y)) |_| {
         var dest: [*]u32 = @alignCast(@ptrCast(dest_row));
-        var source: [*]align(@alignOf(u8)) u32 = @alignCast(@ptrCast(source_row));
+        var source: [*]align(@alignOf(u8)) u32 = @ptrCast(source_row);
 
         for (@intCast(min_x)..@intCast(max_x)) |_| {
             const sa: f32 = @floatFromInt((source[0] >> 24) & 0xFF);
@@ -580,7 +677,7 @@ fn drawMatte(
 
     for (@intCast(min_y)..@intCast(max_y)) |_| {
         var dest: [*]u32 = @alignCast(@ptrCast(dest_row));
-        var source: [*]align(@alignOf(u8)) u32 = @alignCast(@ptrCast(source_row));
+        var source: [*]align(@alignOf(u8)) u32 = @ptrCast(source_row);
 
         for (@intCast(min_x)..@intCast(max_x)) |_| {
             const sa: f32 = @floatFromInt((source[0] >> 24) & 0xFF);

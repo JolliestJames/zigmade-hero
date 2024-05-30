@@ -177,6 +177,7 @@ pub const GameState = struct {
     monster_collision: *EntityCollisionVolumeGroup,
     wall_collision: *EntityCollisionVolumeGroup,
     standard_room_collision: *EntityCollisionVolumeGroup,
+    time: f32,
 };
 
 const TransientState = struct {
@@ -1369,12 +1370,13 @@ pub export fn updateAndRender(
         transient_state.is_initialized = true;
     }
 
-    if (input.executable_reloaded) {
-        for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
-            var ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
-            ground_buffer.p = world.nullPosition();
-        }
-    }
+    if (false)
+        if (input.executable_reloaded) {
+            for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
+                var ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
+                ground_buffer.p = world.nullPosition();
+            }
+        };
 
     const game_world = game_state.world.?;
 
@@ -1466,6 +1468,11 @@ pub export fn updateAndRender(
     };
 
     render.clear(render_group, Vec4.init(1, 0, 1, 0));
+
+    const screen_center = Vec2.init(
+        0.5 * @as(f32, @floatFromInt(draw_buffer.width)),
+        0.5 * @as(f32, @floatFromInt(draw_buffer.height)),
+    );
 
     const screen_width_in_meters = @as(f32, @floatFromInt(draw_buffer.width)) * pixels_to_meters;
     const screen_height_in_meters = @as(f32, @floatFromInt(draw_buffer.height)) * pixels_to_meters;
@@ -1841,6 +1848,51 @@ pub export fn updateAndRender(
             }
 
             basis.p = sim.getEntityGroundPoint(entity);
+        }
+    }
+
+    game_state.time += input.dt_for_frame;
+    const angle = game_state.time;
+
+    // TODO: Let's add a perp operator
+    const origin = Vec2.add(
+        &screen_center,
+        &Vec2.scale(&Vec2.init(@sin(angle), 0), 10),
+    );
+
+    const x_axis = Vec2.scale(
+        &Vec2.init(@cos(angle), @sin(angle)),
+        100 + 25 * @cos(4.2 * angle),
+    );
+
+    const y_axis = Vec2.scale(
+        &Vec2.init(@cos(angle + 1), @sin(angle + 1)),
+        100 + 50 * @sin(3.9 * angle),
+    );
+
+    var p_index: usize = 0;
+
+    var c = render.coordinateSystem(
+        render_group,
+        origin,
+        x_axis,
+        y_axis,
+        Vec4.init(
+            0.5 + 0.5 * @sin(angle),
+            0.5 + 0.5 * @sin(2.9 * angle),
+            0.5 + 0.5 * @cos(9.9 * angle),
+            1,
+        ),
+    );
+
+    var y: f32 = 0;
+
+    while (y < 1.0) : (y += 0.25) {
+        var x: f32 = 0;
+
+        while (x < 1.0) : (x += 0.25) {
+            c.points[p_index] = Vec2.init(x, y);
+            p_index += 1;
         }
     }
 
