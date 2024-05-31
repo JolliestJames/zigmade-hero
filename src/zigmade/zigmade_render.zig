@@ -363,16 +363,31 @@ pub fn renderGroupToOutput(
             },
             .coordinate_system => {
                 const entry: *RenderEntryCoordinateSystem = @alignCast(@ptrCast(header));
+
+                var v_max = Vec2.add(
+                    &entry.y_axis,
+                    &Vec2.add(&entry.origin, &entry.x_axis),
+                );
+
+                drawRectangleSlowly(
+                    output_target,
+                    entry.origin,
+                    entry.x_axis,
+                    entry.y_axis,
+                    entry.color,
+                );
+
                 const dim = Vec2.splat(2);
                 var p = entry.origin;
+                const color = Vec4.init(1, 1, 0, 1);
 
                 drawRectangle(
                     output_target,
                     Vec2.sub(&p, &dim),
                     Vec2.add(&p, &dim),
-                    entry.color.r(),
-                    entry.color.g(),
-                    entry.color.b(),
+                    color.r(),
+                    color.g(),
+                    color.b(),
                     1,
                 );
 
@@ -382,9 +397,9 @@ pub fn renderGroupToOutput(
                     output_target,
                     Vec2.sub(&p, &dim),
                     Vec2.add(&p, &dim),
-                    entry.color.r(),
-                    entry.color.g(),
-                    entry.color.b(),
+                    color.r(),
+                    color.g(),
+                    color.b(),
                     1,
                 );
 
@@ -394,33 +409,44 @@ pub fn renderGroupToOutput(
                     output_target,
                     Vec2.sub(&p, &dim),
                     Vec2.add(&p, &dim),
-                    entry.color.r(),
-                    entry.color.g(),
-                    entry.color.b(),
+                    color.r(),
+                    color.g(),
+                    color.b(),
                     1,
                 );
 
-                for (0..entry.points.len) |p_index| {
-                    p = entry.points[p_index];
+                drawRectangle(
+                    output_target,
+                    Vec2.sub(&v_max, &dim),
+                    Vec2.add(&v_max, &dim),
+                    color.r(),
+                    color.g(),
+                    color.b(),
+                    1,
+                );
 
-                    p = Vec2.add(
-                        &Vec2.add(
-                            &entry.origin,
-                            &Vec2.scale(&entry.x_axis, p.x()),
-                        ),
-                        &Vec2.scale(&entry.y_axis, p.y()),
-                    );
+                if (false)
+                    for (0..entry.points.len) |p_index| {
+                        p = entry.points[p_index];
 
-                    drawRectangle(
-                        output_target,
-                        Vec2.sub(&p, &dim),
-                        Vec2.add(&p, &dim),
-                        entry.color.r(),
-                        entry.color.g(),
-                        entry.color.b(),
-                        entry.color.a(),
-                    );
-                }
+                        p = Vec2.add(
+                            &Vec2.add(
+                                &entry.origin,
+                                &Vec2.scale(&entry.x_axis, p.x()),
+                            ),
+                            &Vec2.scale(&entry.y_axis, p.y()),
+                        );
+
+                        drawRectangle(
+                            output_target,
+                            Vec2.sub(&p, &dim),
+                            Vec2.add(&p, &dim),
+                            entry.color.r(),
+                            entry.color.g(),
+                            entry.color.b(),
+                            entry.color.a(),
+                        );
+                    };
 
                 base += @sizeOf(@TypeOf(entry.*));
             },
@@ -452,17 +478,17 @@ pub fn allocateRenderGroup(
 
 pub fn drawRectangle(
     buffer: *const Bitmap,
-    min: Vec2,
-    max: Vec2,
+    v_min: Vec2,
+    v_max: Vec2,
     r: f32,
     g: f32,
     b: f32,
     a: f32,
 ) void {
-    var min_x: i32 = @intFromFloat(@round(min.x()));
-    var min_y: i32 = @intFromFloat(@round(min.y()));
-    var max_x: i32 = @intFromFloat(@round(max.x()));
-    var max_y: i32 = @intFromFloat(@round(max.y()));
+    var min_x: i32 = @intFromFloat(@round(v_min.x()));
+    var min_y: i32 = @intFromFloat(@round(v_min.y()));
+    var max_x: i32 = @intFromFloat(@round(v_max.x()));
+    var max_y: i32 = @intFromFloat(@round(v_max.y()));
 
     if (min_x < 0) min_x = 0;
     if (min_y < 0) min_y = 0;
@@ -487,6 +513,82 @@ pub fn drawRectangle(
 
         for (@intCast(min_x)..@intCast(max_x)) |_| {
             pixel[0] = color;
+            pixel += 1;
+        }
+
+        row += @as(u32, @intCast(buffer.pitch));
+    }
+}
+
+pub fn drawRectangleSlowly(
+    buffer: *const Bitmap,
+    origin: Vec2,
+    x_axis: Vec2,
+    y_axis: Vec2,
+    color: Vec4,
+) void {
+    const color32: u32 =
+        (@as(u32, (@intFromFloat(@round(color.a() * 255.0)))) << 24) |
+        (@as(u32, (@intFromFloat(@round(color.r() * 255.0)))) << 16) |
+        (@as(u32, (@intFromFloat(@round(color.g() * 255.0)))) << 8) |
+        (@as(u32, (@intFromFloat(@round(color.b() * 255.0)))) << 0);
+
+    const width_max = buffer.width - 1;
+    const height_max = buffer.height - 1;
+
+    var x_min: i32 = width_max;
+    var x_max: i32 = 0;
+    var y_min: i32 = height_max;
+    var y_max: i32 = 0;
+
+    const p: [4]Vec2 = .{
+        origin,
+        Vec2.add(&origin, &x_axis),
+        Vec2.add(&origin, &Vec2.add(&x_axis, &y_axis)),
+        Vec2.add(&origin, &y_axis),
+    };
+
+    for (0..p.len) |p_index| {
+        const test_p = p[p_index];
+        const floor_x: i32 = @intFromFloat(@floor(test_p.x()));
+        const ceil_x: i32 = @intFromFloat(@ceil(test_p.x()));
+        const floor_y: i32 = @intFromFloat(@floor(test_p.y()));
+        const ceil_y: i32 = @intFromFloat(@ceil(test_p.y()));
+
+        if (x_min > floor_x) x_min = floor_x;
+        if (y_min > floor_y) y_min = floor_y;
+        if (x_max < ceil_x) x_max = ceil_x;
+        if (y_max < ceil_y) y_max = ceil_y;
+    }
+
+    if (x_min < 0) x_min = 0;
+    if (y_min < 0) y_min = 0;
+    if (x_min > width_max) x_max = width_max;
+    if (y_min > height_max) y_max = height_max;
+
+    var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
+        (@as(u32, @intCast(x_min)) *
+        @as(u32, @intCast(platform.BITMAP_BYTES_PER_PIXEL))) +
+        @as(u32, @bitCast(y_min *% buffer.pitch));
+
+    for (@intCast(y_min)..@intCast(y_max)) |y| {
+        var pixel: [*]u32 = @alignCast(@ptrCast(row));
+
+        for (@intCast(x_min)..@intCast(x_max)) |x| {
+            const pixel_p = Vec2.fromInt(x, y);
+            // TODO: Perp inner
+            // TODO: Simpler origin
+            const edge_0: f32 = Vec2.inner(&Vec2.sub(&pixel_p, &p[0]), &Vec2.negate(&Vec2.perp(&x_axis)));
+            const edge_1: f32 = Vec2.inner(&Vec2.sub(&pixel_p, &p[1]), &Vec2.negate(&Vec2.perp(&y_axis)));
+            const edge_2: f32 = Vec2.inner(&Vec2.sub(&pixel_p, &p[2]), &Vec2.perp(&x_axis));
+            const edge_3: f32 = Vec2.inner(&Vec2.sub(&pixel_p, &p[3]), &Vec2.perp(&y_axis));
+
+            if (edge_0 < 0 and edge_1 < 0 and
+                edge_2 < 0 and edge_3 < 0)
+            {
+                pixel[0] = color32;
+            }
+
             pixel += 1;
         }
 

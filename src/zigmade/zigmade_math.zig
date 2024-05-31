@@ -88,6 +88,13 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
 
                     return result;
                 }
+                pub inline fn perp(v: *const VecN) VecN {
+                    var result: VecN = undefined;
+
+                    result = VecN.init(-v.y(), v.x());
+
+                    return result;
+                }
             },
             inline 3 => struct {
                 pub inline fn init(xs: Scalar, ys: Scalar, zs: Scalar) VecN {
@@ -180,9 +187,21 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
 
         pub inline fn negate(a: *const VecN) VecN {
             return switch (VecN.n) {
-                inline 2 => .{ .v = Vec2(-1, -1).v * a.v },
-                inline 3 => .{ .v = Vec3(-1, -1, -1).v * a.v },
-                inline 4 => .{ .v = Vec4(-1, -1, -1, -1).v * a.v },
+                inline 2 => {
+                    const av: Vector = a.v;
+                    const bv: Vector = Vec2.init(-1, -1).v;
+                    return .{ .v = bv * av };
+                },
+                inline 3 => {
+                    const av: Vector = a.v;
+                    const bv: Vector = Vec3.init(-1, -1, -1).v;
+                    return .{ .v = bv * av };
+                },
+                inline 4 => {
+                    const av: Vector = a.v;
+                    const bv: Vector = Vec4.init(-1, -1, -1).v;
+                    return .{ .v = bv * av };
+                },
                 else => @compileError("Expected Vec2, Vec3, Vec4, found '" ++ @typeName(VecN) ++ "'"),
             };
         }

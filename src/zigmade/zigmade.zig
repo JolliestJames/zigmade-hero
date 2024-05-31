@@ -1855,21 +1855,10 @@ pub export fn updateAndRender(
     const angle = game_state.time;
 
     // TODO: Let's add a perp operator
-    const origin = Vec2.add(
-        &screen_center,
-        &Vec2.scale(&Vec2.init(@sin(angle), 0), 10),
-    );
-
-    const x_axis = Vec2.scale(
-        &Vec2.init(@cos(angle), @sin(angle)),
-        100 + 25 * @cos(4.2 * angle),
-    );
-
-    const y_axis = Vec2.scale(
-        &Vec2.init(@cos(angle + 1), @sin(angle + 1)),
-        100 + 50 * @sin(3.9 * angle),
-    );
-
+    const origin = screen_center;
+    const x_axis = Vec2.scale(&Vec2.init(@cos(angle), @sin(angle)), 50 + 50 * @cos(angle));
+    //const y_axis = Vec2.perp(&x_axis);
+    const y_axis = Vec2.scale(&Vec2.init(@cos(angle + 1), @sin(angle + 1)), 50 + 50 * @cos(angle));
     var p_index: usize = 0;
 
     var c = render.coordinateSystem(
