@@ -49,12 +49,13 @@ pub const RenderEntryCoordinateSystem = extern struct {
     x_axis: Vec2,
     y_axis: Vec2,
     color: Vec4,
+    texture: *Bitmap,
     points: [16]Vec2,
 };
 
 pub const RenderEntryBitmap = extern struct {
     header: RenderGroupEntryHeader,
-    bitmap: ?*game.Bitmap = null,
+    bitmap: ?*Bitmap = null,
     entity_basis: RenderEntityBasis,
     r: f32,
     g: f32,
@@ -261,6 +262,7 @@ pub inline fn coordinateSystem(
     x_axis: Vec2,
     y_axis: Vec2,
     color: Vec4,
+    texture: *Bitmap,
 ) *align(@alignOf(void)) RenderEntryCoordinateSystem {
     const maybe_entry = pushRenderElement(
         group,
@@ -273,6 +275,7 @@ pub inline fn coordinateSystem(
         entry.x_axis = x_axis;
         entry.y_axis = y_axis;
         entry.color = color;
+        entry.texture = texture;
     }
 
     return maybe_entry.?;
@@ -362,12 +365,13 @@ pub fn renderGroupToOutput(
                 base += @sizeOf(@TypeOf(entry.*));
             },
             .coordinate_system => {
-                const entry: *RenderEntryCoordinateSystem = @alignCast(@ptrCast(header));
+                const entry: *align(@alignOf(void)) RenderEntryCoordinateSystem =
+                    @alignCast(@ptrCast(header));
+                const origin = entry.origin;
+                const x_axis = entry.x_axis;
+                const y_axis = entry.y_axis;
 
-                var v_max = Vec2.add(
-                    &entry.y_axis,
-                    &Vec2.add(&entry.origin, &entry.x_axis),
-                );
+                var v_max = Vec2.add(&y_axis, &Vec2.add(&origin, &x_axis));
 
                 drawRectangleSlowly(
                     output_target,
@@ -375,11 +379,12 @@ pub fn renderGroupToOutput(
                     entry.x_axis,
                     entry.y_axis,
                     entry.color,
+                    entry.texture,
                 );
 
+                const color = Vec4.init(1, 1, 0, 1);
                 const dim = Vec2.splat(2);
                 var p = entry.origin;
-                const color = Vec4.init(1, 1, 0, 1);
 
                 drawRectangle(
                     output_target,
@@ -391,7 +396,7 @@ pub fn renderGroupToOutput(
                     1,
                 );
 
-                p = Vec2.add(&entry.origin, &entry.x_axis);
+                p = Vec2.add(&origin, &x_axis);
 
                 drawRectangle(
                     output_target,
@@ -403,7 +408,7 @@ pub fn renderGroupToOutput(
                     1,
                 );
 
-                p = Vec2.add(&entry.origin, &entry.y_axis);
+                p = Vec2.add(&origin, &y_axis);
 
                 drawRectangle(
                     output_target,
@@ -526,7 +531,11 @@ pub fn drawRectangleSlowly(
     x_axis: Vec2,
     y_axis: Vec2,
     color: Vec4,
+    texture: *Bitmap,
 ) void {
+    const inv_x_axis_length_sq = 1 / Vec2.lengthSquared(&x_axis);
+    const inv_y_axis_length_sq = 1 / Vec2.lengthSquared(&y_axis);
+
     const color32: u32 =
         (@as(u32, (@intFromFloat(@round(color.a() * 255.0)))) << 24) |
         (@as(u32, (@intFromFloat(@round(color.r() * 255.0)))) << 16) |
@@ -563,8 +572,8 @@ pub fn drawRectangleSlowly(
 
     if (x_min < 0) x_min = 0;
     if (y_min < 0) y_min = 0;
-    if (x_min > width_max) x_max = width_max;
-    if (y_min > height_max) y_max = height_max;
+    if (x_max > width_max) x_max = width_max;
+    if (y_max > height_max) y_max = height_max;
 
     var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
         (@as(u32, @intCast(x_min)) *
@@ -575,17 +584,135 @@ pub fn drawRectangleSlowly(
         var pixel: [*]u32 = @alignCast(@ptrCast(row));
 
         for (@intCast(x_min)..@intCast(x_max)) |x| {
-            const pixel_p = Vec2.fromInt(x, y);
-            // TODO: Perp inner
-            // TODO: Simpler origin
-            const edge_0: f32 = Vec2.inner(&Vec2.sub(&pixel_p, &p[0]), &Vec2.negate(&Vec2.perp(&x_axis)));
-            const edge_1: f32 = Vec2.inner(&Vec2.sub(&pixel_p, &p[1]), &Vec2.negate(&Vec2.perp(&y_axis)));
-            const edge_2: f32 = Vec2.inner(&Vec2.sub(&pixel_p, &p[2]), &Vec2.perp(&x_axis));
-            const edge_3: f32 = Vec2.inner(&Vec2.sub(&pixel_p, &p[3]), &Vec2.perp(&y_axis));
+            if (true) {
+                const pixel_p = Vec2.fromInt(x, y);
+                const d = Vec2.sub(&pixel_p, &origin);
 
-            if (edge_0 < 0 and edge_1 < 0 and
-                edge_2 < 0 and edge_3 < 0)
-            {
+                // TODO: Perp inner
+                // TODO: Simpler origin
+                const edge_0: f32 = Vec2.inner(&d, &Vec2.negate(&Vec2.perp(&x_axis)));
+                const edge_1: f32 = Vec2.inner(
+                    &Vec2.sub(&d, &x_axis),
+                    &Vec2.negate(&Vec2.perp(&y_axis)),
+                );
+                const edge_2: f32 = Vec2.inner(
+                    &Vec2.sub(&Vec2.sub(&d, &x_axis), &y_axis),
+                    &Vec2.perp(&x_axis),
+                );
+                const edge_3: f32 = Vec2.inner(&Vec2.sub(&d, &y_axis), &Vec2.perp(&y_axis));
+
+                if (edge_0 < 0 and edge_1 < 0 and edge_2 < 0 and edge_3 < 0) {
+                    const u = inv_x_axis_length_sq * Vec2.inner(&d, &x_axis);
+                    const v = inv_y_axis_length_sq * Vec2.inner(&d, &y_axis);
+
+                    // TODO: SSE clamping
+                    assert(u >= 0 and u <= 1);
+                    assert(v >= 0 and v <= 1);
+
+                    // TODO: Formalize texture boundaries
+                    const tx = u * @as(f32, @floatFromInt(texture.width - 2));
+                    const ty = v * @as(f32, @floatFromInt(texture.height - 2));
+
+                    const ix: i32 = @intFromFloat(tx);
+                    const iy: i32 = @intFromFloat(ty);
+
+                    const fx = tx - @as(f32, @floatFromInt(ix));
+                    const fy = ty - @as(f32, @floatFromInt(iy));
+
+                    assert(ix >= 0 and ix < texture.width);
+                    assert(iy >= 0 and iy < texture.height);
+
+                    const offset = @as(i32, @intCast(iy)) * texture.pitch +
+                        @as(i32, @intCast(ix * @sizeOf(u32)));
+
+                    const texel_ptr = if (offset > 0)
+                        @as([*]u8, @ptrCast(texture.memory)) + @as(usize, @intCast(offset))
+                    else
+                        @as([*]u8, @ptrCast(texture.memory)) - @as(usize, @intCast(-offset));
+
+                    const texel_ptr_plus_pitch = if (texture.pitch > 0)
+                        texel_ptr + @as(usize, @intCast(texture.pitch))
+                    else
+                        texel_ptr - @as(usize, @intCast(-texture.pitch));
+
+                    const texel_ptr_a = @as(
+                        *align(@alignOf(u8)) u32,
+                        @alignCast(@ptrCast(texel_ptr)),
+                    ).*;
+                    const texel_ptr_b = @as(
+                        *align(@alignOf(u8)) u32,
+                        @alignCast(@ptrCast(texel_ptr + @sizeOf(u32))),
+                    ).*;
+                    const texel_ptr_c = @as(
+                        *align(@alignOf(u8)) u32,
+                        @alignCast(@ptrCast(texel_ptr_plus_pitch)),
+                    ).*;
+                    const texel_ptr_d = @as(
+                        *align(@alignOf(u8)) u32,
+                        @alignCast(@ptrCast(texel_ptr_plus_pitch + @sizeOf(u32))),
+                    ).*;
+
+                    // TODO: color.a()
+                    const texel_a = Vec4.init(
+                        @floatFromInt((texel_ptr_a >> 16) & 0xFF),
+                        @floatFromInt((texel_ptr_a >> 8) & 0xFF),
+                        @floatFromInt((texel_ptr_a >> 0) & 0xFF),
+                        @floatFromInt((texel_ptr_a >> 24) & 0xFF),
+                    );
+                    const texel_b = Vec4.init(
+                        @floatFromInt((texel_ptr_b >> 16) & 0xFF),
+                        @floatFromInt((texel_ptr_b >> 8) & 0xFF),
+                        @floatFromInt((texel_ptr_b >> 0) & 0xFF),
+                        @floatFromInt((texel_ptr_b >> 24) & 0xFF),
+                    );
+                    const texel_c = Vec4.init(
+                        @floatFromInt((texel_ptr_c >> 16) & 0xFF),
+                        @floatFromInt((texel_ptr_c >> 8) & 0xFF),
+                        @floatFromInt((texel_ptr_c >> 0) & 0xFF),
+                        @floatFromInt((texel_ptr_c >> 24) & 0xFF),
+                    );
+                    const texel_d = Vec4.init(
+                        @floatFromInt((texel_ptr_d >> 16) & 0xFF),
+                        @floatFromInt((texel_ptr_d >> 8) & 0xFF),
+                        @floatFromInt((texel_ptr_d >> 0) & 0xFF),
+                        @floatFromInt((texel_ptr_d >> 24) & 0xFF),
+                    );
+
+                    const texel = if (true)
+                        Vec4.lerp(
+                            &Vec4.lerp(&texel_a, fx, &texel_b),
+                            fy,
+                            &Vec4.lerp(&texel_c, fx, &texel_d),
+                        )
+                    else
+                        texel_a;
+
+                    const sa = texel.a();
+                    const sr = texel.r();
+                    const sg = texel.g();
+                    const sb = texel.b();
+
+                    const rsa = sa / 255 * color.a();
+
+                    const da: f32 = @floatFromInt((pixel[0] >> 24) & 0xFF);
+                    const dr: f32 = @floatFromInt((pixel[0] >> 16) & 0xFF);
+                    const dg: f32 = @floatFromInt((pixel[0] >> 8) & 0xFF);
+                    const db: f32 = @floatFromInt((pixel[0] >> 0) & 0xFF);
+                    const rda = da / 255;
+
+                    const inv_rsa: f32 = 1 - rsa;
+                    //// TODO: Check this for math errors
+                    const a = 255 * (rsa + rda - rsa * rda);
+                    const r = inv_rsa * dr + sr;
+                    const g = inv_rsa * dg + sg;
+                    const b = inv_rsa * db + sb;
+
+                    pixel[0] = (lossyCast(u32, a + 0.5) << 24) |
+                        (lossyCast(u32, r + 0.5) << 16) |
+                        (lossyCast(u32, g + 0.5) << 8) |
+                        (lossyCast(u32, b + 0.5) << 0);
+                }
+            } else {
                 pixel[0] = color32;
             }
 

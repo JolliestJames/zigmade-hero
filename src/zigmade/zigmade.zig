@@ -1852,18 +1852,33 @@ pub export fn updateAndRender(
     }
 
     game_state.time += input.dt_for_frame;
-    const angle = game_state.time;
+    const angle = 0.1 * game_state.time;
+    const displacement = 100 * @cos(5 * angle);
 
     // TODO: Let's add a perp operator
     const origin = screen_center;
-    const x_axis = Vec2.scale(&Vec2.init(@cos(angle), @sin(angle)), 50 + 50 * @cos(angle));
-    //const y_axis = Vec2.perp(&x_axis);
-    const y_axis = Vec2.scale(&Vec2.init(@cos(angle + 1), @sin(angle + 1)), 50 + 50 * @cos(angle));
+    var x_axis: Vec2 = undefined;
+    var y_axis: Vec2 = undefined;
+
+    if (true) {
+        x_axis = Vec2.scale(&Vec2.init(@cos(angle), @sin(angle)), 100);
+        y_axis = Vec2.perp(&x_axis);
+    } else {
+        x_axis = Vec2.init(100, 0);
+        y_axis = Vec2.init(0, 100);
+    }
+
     var p_index: usize = 0;
 
     var c = render.coordinateSystem(
         render_group,
-        origin,
+        Vec2.add(
+            &Vec2.init(displacement, 0),
+            &Vec2.sub(
+                &Vec2.sub(&origin, &Vec2.scale(&x_axis, 0.5)),
+                &Vec2.scale(&y_axis, 0.5),
+            ),
+        ),
         x_axis,
         y_axis,
         Vec4.init(
@@ -1872,6 +1887,7 @@ pub export fn updateAndRender(
             0.5 + 0.5 * @cos(9.9 * angle),
             1,
         ),
+        &game_state.tree,
     );
 
     var y: f32 = 0;
