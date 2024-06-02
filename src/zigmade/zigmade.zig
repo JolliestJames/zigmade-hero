@@ -320,20 +320,25 @@ fn debugLoadBmp(
             for (0..@intCast(header.width)) |_| {
                 const c = source_dest[0];
 
-                var r: f32 = @floatFromInt((c & red_mask) >> red_shift_down);
-                var g: f32 = @floatFromInt((c & green_mask) >> green_shift_down);
-                var b: f32 = @floatFromInt((c & blue_mask) >> blue_shift_down);
-                const a: f32 = @floatFromInt((c & alpha_mask) >> alpha_shift_down);
-                const an = a / 255;
+                var texel = Vec4.init(
+                    @floatFromInt((c & red_mask) >> red_shift_down),
+                    @floatFromInt((c & green_mask) >> green_shift_down),
+                    @floatFromInt((c & blue_mask) >> blue_shift_down),
+                    @floatFromInt((c & alpha_mask) >> alpha_shift_down),
+                );
 
-                r = r * an;
-                g = g * an;
-                b = b * an;
+                texel = render.SRGB255ToLinear1(texel);
 
-                source_dest[0] = (lossyCast(u32, a + 0.5) << 24) |
-                    (lossyCast(u32, r + 0.5) << 16) |
-                    (lossyCast(u32, g + 0.5) << 8) |
-                    (lossyCast(u32, b + 0.5) << 0);
+                if (true) {
+                    texel = texel.premultipliedAlpha(texel.a());
+                }
+
+                texel = render.linear1ToSRGB255(texel);
+
+                source_dest[0] = (lossyCast(u32, texel.a() + 0.5) << 24) |
+                    (lossyCast(u32, texel.r() + 0.5) << 16) |
+                    (lossyCast(u32, texel.g() + 0.5) << 8) |
+                    (lossyCast(u32, texel.b() + 0.5) << 0);
 
                 source_dest += 1;
             }
@@ -1880,12 +1885,16 @@ pub export fn updateAndRender(
 
     var p_index: usize = 0;
     const c_angle = 5 * angle;
-    const color = Vec4.init(
-        0.5 + 0.5 * @sin(c_angle),
-        0.5 + 0.5 * @sin(2.9 * c_angle),
-        0.5 + 0.5 * @cos(9.9 * c_angle),
-        0.5 + 0.5 * @sin(10 * c_angle),
-    );
+
+    const color = if (false)
+        Vec4.init(
+            0.5 + 0.5 * @sin(c_angle),
+            0.5 + 0.5 * @sin(2.9 * c_angle),
+            0.5 + 0.5 * @cos(9.9 * c_angle),
+            0.5 + 0.5 * @sin(10 * c_angle),
+        )
+    else
+        Vec4.splat(1);
 
     var c = render.coordinateSystem(
         render_group,

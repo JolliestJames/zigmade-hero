@@ -39,12 +39,10 @@ pub const RenderGroupEntryHeader = extern struct {
 };
 
 pub const RenderEntryClear = extern struct {
-    header: RenderGroupEntryHeader,
     color: Vec4,
 };
 
 pub const RenderEntryCoordinateSystem = extern struct {
-    header: RenderGroupEntryHeader,
     origin: Vec2,
     x_axis: Vec2,
     y_axis: Vec2,
@@ -54,7 +52,6 @@ pub const RenderEntryCoordinateSystem = extern struct {
 };
 
 pub const RenderEntryBitmap = extern struct {
-    header: RenderGroupEntryHeader,
     bitmap: ?*Bitmap = null,
     entity_basis: RenderEntityBasis,
     r: f32,
@@ -64,7 +61,6 @@ pub const RenderEntryBitmap = extern struct {
 };
 
 pub const RenderEntryRectangle = extern struct {
-    header: RenderGroupEntryHeader,
     entity_basis: RenderEntityBasis,
     dim: Vec2,
     r: f32,
@@ -100,14 +96,17 @@ pub inline fn pushRenderElement(
 
 pub inline fn pushRenderElement_(
     group: *RenderGroup,
-    size: usize,
+    _size: usize,
     comptime entry_type: RenderGroupEntryType,
-) ?*RenderGroupEntryHeader {
-    var result: ?*RenderGroupEntryHeader = null;
+) ?*void {
+    var result: ?*void = null;
+
+    const size = _size + @sizeOf(RenderGroupEntryHeader);
 
     if ((group.push_buffer_size + size) < group.max_push_buffer_size) {
-        result = @ptrCast(group.push_buffer_base + group.push_buffer_size);
-        result.?.type = entry_type;
+        var header: *RenderGroupEntryHeader = @ptrCast(group.push_buffer_base + group.push_buffer_size);
+        header.type = entry_type;
+        result = @ptrCast(@as([*]u8, @ptrCast(header)) + @sizeOf(@TypeOf(header.*)));
         group.push_buffer_size += size;
     } else unreachable;
 
@@ -311,27 +310,28 @@ pub fn renderGroupToOutput(
     );
 
     var base: usize = 0;
-    while (base < render_group.push_buffer_size) {
+    while (base < render_group.push_buffer_size) : (base += @sizeOf(RenderGroupEntryHeader)) {
         const header: *RenderGroupEntryHeader = @ptrCast(render_group.push_buffer_base + base);
+        const data = @as([*]u8, @ptrCast(header)) + @sizeOf(@TypeOf(header.*));
 
         switch (header.type) {
             .clear => {
-                const entry: *RenderEntryClear = @alignCast(@ptrCast(header));
+                const entry: *align(@alignOf(void)) RenderEntryClear = @alignCast(@ptrCast(data));
 
                 drawRectangle(
                     output_target,
                     Vec2.splat(0),
                     Vec2.fromInt(output_target.width, output_target.height),
-                    entry.color.r(),
-                    entry.color.g(),
-                    entry.color.b(),
-                    entry.color.a(),
+                    entry.color.v[0],
+                    entry.color.v[1],
+                    entry.color.v[2],
+                    entry.color.v[3],
                 );
 
                 base += @sizeOf(@TypeOf(entry.*));
             },
             .bitmap => {
-                const entry = @as(*align(@alignOf(void)) RenderEntryBitmap, @ptrCast(header));
+                const entry = @as(*align(@alignOf(void)) RenderEntryBitmap, @ptrCast(data));
                 const p = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
 
                 if (entry.bitmap) |bitmap| {
@@ -349,13 +349,14 @@ pub fn renderGroupToOutput(
                 base += @sizeOf(@TypeOf(entry.*));
             },
             .rectangle => {
-                const entry: *align(@alignOf(void)) RenderEntryRectangle = @ptrCast(header);
+                const entry: *align(@alignOf(void)) RenderEntryRectangle = @ptrCast(data);
                 const p = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
+                const dim = entry.dim;
 
                 drawRectangle(
                     output_target,
                     p,
-                    Vec2.add(@alignCast(&p), @alignCast(&entry.dim)),
+                    Vec2.add(@alignCast(&p), @alignCast(&dim)),
                     entry.r,
                     entry.g,
                     entry.b,
@@ -366,7 +367,7 @@ pub fn renderGroupToOutput(
             },
             .coordinate_system => {
                 const entry: *align(@alignOf(void)) RenderEntryCoordinateSystem =
-                    @alignCast(@ptrCast(header));
+                    @alignCast(@ptrCast(data));
                 const origin = entry.origin;
                 const x_axis = entry.x_axis;
                 const y_axis = entry.y_axis;
@@ -556,9 +557,14 @@ pub fn drawRectangleSlowly(
     origin: Vec2,
     x_axis: Vec2,
     y_axis: Vec2,
-    color: Vec4,
+    _color: Vec4,
     texture: *Bitmap,
 ) void {
+    //@setFloatMode(.Optimized);
+
+    // NOTE: Premultiply color up front
+    const color = _color.premultipliedAlpha(_color.a());
+
     const inv_x_axis_length_sq = 1 / Vec2.lengthSquared(&x_axis);
     const inv_y_axis_length_sq = 1 / Vec2.lengthSquared(&y_axis);
 
@@ -658,27 +664,18 @@ pub fn drawRectangleSlowly(
                     else
                         @as([*]u8, @ptrCast(texture.memory)) - @as(usize, @intCast(-offset));
 
-                    const texel_ptr_plus_pitch = if (texture.pitch > 0)
+                    const c_offset = if (texture.pitch > 0)
                         texel_ptr + @as(usize, @intCast(texture.pitch))
                     else
                         texel_ptr - @as(usize, @intCast(-texture.pitch));
 
-                    const texel_ptr_a = @as(
-                        *align(@alignOf(u8)) u32,
-                        @alignCast(@ptrCast(texel_ptr)),
-                    ).*;
-                    const texel_ptr_b = @as(
-                        *align(@alignOf(u8)) u32,
-                        @alignCast(@ptrCast(texel_ptr + @sizeOf(u32))),
-                    ).*;
-                    const texel_ptr_c = @as(
-                        *align(@alignOf(u8)) u32,
-                        @alignCast(@ptrCast(texel_ptr_plus_pitch)),
-                    ).*;
-                    const texel_ptr_d = @as(
-                        *align(@alignOf(u8)) u32,
-                        @alignCast(@ptrCast(texel_ptr_plus_pitch + @sizeOf(u32))),
-                    ).*;
+                    const b_offset = texel_ptr + @sizeOf(u32);
+                    const d_offset = c_offset + @sizeOf(u32);
+
+                    const texel_ptr_a = @as(*align(@alignOf(u8)) u32, @ptrCast(texel_ptr)).*;
+                    const texel_ptr_b = @as(*align(@alignOf(u8)) u32, @ptrCast(b_offset)).*;
+                    const texel_ptr_c = @as(*align(@alignOf(u8)) u32, @ptrCast(c_offset)).*;
+                    const texel_ptr_d = @as(*align(@alignOf(u8)) u32, @ptrCast(d_offset)).*;
 
                     // TODO: color.a()
                     var texel_a = Vec4.init(
@@ -712,7 +709,7 @@ pub fn drawRectangleSlowly(
                     texel_c = SRGB255ToLinear1(texel_c);
                     texel_d = SRGB255ToLinear1(texel_d);
 
-                    const texel = if (true)
+                    var texel = if (true)
                         Vec4.lerp(
                             &Vec4.lerp(&texel_a, fx, &texel_b),
                             fy,
@@ -721,7 +718,7 @@ pub fn drawRectangleSlowly(
                     else
                         texel_a;
 
-                    const rsa = texel.a() * color.a();
+                    texel = Vec4.hadamard(&texel, &color);
 
                     var dest = Vec4.init(
                         @floatFromInt((pixel[0] >> 16) & 0xFF),
@@ -733,14 +730,9 @@ pub fn drawRectangleSlowly(
                     // NOTE Go from srgb to "linear" brightness space
                     dest = SRGB255ToLinear1(dest);
 
-                    const rda = dest.a();
-                    const inv_rsa: f32 = 1 - rsa;
-
-                    const blended = Vec4.init(
-                        inv_rsa * dest.r() + color.a() * color.r() * texel.r(),
-                        inv_rsa * dest.g() + color.a() * color.g() * texel.g(),
-                        inv_rsa * dest.b() + color.a() * color.b() * texel.b(),
-                        (rsa + rda - rsa * rda),
+                    const blended = Vec4.add(
+                        &Vec4.scale(&dest, 1 - texel.a()),
+                        &texel,
                     );
 
                     // NOTE: Go from "linear" brightness space to srgb
@@ -813,6 +805,8 @@ pub fn drawBitmap(
     real_y: f32,
     c_alpha: f32,
 ) void {
+    //@setFloatMode(.Optimized);
+
     var min_x: i32 = @intFromFloat(@round(real_x));
     var min_y: i32 = @intFromFloat(@round(real_y));
     var max_x: i32 = min_x + bitmap.width;
@@ -859,29 +853,36 @@ pub fn drawBitmap(
         var source: [*]align(@alignOf(u8)) u32 = @ptrCast(source_row);
 
         for (@intCast(min_x)..@intCast(max_x)) |_| {
-            const sa: f32 = @floatFromInt((source[0] >> 24) & 0xFF);
-            const rsa = sa / 255 * c_alpha;
-            const sr: f32 = c_alpha * @as(f32, @floatFromInt((source[0] >> 16) & 0xFF));
-            const sg: f32 = c_alpha * @as(f32, @floatFromInt((source[0] >> 8) & 0xFF));
-            const sb: f32 = c_alpha * @as(f32, @floatFromInt((source[0] >> 0) & 0xFF));
+            var texel = Vec4.init(
+                @as(f32, @floatFromInt((source[0] >> 16) & 0xFF)),
+                @as(f32, @floatFromInt((source[0] >> 8) & 0xFF)),
+                @as(f32, @floatFromInt((source[0] >> 0) & 0xFF)),
+                @floatFromInt((source[0] >> 24) & 0xFF),
+            );
 
-            const da: f32 = @floatFromInt((dest[0] >> 24) & 0xFF);
-            const dr: f32 = @floatFromInt((dest[0] >> 16) & 0xFF);
-            const dg: f32 = @floatFromInt((dest[0] >> 8) & 0xFF);
-            const db: f32 = @floatFromInt((dest[0] >> 0) & 0xFF);
-            const rda = da / 255;
+            texel = SRGB255ToLinear1(texel);
+            texel = Vec4.scale(&texel, c_alpha);
 
-            const inv_rsa: f32 = 1 - rsa;
-            // TODO: Check this for math errors
-            const a = 255 * (rsa + rda - rsa * rda);
-            const r = inv_rsa * dr + sr;
-            const g = inv_rsa * dg + sg;
-            const b = inv_rsa * db + sb;
+            var d = Vec4.init(
+                @floatFromInt((dest[0] >> 16) & 0xFF),
+                @floatFromInt((dest[0] >> 8) & 0xFF),
+                @floatFromInt((dest[0] >> 0) & 0xFF),
+                @floatFromInt((dest[0] >> 24) & 0xFF),
+            );
 
-            dest[0] = (lossyCast(u32, a + 0.5) << 24) |
-                (lossyCast(u32, r + 0.5) << 16) |
-                (lossyCast(u32, g + 0.5) << 8) |
-                (lossyCast(u32, b + 0.5) << 0);
+            d = SRGB255ToLinear1(d);
+
+            var result = Vec4.add(
+                &Vec4.scale(&d, 1 - texel.a()),
+                &texel,
+            );
+
+            result = linear1ToSRGB255(result);
+
+            dest[0] = (lossyCast(u32, result.a() + 0.5) << 24) |
+                (lossyCast(u32, result.r() + 0.5) << 16) |
+                (lossyCast(u32, result.g() + 0.5) << 8) |
+                (lossyCast(u32, result.b() + 0.5) << 0);
 
             dest += 1;
             source += 1;

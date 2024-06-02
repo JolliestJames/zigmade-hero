@@ -165,6 +165,16 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
                 pub inline fn a(v: *const VecN) Scalar {
                     return v.v[3];
                 }
+                pub inline fn premultipliedAlpha(v: *const VecN, alpha: f32) VecN {
+                    var result: VecN = undefined;
+
+                    result.v[0] = v.r() * alpha;
+                    result.v[1] = v.g() * alpha;
+                    result.v[2] = v.b() * alpha;
+                    result.v[3] = alpha;
+
+                    return result;
+                }
             },
             else => @compileError("Expected Vec2, Vec3, Vec4, found '" ++ @typeName(VecN) ++ "'"),
         };
