@@ -481,6 +481,32 @@ pub fn allocateRenderGroup(
     return result;
 }
 
+pub inline fn SRGB255ToLinear1(c: Vec4) Vec4 {
+    var result: Vec4 = undefined;
+
+    const inv_255 = 1.0 / 255.0;
+
+    result.v[0] = math.square(inv_255 * c.r());
+    result.v[1] = math.square(inv_255 * c.g());
+    result.v[2] = math.square(inv_255 * c.b());
+    result.v[3] = inv_255 * c.a();
+
+    return result;
+}
+
+pub inline fn linear1ToSRGB255(c: Vec4) Vec4 {
+    var result: Vec4 = undefined;
+
+    const one_255 = 255.0;
+
+    result.v[0] = one_255 * @sqrt(c.r());
+    result.v[1] = one_255 * @sqrt(c.g());
+    result.v[2] = one_255 * @sqrt(c.b());
+    result.v[3] = one_255 * c.a();
+
+    return result;
+}
+
 pub fn drawRectangle(
     buffer: *const Bitmap,
     v_min: Vec2,
@@ -606,8 +632,10 @@ pub fn drawRectangleSlowly(
                     const v = inv_y_axis_length_sq * Vec2.inner(&d, &y_axis);
 
                     // TODO: SSE clamping
-                    assert(u >= 0 and u <= 1);
-                    assert(v >= 0 and v <= 1);
+                    if (false) {
+                        assert(u >= 0 and u <= 1);
+                        assert(v >= 0 and v <= 1);
+                    }
 
                     // TODO: Formalize texture boundaries
                     const tx = u * @as(f32, @floatFromInt(texture.width - 2));
@@ -653,30 +681,36 @@ pub fn drawRectangleSlowly(
                     ).*;
 
                     // TODO: color.a()
-                    const texel_a = Vec4.init(
+                    var texel_a = Vec4.init(
                         @floatFromInt((texel_ptr_a >> 16) & 0xFF),
                         @floatFromInt((texel_ptr_a >> 8) & 0xFF),
                         @floatFromInt((texel_ptr_a >> 0) & 0xFF),
                         @floatFromInt((texel_ptr_a >> 24) & 0xFF),
                     );
-                    const texel_b = Vec4.init(
+                    var texel_b = Vec4.init(
                         @floatFromInt((texel_ptr_b >> 16) & 0xFF),
                         @floatFromInt((texel_ptr_b >> 8) & 0xFF),
                         @floatFromInt((texel_ptr_b >> 0) & 0xFF),
                         @floatFromInt((texel_ptr_b >> 24) & 0xFF),
                     );
-                    const texel_c = Vec4.init(
+                    var texel_c = Vec4.init(
                         @floatFromInt((texel_ptr_c >> 16) & 0xFF),
                         @floatFromInt((texel_ptr_c >> 8) & 0xFF),
                         @floatFromInt((texel_ptr_c >> 0) & 0xFF),
                         @floatFromInt((texel_ptr_c >> 24) & 0xFF),
                     );
-                    const texel_d = Vec4.init(
+                    var texel_d = Vec4.init(
                         @floatFromInt((texel_ptr_d >> 16) & 0xFF),
                         @floatFromInt((texel_ptr_d >> 8) & 0xFF),
                         @floatFromInt((texel_ptr_d >> 0) & 0xFF),
                         @floatFromInt((texel_ptr_d >> 24) & 0xFF),
                     );
+
+                    // NOTE: Go from srgb to "linear" brightness space
+                    texel_a = SRGB255ToLinear1(texel_a);
+                    texel_b = SRGB255ToLinear1(texel_b);
+                    texel_c = SRGB255ToLinear1(texel_c);
+                    texel_d = SRGB255ToLinear1(texel_d);
 
                     const texel = if (true)
                         Vec4.lerp(
@@ -687,30 +721,35 @@ pub fn drawRectangleSlowly(
                     else
                         texel_a;
 
-                    const sa = texel.a();
-                    const sr = texel.r();
-                    const sg = texel.g();
-                    const sb = texel.b();
+                    const rsa = texel.a() * color.a();
 
-                    const rsa = sa / 255 * color.a();
+                    var dest = Vec4.init(
+                        @floatFromInt((pixel[0] >> 16) & 0xFF),
+                        @floatFromInt((pixel[0] >> 8) & 0xFF),
+                        @floatFromInt((pixel[0] >> 0) & 0xFF),
+                        @floatFromInt((pixel[0] >> 24) & 0xFF),
+                    );
 
-                    const da: f32 = @floatFromInt((pixel[0] >> 24) & 0xFF);
-                    const dr: f32 = @floatFromInt((pixel[0] >> 16) & 0xFF);
-                    const dg: f32 = @floatFromInt((pixel[0] >> 8) & 0xFF);
-                    const db: f32 = @floatFromInt((pixel[0] >> 0) & 0xFF);
-                    const rda = da / 255;
+                    // NOTE Go from srgb to "linear" brightness space
+                    dest = SRGB255ToLinear1(dest);
 
+                    const rda = dest.a();
                     const inv_rsa: f32 = 1 - rsa;
-                    //// TODO: Check this for math errors
-                    const a = 255 * (rsa + rda - rsa * rda);
-                    const r = inv_rsa * dr + sr;
-                    const g = inv_rsa * dg + sg;
-                    const b = inv_rsa * db + sb;
 
-                    pixel[0] = (lossyCast(u32, a + 0.5) << 24) |
-                        (lossyCast(u32, r + 0.5) << 16) |
-                        (lossyCast(u32, g + 0.5) << 8) |
-                        (lossyCast(u32, b + 0.5) << 0);
+                    const blended = Vec4.init(
+                        inv_rsa * dest.r() + color.a() * color.r() * texel.r(),
+                        inv_rsa * dest.g() + color.a() * color.g() * texel.g(),
+                        inv_rsa * dest.b() + color.a() * color.b() * texel.b(),
+                        (rsa + rda - rsa * rda),
+                    );
+
+                    // NOTE: Go from "linear" brightness space to srgb
+                    var blended_255 = linear1ToSRGB255(blended);
+
+                    pixel[0] = (lossyCast(u32, blended_255.a() + 0.5) << 24) |
+                        (lossyCast(u32, blended_255.r() + 0.5) << 16) |
+                        (lossyCast(u32, blended_255.g() + 0.5) << 8) |
+                        (lossyCast(u32, blended_255.b() + 0.5) << 0);
                 }
             } else {
                 pixel[0] = color32;

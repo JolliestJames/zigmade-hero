@@ -1071,6 +1071,8 @@ pub export fn updateAndRender(
             memory.permanent_storage + @sizeOf(GameState),
         );
 
+        defer checkArena(&game_state.world_arena);
+
         // NOTE: Reserve entity slot 0 as the null entity
         _ = addLowEntity(game_state, .none, &world.nullPosition());
 
@@ -1346,6 +1348,8 @@ pub export fn updateAndRender(
             memory.transient_storage + @sizeOf(TransientState),
         );
 
+        defer checkArena(&transient_state.arena);
+
         // TODO: Pick a real number here
         transient_state.ground_buffer_count = 64; // 128;
         transient_state.ground_buffers = pushArray(
@@ -1452,6 +1456,8 @@ pub export fn updateAndRender(
     //
 
     const render_memory = beginTemporaryMemory(&transient_state.arena);
+
+    defer endTemporaryMemory(render_memory);
 
     // TODO: Decide what our pushbuffer size is
     var render_group = render.allocateRenderGroup(
@@ -1600,6 +1606,7 @@ pub export fn updateAndRender(
     const sim_bounds_expansion = Vec3.splat(15);
     const sim_bounds = Rectangle3.addRadius(&camera_bounds_in_meters, &sim_bounds_expansion);
     const sim_memory = beginTemporaryMemory(&transient_state.arena);
+    defer endTemporaryMemory(sim_memory);
 
     var region = sim.beginSim(
         &transient_state.arena,
@@ -1609,6 +1616,8 @@ pub export fn updateAndRender(
         sim_bounds,
         input.dt_for_frame,
     );
+
+    defer sim.endSim(region, game_state);
 
     // TODO: Move this out into the zigmade_entity
     for (0..region.entity_count) |index| {
@@ -1853,7 +1862,8 @@ pub export fn updateAndRender(
 
     game_state.time += input.dt_for_frame;
     const angle = 0.1 * game_state.time;
-    const displacement = 100 * @cos(5 * angle);
+    //const displacement = 100 * @cos(5 * angle);
+    const displacement = 0;
 
     // TODO: Let's add a perp operator
     const origin = screen_center;
@@ -1869,6 +1879,13 @@ pub export fn updateAndRender(
     }
 
     var p_index: usize = 0;
+    const c_angle = 5 * angle;
+    const color = Vec4.init(
+        0.5 + 0.5 * @sin(c_angle),
+        0.5 + 0.5 * @sin(2.9 * c_angle),
+        0.5 + 0.5 * @cos(9.9 * c_angle),
+        0.5 + 0.5 * @sin(10 * c_angle),
+    );
 
     var c = render.coordinateSystem(
         render_group,
@@ -1881,12 +1898,7 @@ pub export fn updateAndRender(
         ),
         x_axis,
         y_axis,
-        Vec4.init(
-            0.5 + 0.5 * @sin(angle),
-            0.5 + 0.5 * @sin(2.9 * angle),
-            0.5 + 0.5 * @cos(9.9 * angle),
-            1,
-        ),
+        color,
         &game_state.tree,
     );
 
@@ -1905,12 +1917,6 @@ pub export fn updateAndRender(
         render_group,
         draw_buffer,
     );
-
-    sim.endSim(region, game_state);
-    endTemporaryMemory(sim_memory);
-    endTemporaryMemory(render_memory);
-    checkArena(&game_state.world_arena);
-    checkArena(&transient_state.arena);
 }
 
 // NOTE: At the moment, this must be a very fast function
