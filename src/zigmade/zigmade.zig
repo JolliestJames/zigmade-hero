@@ -1478,7 +1478,7 @@ pub export fn updateAndRender(
         .memory = @ptrCast(buffer.memory),
     };
 
-    render.clear(render_group, Vec4.init(1, 0, 1, 0));
+    render.clear(render_group, Vec4.init(0.5, 0.5, 0.5, 0));
 
     const screen_center = Vec2.init(
         0.5 * @as(f32, @floatFromInt(draw_buffer.width)),
@@ -1866,9 +1866,10 @@ pub export fn updateAndRender(
     }
 
     game_state.time += input.dt_for_frame;
-    const angle = 0.1 * game_state.time;
-    //const displacement = 100 * @cos(5 * angle);
-    const displacement = 0;
+    var angle = 0.1 * game_state.time;
+    var displacement = 100 * @cos(5 * angle);
+    displacement = 0;
+    angle = 0;
 
     // TODO: Let's add a perp operator
     const origin = screen_center;

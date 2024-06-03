@@ -334,17 +334,18 @@ pub fn renderGroupToOutput(
                 const entry = @as(*align(@alignOf(void)) RenderEntryBitmap, @ptrCast(data));
                 const p = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
 
-                if (entry.bitmap) |bitmap| {
-                    // NOTE: With Casey's implementation, there will be one iteration of the game
-                    // loop when a sword has transitioned from spatial to non_spatial during which
-                    // a draw attempt will be made without this check for an invalid position in place.
-                    // This makes it clear why avoiding use of a non spatial entity's position is
-                    // important. An attempt to draw at that position in this case will cause an
-                    // integer part of floating point value out of bounds panic.
-                    if (!std.meta.eql(entry.entity_basis.basis.p.v, ety.invalidPos().v)) {
-                        drawBitmap(output_target, bitmap, p.x(), p.y(), entry.a);
-                    }
-                } else unreachable;
+                if (false)
+                    if (entry.bitmap) |bitmap| {
+                        // NOTE: With Casey's implementation, there will be one iteration of the game
+                        // loop when a sword has transitioned from spatial to non_spatial during which
+                        // a draw attempt will be made without this check for an invalid position in place.
+                        // This makes it clear why avoiding use of a non spatial entity's position is
+                        // important. An attempt to draw at that position in this case will cause an
+                        // integer part of floating point value out of bounds panic.
+                        if (!std.meta.eql(entry.entity_basis.basis.p.v, ety.invalidPos().v)) {
+                            drawBitmap(output_target, bitmap, p.x(), p.y(), entry.a);
+                        }
+                    } else unreachable;
 
                 base += @sizeOf(@TypeOf(entry.*));
             },
