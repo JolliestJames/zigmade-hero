@@ -13,6 +13,13 @@ const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
 
+const EnvironmentMap = struct {
+    // NOTE: lod[0] is 2^width_pow_2 by 2^height_pow_2
+    width_pow_2: i32,
+    height_pow_2: i32,
+    lod: [4]*Bitmap,
+};
+
 pub const RenderBasis = extern struct {
     p: Vec3 = Vec3.splat(0),
 };
@@ -48,7 +55,10 @@ pub const RenderEntryCoordinateSystem = extern struct {
     y_axis: Vec2,
     color: Vec4,
     texture: *Bitmap,
-    points: [16]Vec2,
+    normal_map: ?*Bitmap,
+    top: ?*EnvironmentMap,
+    middle: ?*EnvironmentMap,
+    bottom: ?*EnvironmentMap,
 };
 
 pub const RenderEntryBitmap = extern struct {
@@ -262,6 +272,10 @@ pub inline fn coordinateSystem(
     y_axis: Vec2,
     color: Vec4,
     texture: *Bitmap,
+    normal_map: ?*Bitmap,
+    top: ?*EnvironmentMap,
+    middle: ?*EnvironmentMap,
+    bottom: ?*EnvironmentMap,
 ) *align(@alignOf(void)) RenderEntryCoordinateSystem {
     const maybe_entry = pushRenderElement(
         group,
@@ -275,6 +289,10 @@ pub inline fn coordinateSystem(
         entry.y_axis = y_axis;
         entry.color = color;
         entry.texture = texture;
+        entry.normal_map = normal_map;
+        entry.top = top;
+        entry.middle = middle;
+        entry.bottom = bottom;
     }
 
     return maybe_entry.?;
@@ -382,6 +400,10 @@ pub fn renderGroupToOutput(
                     entry.y_axis,
                     entry.color,
                     entry.texture,
+                    entry.normal_map,
+                    entry.top,
+                    entry.middle,
+                    entry.bottom,
                 );
 
                 const color = Vec4.init(1, 1, 0, 1);
@@ -553,6 +575,32 @@ pub fn drawRectangle(
     }
 }
 
+pub inline fn unpack4x8(to_unpack: u32) Vec4 {
+    const result = Vec4.init(
+        @floatFromInt((to_unpack >> 16) & 0xFF),
+        @floatFromInt((to_unpack >> 8) & 0xFF),
+        @floatFromInt((to_unpack >> 0) & 0xFF),
+        @floatFromInt((to_unpack >> 24) & 0xFF),
+    );
+
+    return result;
+}
+
+pub fn sampleEnvironmentMap(
+    screen_space_uv: Vec2,
+    normal: Vec3,
+    roughness: f32,
+    map: ?*EnvironmentMap,
+) Vec3 {
+    // TODO
+    _ = screen_space_uv;
+    _ = roughness;
+    _ = map;
+    const result = normal;
+
+    return result;
+}
+
 pub fn drawRectangleSlowly(
     buffer: *const Bitmap,
     origin: Vec2,
@@ -560,6 +608,10 @@ pub fn drawRectangleSlowly(
     y_axis: Vec2,
     _color: Vec4,
     texture: *Bitmap,
+    maybe_normal_map: ?*Bitmap,
+    maybe_top: ?*EnvironmentMap,
+    maybe_middle: ?*EnvironmentMap,
+    maybe_bottom: ?*EnvironmentMap,
 ) void {
     //@setFloatMode(.Optimized);
 
@@ -577,6 +629,9 @@ pub fn drawRectangleSlowly(
 
     const width_max = buffer.width - 1;
     const height_max = buffer.height - 1;
+
+    const inv_width_max = 1.0 / @as(f32, @floatFromInt(width_max));
+    const inv_height_max = 1.0 / @as(f32, @floatFromInt(height_max));
 
     var x_min: i32 = width_max;
     var x_max: i32 = 0;
@@ -635,6 +690,11 @@ pub fn drawRectangleSlowly(
                 const edge_3: f32 = Vec2.inner(&Vec2.sub(&d, &y_axis), &Vec2.perp(&y_axis));
 
                 if (edge_0 < 0 and edge_1 < 0 and edge_2 < 0 and edge_3 < 0) {
+                    const screen_space_uv = Vec2.init(
+                        @as(f32, @floatFromInt(x)) * inv_width_max,
+                        @as(f32, @floatFromInt(y)) * inv_height_max,
+                    );
+
                     const u = inv_x_axis_length_sq * Vec2.inner(&d, &x_axis);
                     const v = inv_y_axis_length_sq * Vec2.inner(&d, &y_axis);
 
@@ -678,31 +738,10 @@ pub fn drawRectangleSlowly(
                     const texel_ptr_c = @as(*align(@alignOf(u8)) u32, @ptrCast(c_offset)).*;
                     const texel_ptr_d = @as(*align(@alignOf(u8)) u32, @ptrCast(d_offset)).*;
 
-                    // TODO: color.a()
-                    var texel_a = Vec4.init(
-                        @floatFromInt((texel_ptr_a >> 16) & 0xFF),
-                        @floatFromInt((texel_ptr_a >> 8) & 0xFF),
-                        @floatFromInt((texel_ptr_a >> 0) & 0xFF),
-                        @floatFromInt((texel_ptr_a >> 24) & 0xFF),
-                    );
-                    var texel_b = Vec4.init(
-                        @floatFromInt((texel_ptr_b >> 16) & 0xFF),
-                        @floatFromInt((texel_ptr_b >> 8) & 0xFF),
-                        @floatFromInt((texel_ptr_b >> 0) & 0xFF),
-                        @floatFromInt((texel_ptr_b >> 24) & 0xFF),
-                    );
-                    var texel_c = Vec4.init(
-                        @floatFromInt((texel_ptr_c >> 16) & 0xFF),
-                        @floatFromInt((texel_ptr_c >> 8) & 0xFF),
-                        @floatFromInt((texel_ptr_c >> 0) & 0xFF),
-                        @floatFromInt((texel_ptr_c >> 24) & 0xFF),
-                    );
-                    var texel_d = Vec4.init(
-                        @floatFromInt((texel_ptr_d >> 16) & 0xFF),
-                        @floatFromInt((texel_ptr_d >> 8) & 0xFF),
-                        @floatFromInt((texel_ptr_d >> 0) & 0xFF),
-                        @floatFromInt((texel_ptr_d >> 24) & 0xFF),
-                    );
+                    var texel_a = unpack4x8(texel_ptr_a);
+                    var texel_b = unpack4x8(texel_ptr_b);
+                    var texel_c = unpack4x8(texel_ptr_c);
+                    var texel_d = unpack4x8(texel_ptr_d);
 
                     // NOTE: Go from srgb to "linear" brightness space
                     texel_a = SRGB255ToLinear1(texel_a);
@@ -710,14 +749,74 @@ pub fn drawRectangleSlowly(
                     texel_c = SRGB255ToLinear1(texel_c);
                     texel_d = SRGB255ToLinear1(texel_d);
 
-                    var texel = if (true)
-                        Vec4.lerp(
-                            &Vec4.lerp(&texel_a, fx, &texel_b),
+                    var texel = Vec4.lerp(
+                        &Vec4.lerp(&texel_a, fx, &texel_b),
+                        fy,
+                        &Vec4.lerp(&texel_c, fx, &texel_d),
+                    );
+
+                    if (maybe_normal_map) |normal_map| {
+                        const normal_ptr = if (offset > 0)
+                            @as([*]u8, @ptrCast(texture.memory)) + @as(usize, @intCast(offset))
+                        else
+                            @as([*]u8, @ptrCast(texture.memory)) - @as(usize, @intCast(-offset));
+
+                        const cn_offset = if (normal_map.pitch > 0)
+                            normal_ptr + @as(usize, @intCast(normal_map.pitch))
+                        else
+                            normal_ptr - @as(usize, @intCast(-normal_map.pitch));
+
+                        const bn_offset = texel_ptr + @sizeOf(u32);
+                        const dn_offset = cn_offset + @sizeOf(u32);
+
+                        const normal_ptr_a = @as(*align(@alignOf(u8)) u32, @ptrCast(texel_ptr)).*;
+                        const normal_ptr_b = @as(*align(@alignOf(u8)) u32, @ptrCast(bn_offset)).*;
+                        const normal_ptr_c = @as(*align(@alignOf(u8)) u32, @ptrCast(cn_offset)).*;
+                        const normal_ptr_d = @as(*align(@alignOf(u8)) u32, @ptrCast(dn_offset)).*;
+
+                        var normal_a = unpack4x8(normal_ptr_a);
+                        var normal_b = unpack4x8(normal_ptr_b);
+                        var normal_c = unpack4x8(normal_ptr_c);
+                        var normal_d = unpack4x8(normal_ptr_d);
+
+                        const normal = Vec4.lerp(
+                            &Vec4.lerp(&normal_a, fx, &normal_b),
                             fy,
-                            &Vec4.lerp(&texel_c, fx, &texel_d),
-                        )
-                    else
-                        texel_a;
+                            &Vec4.lerp(&normal_c, fx, &normal_d),
+                        );
+
+                        const t_env_map = normal.z();
+                        var t_far_map: f32 = 0;
+                        var maybe_far_map: ?*EnvironmentMap = null;
+
+                        if (t_env_map < 0.25) {
+                            maybe_far_map = maybe_bottom;
+                            t_far_map = 1.0 - (t_env_map / 0.25);
+                        } else if (t_env_map > 0.75) {
+                            maybe_far_map = maybe_top;
+                            t_far_map = (1.0 - t_env_map) / 0.25;
+                        }
+
+                        var light_color = sampleEnvironmentMap(
+                            screen_space_uv,
+                            normal.xyz(),
+                            normal.w(),
+                            maybe_middle,
+                        );
+
+                        if (maybe_far_map != null) {
+                            var far_map_color = sampleEnvironmentMap(
+                                screen_space_uv,
+                                normal.xyz(),
+                                normal.w(),
+                                maybe_far_map,
+                            );
+
+                            light_color = Vec3.lerp(&light_color, t_far_map, &far_map_color);
+                        }
+
+                        texel = texel.setRGB(Vec3.hadamard(&texel.rgb(), &light_color));
+                    }
 
                     texel = Vec4.hadamard(&texel, &color);
 

@@ -1033,6 +1033,48 @@ fn makeEmptyBitmap(arena: *MemoryArena, width: i32, height: i32, clear_to_zero: 
     return result;
 }
 
+fn makeSphereNormalMap(
+    bitmap: *Bitmap,
+    roughness: f32,
+) void {
+    const inv_width = 1.0 / (1.0 - bitmap.width);
+    const inv_height = 1.0 / (1.0 - bitmap.height);
+
+    var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(bitmap.memory)));
+
+    for (0..@intCast(bitmap.height)) |y| {
+        var pixel: [*]u32 = @alignCast(@ptrCast(row));
+
+        for (0..@intCast(bitmap.width)) |x| {
+            const bitmap_uv = Vec2.init(inv_width * x, inv_height * y);
+
+            // TODO: Actually generate sphere
+            var normal = Vec3.init(2.0 * bitmap_uv.x() - 1.0, 2.0 * bitmap_uv.y() - 1.0, 0);
+
+            normal.v[1] = @sqrt(1.0 - @min(
+                1.0,
+                math.square(normal.x()) + math.square(normal.y()),
+            ));
+
+            normal = Vec3.normalize(normal);
+
+            const color = Vec4.init(
+                255.0 * (normal.x() + 1.0),
+                255.0 * (normal.y() + 1.0),
+                127.0 * normal.z(),
+                255.0 * roughness,
+            );
+
+            pixel[0] = (lossyCast(u32, color.a() + 0.5) << 24) |
+                (lossyCast(u32, color.r() + 0.5) << 16) |
+                (lossyCast(u32, color.g() + 0.5) << 8) |
+                (lossyCast(u32, color.b() + 0.5) << 0);
+        }
+
+        row += @as(u32, @intCast(bitmap.pitch));
+    }
+}
+
 // GAME NEEDS FOUR THINGS
 // - timing
 // - controller/keyboard input
@@ -1884,7 +1926,7 @@ pub export fn updateAndRender(
         y_axis = Vec2.init(0, 100);
     }
 
-    var p_index: usize = 0;
+    //var p_index: usize = 0;
     const c_angle = 5 * angle;
 
     const color = if (false)
@@ -1897,7 +1939,7 @@ pub export fn updateAndRender(
     else
         Vec4.splat(1);
 
-    var c = render.coordinateSystem(
+    _ = render.coordinateSystem(
         render_group,
         Vec2.add(
             &Vec2.init(displacement, 0),
@@ -1910,18 +1952,22 @@ pub export fn updateAndRender(
         y_axis,
         color,
         &game_state.tree,
+        null,
+        null,
+        null,
+        null,
     );
 
-    var y: f32 = 0;
+    //var y: f32 = 0;
 
-    while (y < 1.0) : (y += 0.25) {
-        var x: f32 = 0;
+    //while (y < 1.0) : (y += 0.25) {
+    //    var x: f32 = 0;
 
-        while (x < 1.0) : (x += 0.25) {
-            c.points[p_index] = Vec2.init(x, y);
-            p_index += 1;
-        }
-    }
+    //    while (x < 1.0) : (x += 0.25) {
+    //        c.points[p_index] = Vec2.init(x, y);
+    //        p_index += 1;
+    //    }
+    //}
 
     render.renderGroupToOutput(
         render_group,

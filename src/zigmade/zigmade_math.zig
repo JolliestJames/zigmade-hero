@@ -165,6 +165,22 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
                 pub inline fn a(v: *const VecN) Scalar {
                     return v.v[3];
                 }
+                pub inline fn xyz(v: *const VecN) Vec3 {
+                    return Vec3.init(v.x(), v.y(), v.z());
+                }
+                pub inline fn rgb(v: *const VecN) Vec3 {
+                    return Vec3.init(v.r(), v.g(), v.b());
+                }
+                pub inline fn setRGB(v: *const VecN, rgb_v: Vec3) Vec4 {
+                    var result: VecN = undefined;
+
+                    result.v[0] = rgb_v.r();
+                    result.v[1] = rgb_v.g();
+                    result.v[2] = rgb_v.b();
+                    result.v[3] = v.v[3];
+
+                    return result;
+                }
                 pub inline fn premultipliedAlpha(v: *const VecN, alpha: f32) VecN {
                     var result: VecN = undefined;
 
@@ -276,6 +292,12 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
                 &VecN.scale(a, 1.0 - t),
                 &VecN.scale(b, t),
             );
+
+            return result;
+        }
+
+        pub inline fn normalize(a: *const VecN) VecN {
+            const result = .{ .v = a.v / VecN.inner(a).v };
 
             return result;
         }
