@@ -162,6 +162,7 @@ pub const GameState = struct {
     shadow: Bitmap,
     hero_bitmaps: [4]HeroBitmaps,
     tree: Bitmap,
+    tree_normal: Bitmap,
     sword: Bitmap,
     stairwell: Bitmap,
     meters_to_pixels: f32,
@@ -1037,8 +1038,8 @@ fn makeSphereNormalMap(
     bitmap: *Bitmap,
     roughness: f32,
 ) void {
-    const inv_width = 1.0 / (1.0 - bitmap.width);
-    const inv_height = 1.0 / (1.0 - bitmap.height);
+    const inv_width = 1.0 / @as(f32, @floatFromInt(bitmap.width - 1));
+    const inv_height = 1.0 / @as(f32, @floatFromInt(bitmap.height - 1));
 
     var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(bitmap.memory)));
 
@@ -1046,22 +1047,28 @@ fn makeSphereNormalMap(
         var pixel: [*]u32 = @alignCast(@ptrCast(row));
 
         for (0..@intCast(bitmap.width)) |x| {
-            const bitmap_uv = Vec2.init(inv_width * x, inv_height * y);
+            const bitmap_uv = Vec2.init(
+                inv_width * @as(f32, @floatFromInt(x)),
+                inv_height * @as(f32, @floatFromInt(y)),
+            );
 
-            // TODO: Actually generate sphere
-            var normal = Vec3.init(2.0 * bitmap_uv.x() - 1.0, 2.0 * bitmap_uv.y() - 1.0, 0);
+            const nx = 2.0 * bitmap_uv.x() - 1.0;
+            const ny = 2.0 * bitmap_uv.y() - 1.0;
+            const root_term = 1.0 - nx * nx - ny * ny;
+            var normal = Vec3.init(0, 0, 1);
+            var nz: f32 = 0;
 
-            normal.v[1] = @sqrt(1.0 - @min(
-                1.0,
-                math.square(normal.x()) + math.square(normal.y()),
-            ));
+            if (root_term >= 0) {
+                nz = @sqrt(root_term);
+                normal = Vec3.init(nx, ny, nz);
+            }
 
-            normal = Vec3.normalize(normal);
+            //normal = Vec3.normalize(&normal);
 
             const color = Vec4.init(
-                255.0 * (normal.x() + 1.0),
-                255.0 * (normal.y() + 1.0),
-                127.0 * normal.z(),
+                255.0 * (0.5 * (normal.x() + 1.0)),
+                255.0 * (0.5 * (normal.y() + 1.0)),
+                255.0 * (0.5 * (normal.z() + 1.0)),
                 255.0 * roughness,
             );
 
@@ -1069,6 +1076,8 @@ fn makeSphereNormalMap(
                 (lossyCast(u32, color.r() + 0.5) << 16) |
                 (lossyCast(u32, color.g() + 0.5) << 8) |
                 (lossyCast(u32, color.b() + 0.5) << 0);
+
+            pixel += 1;
         }
 
         row += @as(u32, @intCast(bitmap.pitch));
@@ -1417,6 +1426,15 @@ pub export fn updateAndRender(
 
             ground_buffer.p = world.nullPosition();
         }
+
+        game_state.tree_normal = makeEmptyBitmap(
+            &transient_state.arena,
+            game_state.tree.width,
+            game_state.tree.height,
+            false,
+        );
+
+        makeSphereNormalMap(&game_state.tree_normal, 0);
 
         transient_state.is_initialized = true;
     }
@@ -1952,7 +1970,7 @@ pub export fn updateAndRender(
         y_axis,
         color,
         &game_state.tree,
-        null,
+        &game_state.tree_normal,
         null,
         null,
         null,

@@ -14,9 +14,6 @@ const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
 
 const EnvironmentMap = struct {
-    // NOTE: lod[0] is 2^width_pow_2 by 2^height_pow_2
-    width_pow_2: i32,
-    height_pow_2: i32,
     lod: [4]*Bitmap,
 };
 
@@ -505,6 +502,17 @@ pub fn allocateRenderGroup(
     return result;
 }
 
+pub inline fn unpack4x8(to_unpack: u32) Vec4 {
+    const result = Vec4.init(
+        @floatFromInt((to_unpack >> 16) & 0xFF),
+        @floatFromInt((to_unpack >> 8) & 0xFF),
+        @floatFromInt((to_unpack >> 0) & 0xFF),
+        @floatFromInt((to_unpack >> 24) & 0xFF),
+    );
+
+    return result;
+}
+
 pub inline fn SRGB255ToLinear1(c: Vec4) Vec4 {
     var result: Vec4 = undefined;
 
@@ -527,6 +535,19 @@ pub inline fn linear1ToSRGB255(c: Vec4) Vec4 {
     result.v[1] = one_255 * @sqrt(c.g());
     result.v[2] = one_255 * @sqrt(c.b());
     result.v[3] = one_255 * c.a();
+
+    return result;
+}
+
+inline fn unscaleAndBiasNormal(normal: Vec4) Vec4 {
+    var result: Vec4 = undefined;
+
+    const inv_255 = 1.0 / 255.0;
+
+    result.v[0] = -1 + 2 * (inv_255 * normal.x());
+    result.v[1] = -1 + 2 * (inv_255 * normal.y());
+    result.v[2] = -1 + 2 * (inv_255 * normal.z());
+    result.v[3] = inv_255 * normal.w();
 
     return result;
 }
@@ -575,28 +596,94 @@ pub fn drawRectangle(
     }
 }
 
-pub inline fn unpack4x8(to_unpack: u32) Vec4 {
-    const result = Vec4.init(
-        @floatFromInt((to_unpack >> 16) & 0xFF),
-        @floatFromInt((to_unpack >> 8) & 0xFF),
-        @floatFromInt((to_unpack >> 0) & 0xFF),
-        @floatFromInt((to_unpack >> 24) & 0xFF),
+inline fn SRGBBilinearBlend(texel_sample: BilinearSample, fx: f32, fy: f32) Vec4 {
+    var texel_a = unpack4x8(texel_sample.a);
+    var texel_b = unpack4x8(texel_sample.b);
+    var texel_c = unpack4x8(texel_sample.c);
+    var texel_d = unpack4x8(texel_sample.d);
+
+    // NOTE: Go from srgb to "linear" brightness space
+    texel_a = SRGB255ToLinear1(texel_a);
+    texel_b = SRGB255ToLinear1(texel_b);
+    texel_c = SRGB255ToLinear1(texel_c);
+    texel_d = SRGB255ToLinear1(texel_d);
+
+    const result = Vec4.lerp(
+        &Vec4.lerp(&texel_a, fx, &texel_b),
+        fy,
+        &Vec4.lerp(&texel_c, fx, &texel_d),
     );
 
     return result;
 }
 
-pub fn sampleEnvironmentMap(
+pub inline fn sampleEnvironmentMap(
     screen_space_uv: Vec2,
     normal: Vec3,
     roughness: f32,
-    map: ?*EnvironmentMap,
+    maybe_map: ?*EnvironmentMap,
 ) Vec3 {
-    // TODO
     _ = screen_space_uv;
-    _ = roughness;
-    _ = map;
-    const result = normal;
+    _ = normal;
+    var result: Vec3 = undefined;
+
+    if (maybe_map) |map| {
+        const lod_index: u32 = @intFromFloat(roughness *
+            @as(f32, @floatFromInt(map.lod.len - 1)) + 0.5);
+
+        assert(lod_index < maybe_map.?.lod.len);
+
+        const lod = map.lod[lod_index];
+
+        // TODO: Do intersection math to determine where we should be
+        const tx = 0.0;
+        const ty = 0.0;
+
+        const ix: i32 = @intFromFloat(tx);
+        const iy: i32 = @intFromFloat(ty);
+
+        const fx = tx - @as(f32, @floatFromInt(ix));
+        const fy = ty - @as(f32, @floatFromInt(iy));
+
+        assert(ix >= 0 and ix < lod.width);
+        assert(iy >= 0 and iy < lod.height);
+
+        const sample = bilinearSample(lod, ix, iy);
+        result = SRGBBilinearBlend(sample, fx, fy).xyz();
+    }
+
+    return result;
+}
+
+const BilinearSample = struct {
+    a: u32,
+    b: u32,
+    c: u32,
+    d: u32,
+};
+
+inline fn bilinearSample(texture: *Bitmap, x: i32, y: i32) BilinearSample {
+    var result: BilinearSample = undefined;
+
+    const offset = y * texture.pitch + x * @sizeOf(u32);
+
+    const texel_ptr = if (offset > 0)
+        @as([*]u8, @ptrCast(texture.memory)) + @as(usize, @intCast(offset))
+    else
+        @as([*]u8, @ptrCast(texture.memory)) - @as(usize, @intCast(-offset));
+
+    const c_offset = if (texture.pitch > 0)
+        texel_ptr + @as(usize, @intCast(texture.pitch))
+    else
+        texel_ptr - @as(usize, @intCast(-texture.pitch));
+
+    const b_offset = texel_ptr + @sizeOf(u32);
+    const d_offset = c_offset + @sizeOf(u32);
+
+    result.a = @as(*align(@alignOf(u8)) u32, @ptrCast(texel_ptr)).*;
+    result.b = @as(*align(@alignOf(u8)) u32, @ptrCast(b_offset)).*;
+    result.c = @as(*align(@alignOf(u8)) u32, @ptrCast(c_offset)).*;
+    result.d = @as(*align(@alignOf(u8)) u32, @ptrCast(d_offset)).*;
 
     return result;
 }
@@ -717,108 +804,70 @@ pub fn drawRectangleSlowly(
                     assert(ix >= 0 and ix < texture.width);
                     assert(iy >= 0 and iy < texture.height);
 
-                    const offset = @as(i32, @intCast(iy)) * texture.pitch +
-                        @as(i32, @intCast(ix * @sizeOf(u32)));
-
-                    const texel_ptr = if (offset > 0)
-                        @as([*]u8, @ptrCast(texture.memory)) + @as(usize, @intCast(offset))
-                    else
-                        @as([*]u8, @ptrCast(texture.memory)) - @as(usize, @intCast(-offset));
-
-                    const c_offset = if (texture.pitch > 0)
-                        texel_ptr + @as(usize, @intCast(texture.pitch))
-                    else
-                        texel_ptr - @as(usize, @intCast(-texture.pitch));
-
-                    const b_offset = texel_ptr + @sizeOf(u32);
-                    const d_offset = c_offset + @sizeOf(u32);
-
-                    const texel_ptr_a = @as(*align(@alignOf(u8)) u32, @ptrCast(texel_ptr)).*;
-                    const texel_ptr_b = @as(*align(@alignOf(u8)) u32, @ptrCast(b_offset)).*;
-                    const texel_ptr_c = @as(*align(@alignOf(u8)) u32, @ptrCast(c_offset)).*;
-                    const texel_ptr_d = @as(*align(@alignOf(u8)) u32, @ptrCast(d_offset)).*;
-
-                    var texel_a = unpack4x8(texel_ptr_a);
-                    var texel_b = unpack4x8(texel_ptr_b);
-                    var texel_c = unpack4x8(texel_ptr_c);
-                    var texel_d = unpack4x8(texel_ptr_d);
-
-                    // NOTE: Go from srgb to "linear" brightness space
-                    texel_a = SRGB255ToLinear1(texel_a);
-                    texel_b = SRGB255ToLinear1(texel_b);
-                    texel_c = SRGB255ToLinear1(texel_c);
-                    texel_d = SRGB255ToLinear1(texel_d);
-
-                    var texel = Vec4.lerp(
-                        &Vec4.lerp(&texel_a, fx, &texel_b),
-                        fy,
-                        &Vec4.lerp(&texel_c, fx, &texel_d),
-                    );
+                    const texel_sample = bilinearSample(texture, ix, iy);
+                    var texel = SRGBBilinearBlend(texel_sample, fx, fy);
 
                     if (maybe_normal_map) |normal_map| {
-                        const normal_ptr = if (offset > 0)
-                            @as([*]u8, @ptrCast(texture.memory)) + @as(usize, @intCast(offset))
-                        else
-                            @as([*]u8, @ptrCast(texture.memory)) - @as(usize, @intCast(-offset));
+                        const normal_sample = bilinearSample(normal_map, ix, iy);
 
-                        const cn_offset = if (normal_map.pitch > 0)
-                            normal_ptr + @as(usize, @intCast(normal_map.pitch))
-                        else
-                            normal_ptr - @as(usize, @intCast(-normal_map.pitch));
+                        var normal_a = unpack4x8(normal_sample.a);
+                        var normal_b = unpack4x8(normal_sample.b);
+                        var normal_c = unpack4x8(normal_sample.c);
+                        var normal_d = unpack4x8(normal_sample.d);
 
-                        const bn_offset = texel_ptr + @sizeOf(u32);
-                        const dn_offset = cn_offset + @sizeOf(u32);
-
-                        const normal_ptr_a = @as(*align(@alignOf(u8)) u32, @ptrCast(texel_ptr)).*;
-                        const normal_ptr_b = @as(*align(@alignOf(u8)) u32, @ptrCast(bn_offset)).*;
-                        const normal_ptr_c = @as(*align(@alignOf(u8)) u32, @ptrCast(cn_offset)).*;
-                        const normal_ptr_d = @as(*align(@alignOf(u8)) u32, @ptrCast(dn_offset)).*;
-
-                        var normal_a = unpack4x8(normal_ptr_a);
-                        var normal_b = unpack4x8(normal_ptr_b);
-                        var normal_c = unpack4x8(normal_ptr_c);
-                        var normal_d = unpack4x8(normal_ptr_d);
-
-                        const normal = Vec4.lerp(
+                        var normal = Vec4.lerp(
                             &Vec4.lerp(&normal_a, fx, &normal_b),
                             fy,
                             &Vec4.lerp(&normal_c, fx, &normal_d),
                         );
 
+                        normal = unscaleAndBiasNormal(normal);
+                        // TODO: Do we really need to do this?
+                        normal = normal.setXYZ(Vec3.normalize(&normal.xyz()));
+
+                        // TODO: Actually compute a bounce based on viewer direction
+                        var maybe_far_map: ?*EnvironmentMap = null;
                         const t_env_map = normal.z();
                         var t_far_map: f32 = 0;
-                        var maybe_far_map: ?*EnvironmentMap = null;
 
-                        if (t_env_map < 0.25) {
+                        if (t_env_map < -0.5) {
                             maybe_far_map = maybe_bottom;
-                            t_far_map = 1.0 - (t_env_map / 0.25);
-                        } else if (t_env_map > 0.75) {
+                            t_far_map = 2 * (t_env_map + 1);
+                        } else if (t_env_map > 0.5) {
                             maybe_far_map = maybe_top;
-                            t_far_map = (1.0 - t_env_map) / 0.25;
+                            t_far_map = 2 * (t_env_map - 0.5);
                         }
 
-                        var light_color = sampleEnvironmentMap(
-                            screen_space_uv,
-                            normal.xyz(),
-                            normal.w(),
-                            maybe_middle,
-                        );
+                        var light_color = Vec3.splat(0); //sampleEnvironmentMap(
+                        //    screen_space_uv,
+                        //    normal.xyz(),
+                        //    normal.w(),
+                        //    maybe_middle
+                        //);
 
                         if (maybe_far_map != null) {
                             var far_map_color = sampleEnvironmentMap(
                                 screen_space_uv,
                                 normal.xyz(),
                                 normal.w(),
-                                maybe_far_map,
+                                maybe_middle,
                             );
 
                             light_color = Vec3.lerp(&light_color, t_far_map, &far_map_color);
                         }
 
-                        texel = texel.setRGB(Vec3.hadamard(&texel.rgb(), &light_color));
+                        // TODO: Actually do a lighting model computation here
+
+                        texel = texel.setRGB(Vec3.add(
+                            &texel.rgb(),
+                            &Vec3.scale(&light_color, texel.a()),
+                        ));
                     }
 
                     texel = Vec4.hadamard(&texel, &color);
+                    texel.v[0] = math.clamp01(texel.r());
+                    texel.v[1] = math.clamp01(texel.g());
+                    texel.v[2] = math.clamp01(texel.b());
 
                     var dest = Vec4.init(
                         @floatFromInt((pixel[0] >> 16) & 0xFF),
