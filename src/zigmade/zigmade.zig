@@ -1,6 +1,13 @@
 //
 // TODO:
 //
+// - Rendering
+//   - Lighting
+//   - Straighten out all coordinate systems
+//     - Screen
+//     - World
+//     - Texture
+//   - Optimiziation
 // ARCHITECTURE EXPLORATION
 //
 // - Z
@@ -66,7 +73,6 @@
 //   - Particle systems
 //
 // PRODUCTION
-// - Rendering
 // - Game
 //   - Entity system
 //   - World generation
@@ -99,9 +105,9 @@ const EntityCollisionVolume = sim.EntityCollisionVolume;
 const EntityCollisionVolumeGroup = sim.EntityCollisionVolumeGroup;
 const World = world.World;
 const WorldPosition = world.WorldPosition;
-const RenderGroupEntry = render.RenderGroupEntry;
 const RenderGroup = render.RenderGroup;
 const RenderBasis = render.RenderBasis;
+const EnvironmentMap = render.EnvironmentMap;
 
 const HeroBitmaps = struct {
     head: Bitmap,
@@ -162,7 +168,6 @@ pub const GameState = struct {
     shadow: Bitmap,
     hero_bitmaps: [4]HeroBitmaps,
     tree: Bitmap,
-    tree_normal: Bitmap,
     sword: Bitmap,
     stairwell: Bitmap,
     meters_to_pixels: f32,
@@ -179,6 +184,8 @@ pub const GameState = struct {
     wall_collision: *EntityCollisionVolumeGroup,
     standard_room_collision: *EntityCollisionVolumeGroup,
     time: f32,
+    test_diffuse: Bitmap,
+    test_normal: Bitmap,
 };
 
 const TransientState = struct {
@@ -186,6 +193,10 @@ const TransientState = struct {
     arena: MemoryArena,
     ground_buffer_count: u32,
     ground_buffers: [*]GroundBuffer,
+    env_map_width: usize,
+    env_map_height: usize,
+    // NOTE: 0 is bottom, 1 is middle, 2 is top
+    env_maps: [3]EnvironmentMap,
 };
 
 pub const TemporaryMemory = struct {
@@ -434,8 +445,8 @@ inline fn zeroSize(size: u32, ptr: [*]void) void {
     // TODO: Check this for performance
 
     var byte: [*]u8 = @ptrCast(ptr);
-    var index: usize = size;
 
+    var index: usize = size;
     while (index > 0) : (index -= 1) {
         byte[0] = 0;
         byte += 1;
@@ -773,7 +784,6 @@ fn clearCollisionRulesFor(game_state: *GameState, storage_index: u32) void {
     //
     for (0..game_state.collision_rule_hash.len) |bucket| {
         var maybe_rule = &game_state.collision_rule_hash[bucket];
-
         while (maybe_rule.*) |rule| {
             if (rule.storage_index_a == storage_index or
                 rule.storage_index_b == storage_index)
@@ -808,8 +818,8 @@ pub fn addCollisionRule(
     // TODO: BETTER HASH FUNCTION
     var maybe_found: ?*PairwiseCollisionRule = null;
     const bucket = a & (game_state.collision_rule_hash.len - 1);
-    var maybe_rule = game_state.collision_rule_hash[bucket];
 
+    var maybe_rule = game_state.collision_rule_hash[bucket];
     while (maybe_rule) |rule| : (maybe_rule = rule.next_in_hash) {
         if (rule.storage_index_a == a and
             rule.storage_index_b == b)
@@ -903,10 +913,8 @@ fn fillGroundChunk(
     const height: f32 = @floatFromInt(buffer.height);
 
     var chunk_offset_y: i32 = -1;
-
     while (chunk_offset_y <= 1) : (chunk_offset_y += 1) {
         var chunk_offset_x: i32 = -1;
-
         while (chunk_offset_x <= 1) : (chunk_offset_x += 1) {
             const chunk_x = chunk_p.chunk_x + chunk_offset_x;
             const chunk_y = chunk_p.chunk_y + chunk_offset_y;
@@ -957,7 +965,6 @@ fn fillGroundChunk(
 
     while (chunk_offset_y <= 1) : (chunk_offset_y += 1) {
         var chunk_offset_x: i32 = -1;
-
         while (chunk_offset_x <= 1) : (chunk_offset_x += 1) {
             const chunk_x = chunk_p.chunk_x + chunk_offset_x;
             const chunk_y = chunk_p.chunk_y + chunk_offset_y;
@@ -1062,8 +1069,6 @@ fn makeSphereNormalMap(
                 nz = @sqrt(root_term);
                 normal = Vec3.init(nx, ny, nz);
             }
-
-            //normal = Vec3.normalize(&normal);
 
             const color = Vec4.init(
                 255.0 * (0.5 * (normal.x() + 1.0)),
@@ -1427,14 +1432,44 @@ pub export fn updateAndRender(
             ground_buffer.p = world.nullPosition();
         }
 
-        game_state.tree_normal = makeEmptyBitmap(
+        game_state.test_diffuse = makeEmptyBitmap(&transient_state.arena, 256, 256, false);
+
+        render.drawRectangle(
+            &game_state.test_diffuse,
+            Vec2.splat(0),
+            Vec2.fromInt(game_state.test_diffuse.width, game_state.test_diffuse.height),
+            Vec4.init(0.5, 0.5, 0.5, 1),
+        );
+
+        game_state.test_normal = makeEmptyBitmap(
             &transient_state.arena,
-            game_state.tree.width,
-            game_state.tree.height,
+            game_state.test_diffuse.width,
+            game_state.test_diffuse.height,
             false,
         );
 
-        makeSphereNormalMap(&game_state.tree_normal, 0);
+        makeSphereNormalMap(&game_state.test_normal, 0);
+
+        transient_state.env_map_width = 512;
+        transient_state.env_map_height = 256;
+
+        for (0..transient_state.env_maps.len) |map_index| {
+            var map = &transient_state.env_maps[map_index];
+            var width = transient_state.env_map_width;
+            var height = transient_state.env_map_height;
+
+            for (0..map.lod.len) |lod_index| {
+                map.lod[lod_index] = makeEmptyBitmap(
+                    &transient_state.arena,
+                    @intCast(width),
+                    @intCast(height),
+                    false,
+                );
+
+                width >>= 1;
+                height >>= 1;
+            }
+        }
 
         transient_state.is_initialized = true;
     }
@@ -1538,7 +1573,7 @@ pub export fn updateAndRender(
         .memory = @ptrCast(buffer.memory),
     };
 
-    render.clear(render_group, Vec4.init(0.5, 0.5, 0.5, 0));
+    render.clear(render_group, Vec4.init(0.25, 0.25, 0.25, 0));
 
     const screen_center = Vec2.init(
         0.5 * @as(f32, @floatFromInt(draw_buffer.width)),
@@ -1589,13 +1624,10 @@ pub export fn updateAndRender(
         );
 
         var chunk_z = min_chunk_p.chunk_z;
-
         while (chunk_z <= max_chunk_p.chunk_z) : (chunk_z += 1) {
             var chunk_y = min_chunk_p.chunk_y;
-
             while (chunk_y <= max_chunk_p.chunk_y) : (chunk_y += 1) {
                 var chunk_x = min_chunk_p.chunk_x;
-
                 while (chunk_x <= max_chunk_p.chunk_x) : (chunk_x += 1) {
                     //const maybe_chunk = world.getWorldChunk(
                     //    game_world,
@@ -1927,8 +1959,43 @@ pub export fn updateAndRender(
 
     game_state.time += input.dt_for_frame;
     var angle = 0.1 * game_state.time;
-    var displacement = 100 * @cos(5 * angle);
-    displacement = 0;
+    const displacement = 100 * @cos(5 * angle);
+    _ = displacement;
+
+    const map_color = [3]Vec3{
+        Vec3.init(1, 0, 0),
+        Vec3.init(0, 1, 0),
+        Vec3.init(0, 0, 1),
+    };
+
+    for (0..transient_state.env_maps.len) |map_index| {
+        var map = &transient_state.env_maps[map_index];
+        const lod = &map.lod[0];
+        const checker_width = 16;
+        const checker_height = 16;
+        var row_checker_on = false;
+
+        var y: usize = 0;
+        while (y < lod.height) : (y += checker_height) {
+            var checker_on = row_checker_on;
+
+            var x: usize = 0;
+            while (x < lod.width) : (x += checker_width) {
+                const color = if (checker_on)
+                    map_color[map_index].toVec4(1)
+                else
+                    Vec4.init(0, 0, 0, 1);
+
+                const min_p = Vec2.fromInt(x, y);
+                const max_p = Vec2.add(&min_p, &Vec2.fromInt(checker_width, checker_height));
+                render.drawRectangle(lod, min_p, max_p, color);
+                checker_on = !checker_on;
+            }
+
+            row_checker_on = !row_checker_on;
+        }
+    }
+
     angle = 0;
 
     // TODO: Let's add a perp operator
@@ -1959,33 +2026,53 @@ pub export fn updateAndRender(
 
     _ = render.coordinateSystem(
         render_group,
-        Vec2.add(
-            &Vec2.init(displacement, 0),
-            &Vec2.sub(
-                &Vec2.sub(&origin, &Vec2.scale(&x_axis, 0.5)),
-                &Vec2.scale(&y_axis, 0.5),
-            ),
+        //Vec2.add(
+        //    &Vec2.init(displacement, 0),
+        Vec2.sub(
+            &Vec2.sub(&origin, &Vec2.scale(&x_axis, 0.5)),
+            &Vec2.scale(&y_axis, 0.5),
         ),
+        //),
         x_axis,
         y_axis,
         color,
-        &game_state.tree,
-        &game_state.tree_normal,
-        null,
-        null,
-        null,
+        &game_state.test_diffuse,
+        &game_state.test_normal,
+        &transient_state.env_maps[2],
+        &transient_state.env_maps[1],
+        &transient_state.env_maps[0],
     );
 
-    //var y: f32 = 0;
+    var map_p = Vec2.splat(0);
 
-    //while (y < 1.0) : (y += 0.25) {
-    //    var x: f32 = 0;
+    for (0..transient_state.env_maps.len) |map_index| {
+        var map = &transient_state.env_maps[map_index];
+        const lod = &map.lod[0];
 
-    //    while (x < 1.0) : (x += 0.25) {
-    //        c.points[p_index] = Vec2.init(x, y);
-    //        p_index += 1;
-    //    }
-    //}
+        x_axis = Vec2.scale(&Vec2.init(@floatFromInt(lod.width), 0), 0.5);
+        y_axis = Vec2.scale(&Vec2.init(0, @floatFromInt(lod.height)), 0.5);
+
+        _ = render.coordinateSystem(
+            render_group,
+            map_p,
+            x_axis,
+            y_axis,
+            Vec4.splat(1),
+            lod,
+            null,
+            null,
+            null,
+            null,
+        );
+
+        map_p = Vec2.add(&map_p, &Vec2.add(
+            &y_axis,
+            &Vec2.init(0, 6),
+        ));
+    }
+
+    if (false)
+        render.saturation(render_group, 0.5 + 0.5 * @sin(10 * game_state.time));
 
     render.renderGroupToOutput(
         render_group,

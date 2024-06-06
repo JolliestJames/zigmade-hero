@@ -133,6 +133,16 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
 
                     return result;
                 }
+                pub inline fn toVec4(v: *const VecN, alpha: f32) Vec4 {
+                    var result: Vec4 = undefined;
+
+                    result.v[0] = v.x();
+                    result.v[1] = v.y();
+                    result.v[2] = v.z();
+                    result.v[3] = alpha;
+
+                    return result;
+                }
             },
             inline 4 => struct {
                 pub inline fn init(xs: Scalar, ys: Scalar, zs: Scalar, ws: Scalar) VecN {

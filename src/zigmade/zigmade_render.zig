@@ -13,8 +13,8 @@ const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
 
-const EnvironmentMap = struct {
-    lod: [4]*Bitmap,
+pub const EnvironmentMap = struct {
+    lod: [4]Bitmap,
 };
 
 pub const RenderBasis = extern struct {
@@ -36,6 +36,7 @@ pub const RenderGroupEntryType = enum(u8) {
     bitmap,
     rectangle,
     coordinate_system,
+    saturation,
 };
 
 pub const RenderGroupEntryHeader = extern struct {
@@ -44,6 +45,10 @@ pub const RenderGroupEntryHeader = extern struct {
 
 pub const RenderEntryClear = extern struct {
     color: Vec4,
+};
+
+pub const RenderEntrySaturation = extern struct {
+    level: f32,
 };
 
 pub const RenderEntryCoordinateSystem = extern struct {
@@ -61,19 +66,13 @@ pub const RenderEntryCoordinateSystem = extern struct {
 pub const RenderEntryBitmap = extern struct {
     bitmap: ?*Bitmap = null,
     entity_basis: RenderEntityBasis,
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
+    color: Vec4,
 };
 
 pub const RenderEntryRectangle = extern struct {
     entity_basis: RenderEntityBasis,
     dim: Vec2,
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
+    color: Vec4,
 };
 
 // TODO: This is dumb, this should just be part of
@@ -145,10 +144,7 @@ pub inline fn pushPiece(
 
         piece.entity_basis.offset_z = offset_z;
         piece.entity_basis.entity_zc = entity_zc;
-        piece.r = color.r();
-        piece.g = color.g();
-        piece.b = color.b();
-        piece.a = color.a();
+        piece.color = color;
     }
 }
 
@@ -197,10 +193,7 @@ pub inline fn pushRect(
 
         piece.entity_basis.offset_z = offset_z;
         piece.entity_basis.entity_zc = entity_zc;
-        piece.r = color.r();
-        piece.g = color.g();
-        piece.b = color.b();
-        piece.a = color.a();
+        piece.color = color;
         piece.dim = Vec2.scale(&dim, group.meters_to_pixels);
     }
 }
@@ -259,6 +252,14 @@ pub inline fn clear(group: *RenderGroup, color: Vec4) void {
 
     if (maybe_entry) |entry| {
         entry.color = color;
+    }
+}
+
+pub inline fn saturation(group: *RenderGroup, level: f32) void {
+    const maybe_entry = pushRenderElement(group, RenderEntrySaturation, .saturation);
+
+    if (maybe_entry) |entry| {
+        entry.level = level;
     }
 }
 
@@ -337,11 +338,15 @@ pub fn renderGroupToOutput(
                     output_target,
                     Vec2.splat(0),
                     Vec2.fromInt(output_target.width, output_target.height),
-                    entry.color.v[0],
-                    entry.color.v[1],
-                    entry.color.v[2],
-                    entry.color.v[3],
+                    entry.color,
                 );
+
+                base += @sizeOf(@TypeOf(entry.*));
+            },
+            .saturation => {
+                const entry: *align(@alignOf(void)) RenderEntrySaturation = @alignCast(@ptrCast(data));
+
+                changeSaturation(output_target, entry.level);
 
                 base += @sizeOf(@TypeOf(entry.*));
             },
@@ -373,10 +378,7 @@ pub fn renderGroupToOutput(
                     output_target,
                     p,
                     Vec2.add(@alignCast(&p), @alignCast(&dim)),
-                    entry.r,
-                    entry.g,
-                    entry.b,
-                    1,
+                    entry.color,
                 );
 
                 base += @sizeOf(@TypeOf(entry.*));
@@ -407,49 +409,16 @@ pub fn renderGroupToOutput(
                 const dim = Vec2.splat(2);
                 var p = entry.origin;
 
-                drawRectangle(
-                    output_target,
-                    Vec2.sub(&p, &dim),
-                    Vec2.add(&p, &dim),
-                    color.r(),
-                    color.g(),
-                    color.b(),
-                    1,
-                );
+                drawRectangle(output_target, Vec2.sub(&p, &dim), Vec2.add(&p, &dim), color);
 
                 p = Vec2.add(&origin, &x_axis);
 
-                drawRectangle(
-                    output_target,
-                    Vec2.sub(&p, &dim),
-                    Vec2.add(&p, &dim),
-                    color.r(),
-                    color.g(),
-                    color.b(),
-                    1,
-                );
+                drawRectangle(output_target, Vec2.sub(&p, &dim), Vec2.add(&p, &dim), color);
 
                 p = Vec2.add(&origin, &y_axis);
 
-                drawRectangle(
-                    output_target,
-                    Vec2.sub(&p, &dim),
-                    Vec2.add(&p, &dim),
-                    color.r(),
-                    color.g(),
-                    color.b(),
-                    1,
-                );
-
-                drawRectangle(
-                    output_target,
-                    Vec2.sub(&v_max, &dim),
-                    Vec2.add(&v_max, &dim),
-                    color.r(),
-                    color.g(),
-                    color.b(),
-                    1,
-                );
+                drawRectangle(output_target, Vec2.sub(&p, &dim), Vec2.add(&p, &dim), color);
+                drawRectangle(output_target, Vec2.sub(&v_max, &dim), Vec2.add(&v_max, &dim), color);
 
                 if (false)
                     for (0..entry.points.len) |p_index| {
@@ -544,9 +513,9 @@ inline fn unscaleAndBiasNormal(normal: Vec4) Vec4 {
 
     const inv_255 = 1.0 / 255.0;
 
-    result.v[0] = -1 + 2 * (inv_255 * normal.x());
-    result.v[1] = -1 + 2 * (inv_255 * normal.y());
-    result.v[2] = -1 + 2 * (inv_255 * normal.z());
+    result.v[0] = -1.0 + 2.0 * (inv_255 * normal.x());
+    result.v[1] = -1.0 + 2.0 * (inv_255 * normal.y());
+    result.v[2] = -1.0 + 2.0 * (inv_255 * normal.z());
     result.v[3] = inv_255 * normal.w();
 
     return result;
@@ -556,11 +525,13 @@ pub fn drawRectangle(
     buffer: *const Bitmap,
     v_min: Vec2,
     v_max: Vec2,
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
+    color: Vec4,
 ) void {
+    const r = color.r();
+    const g = color.g();
+    const b = color.b();
+    const a = color.a();
+
     var min_x: i32 = @intFromFloat(@round(v_min.x()));
     var min_y: i32 = @intFromFloat(@round(v_min.y()));
     var max_x: i32 = @intFromFloat(@round(v_max.x()));
@@ -573,7 +544,7 @@ pub fn drawRectangle(
     if (min_x > max_x) max_x = min_x;
     if (min_y > max_y) max_y = min_y;
 
-    const color: u32 =
+    const color32: u32 =
         (@as(u32, (@intFromFloat(@round(a * 255.0)))) << 24) |
         (@as(u32, (@intFromFloat(@round(r * 255.0)))) << 16) |
         (@as(u32, (@intFromFloat(@round(g * 255.0)))) << 8) |
@@ -588,7 +559,7 @@ pub fn drawRectangle(
         var pixel: [*]u32 = @alignCast(@ptrCast(row));
 
         for (@intCast(min_x)..@intCast(max_x)) |_| {
-            pixel[0] = color;
+            pixel[0] = color32;
             pixel += 1;
         }
 
@@ -624,7 +595,6 @@ pub inline fn sampleEnvironmentMap(
     maybe_map: ?*EnvironmentMap,
 ) Vec3 {
     _ = screen_space_uv;
-    _ = normal;
     var result: Vec3 = undefined;
 
     if (maybe_map) |map| {
@@ -633,11 +603,14 @@ pub inline fn sampleEnvironmentMap(
 
         assert(lod_index < maybe_map.?.lod.len);
 
-        const lod = map.lod[lod_index];
+        const lod = &map.lod[lod_index];
+
+        const width_over_2: f32 = @floatFromInt(@divTrunc(lod.width, 2));
+        const height_over_2: f32 = @floatFromInt(@divTrunc(lod.height, 2));
 
         // TODO: Do intersection math to determine where we should be
-        const tx = 0.0;
-        const ty = 0.0;
+        const tx = width_over_2 + normal.x() * width_over_2;
+        const ty = height_over_2 + normal.y() * height_over_2;
 
         const ix: i32 = @intFromFloat(tx);
         const iy: i32 = @intFromFloat(ty);
@@ -827,30 +800,27 @@ pub fn drawRectangleSlowly(
 
                         // TODO: Actually compute a bounce based on viewer direction
                         var maybe_far_map: ?*EnvironmentMap = null;
-                        const t_env_map = normal.z();
+                        const t_env_map = normal.y();
                         var t_far_map: f32 = 0;
 
                         if (t_env_map < -0.5) {
                             maybe_far_map = maybe_bottom;
-                            t_far_map = 2 * (t_env_map + 1);
+                            t_far_map = -1.0 - 2 * t_env_map;
                         } else if (t_env_map > 0.5) {
                             maybe_far_map = maybe_top;
                             t_far_map = 2 * (t_env_map - 0.5);
                         }
 
-                        var light_color = Vec3.splat(0); //sampleEnvironmentMap(
-                        //    screen_space_uv,
-                        //    normal.xyz(),
-                        //    normal.w(),
-                        //    maybe_middle
-                        //);
+                        var light_color = Vec3.splat(0);
+                        _ = maybe_middle;
+                        //_ = sampleEnvironmentMap(screen_space_uv, normal.xyz(), normal.w(), maybe_middle);
 
                         if (maybe_far_map != null) {
                             var far_map_color = sampleEnvironmentMap(
                                 screen_space_uv,
                                 normal.xyz(),
                                 normal.w(),
-                                maybe_middle,
+                                maybe_far_map,
                             );
 
                             light_color = Vec3.lerp(&light_color, t_far_map, &far_map_color);
@@ -909,20 +879,14 @@ pub fn drawRectOutline(buffer: *const Bitmap, min: Vec2, max: Vec2, color: Vec3,
         buffer,
         Vec2.init(min.x() - r, min.y() - r),
         Vec2.init(max.x() + r, min.y() + r),
-        color.r(),
-        color.g(),
-        color.b(),
-        1,
+        color.toVec4(1),
     );
 
     drawRectangle(
         buffer,
         Vec2.init(min.x() - r, max.y() - r),
         Vec2.init(max.x() + r, max.y() + r),
-        color.r(),
-        color.g(),
-        color.b(),
-        1,
+        color.toVec4(1),
     );
 
     // NOTE: Left and right
@@ -930,20 +894,14 @@ pub fn drawRectOutline(buffer: *const Bitmap, min: Vec2, max: Vec2, color: Vec3,
         buffer,
         Vec2.init(min.x() - r, min.y() - r),
         Vec2.init(min.x() + r, max.y() + r),
-        color.r(),
-        color.g(),
-        color.b(),
-        1,
+        color.toVec4(1),
     );
 
     drawRectangle(
         buffer,
         Vec2.init(max.x() - r, min.y() - r),
         Vec2.init(max.x() + r, max.y() + r),
-        color.r(),
-        color.g(),
-        color.b(),
-        1,
+        color.toVec4(1),
     );
 }
 
@@ -1044,6 +1002,47 @@ pub fn drawBitmap(
         } else {
             source_row -= @as(usize, @intCast(-bitmap.pitch));
         }
+    }
+}
+
+pub fn changeSaturation(
+    buffer: *const Bitmap,
+    level: f32,
+) void {
+    var dest_row: [*]u8 = @alignCast(@ptrCast(buffer.memory));
+
+    for (0..@intCast(buffer.height)) |_| {
+        var dest: [*]u32 = @alignCast(@ptrCast(dest_row));
+
+        for (0..@intCast(buffer.width)) |_| {
+            var d = Vec4.init(
+                @floatFromInt((dest[0] >> 16) & 0xFF),
+                @floatFromInt((dest[0] >> 8) & 0xFF),
+                @floatFromInt((dest[0] >> 0) & 0xFF),
+                @floatFromInt((dest[0] >> 24) & 0xFF),
+            );
+
+            d = SRGB255ToLinear1(d);
+
+            const avg = 1.0 / 3.0 * (d.r() + d.g() + d.b());
+            const delta = Vec3.init(d.r() - avg, d.g() - avg, d.b() - avg);
+
+            var result = Vec3.add(
+                &Vec3.init(avg, avg, avg),
+                &Vec3.scale(&delta, level),
+            ).toVec4(d.a());
+
+            result = linear1ToSRGB255(result);
+
+            dest[0] = (lossyCast(u32, result.a() + 0.5) << 24) |
+                (lossyCast(u32, result.r() + 0.5) << 16) |
+                (lossyCast(u32, result.g() + 0.5) << 8) |
+                (lossyCast(u32, result.b() + 0.5) << 0);
+
+            dest += 1;
+        }
+
+        dest_row += @as(usize, @intCast(buffer.pitch));
     }
 }
 
