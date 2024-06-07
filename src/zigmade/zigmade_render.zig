@@ -363,7 +363,7 @@ pub fn renderGroupToOutput(
                         // important. An attempt to draw at that position in this case will cause an
                         // integer part of floating point value out of bounds panic.
                         if (!std.meta.eql(entry.entity_basis.basis.p.v, ety.invalidPos().v)) {
-                            drawBitmap(output_target, bitmap, p.x(), p.y(), entry.a);
+                            drawBitmap(output_target, bitmap, p.x(), p.y(), entry.color.v[3]);
                         }
                     } else unreachable;
 
@@ -392,18 +392,19 @@ pub fn renderGroupToOutput(
 
                 var v_max = Vec2.add(&y_axis, &Vec2.add(&origin, &x_axis));
 
-                drawRectangleSlowly(
-                    output_target,
-                    entry.origin,
-                    entry.x_axis,
-                    entry.y_axis,
-                    entry.color,
-                    entry.texture,
-                    entry.normal_map,
-                    entry.top,
-                    entry.middle,
-                    entry.bottom,
-                );
+                if (true)
+                    drawRectangleSlowly(
+                        output_target,
+                        entry.origin,
+                        entry.x_axis,
+                        entry.y_axis,
+                        entry.color,
+                        entry.texture,
+                        entry.normal_map,
+                        entry.top,
+                        entry.middle,
+                        entry.bottom,
+                    );
 
                 const color = Vec4.init(1, 1, 0, 1);
                 const dim = Vec2.splat(2);
@@ -590,11 +591,10 @@ inline fn SRGBBilinearBlend(texel_sample: BilinearSample, fx: f32, fy: f32) Vec4
 
 pub inline fn sampleEnvironmentMap(
     screen_space_uv: Vec2,
-    normal: Vec3,
+    sample_direction: Vec3,
     roughness: f32,
     maybe_map: ?*EnvironmentMap,
 ) Vec3 {
-    _ = screen_space_uv;
     var result: Vec3 = undefined;
 
     if (maybe_map) |map| {
@@ -605,12 +605,26 @@ pub inline fn sampleEnvironmentMap(
 
         const lod = &map.lod[lod_index];
 
-        const width_over_2: f32 = @floatFromInt(@divTrunc(lod.width, 2));
-        const height_over_2: f32 = @floatFromInt(@divTrunc(lod.height, 2));
+        assert(sample_direction.y() > 0);
 
-        // TODO: Do intersection math to determine where we should be
-        const tx = width_over_2 + normal.x() * width_over_2;
-        const ty = height_over_2 + normal.y() * height_over_2;
+        const distance_from_map_in_z = 1.0;
+        const uvs_per_meter = 0.01;
+        const c = (uvs_per_meter * distance_from_map_in_z) / sample_direction.y();
+
+        // TODO: Make sure we know what direction z should go in y
+        const offset = Vec2.scale(
+            &Vec2.init(sample_direction.x(), sample_direction.z()),
+            c,
+        );
+
+        var uv = Vec2.add(&screen_space_uv, &offset);
+
+        uv.v[0] = math.clamp01(uv.x());
+        uv.v[1] = math.clamp01(uv.y());
+
+        // TODO: Formalize texture boundaries
+        const tx = uv.x() * @as(f32, @floatFromInt(lod.width - 2));
+        const ty = uv.y() * @as(f32, @floatFromInt(lod.height - 2));
 
         const ix: i32 = @intFromFloat(tx);
         const iy: i32 = @intFromFloat(ty);
@@ -798,27 +812,35 @@ pub fn drawRectangleSlowly(
                         // TODO: Do we really need to do this?
                         normal = normal.setXYZ(Vec3.normalize(&normal.xyz()));
 
-                        // TODO: Actually compute a bounce based on viewer direction
+                        // TODO: Rotate normals based on x/y axis
+
+                        // NOTE: The eye vector is always assumed to be [0, 0, 1]
+                        // This is just the simplified version of -e + 2e^T N N
+                        var bounce_direction = Vec3.scale(&normal.xyz(), 2 * normal.z());
+                        bounce_direction.v[2] -= 1.0;
+
                         var maybe_far_map: ?*EnvironmentMap = null;
-                        const t_env_map = normal.y();
+                        const t_env_map = bounce_direction.y();
                         var t_far_map: f32 = 0;
 
                         if (t_env_map < -0.5) {
                             maybe_far_map = maybe_bottom;
                             t_far_map = -1.0 - 2 * t_env_map;
+                            bounce_direction.v[1] = -bounce_direction.y();
                         } else if (t_env_map > 0.5) {
                             maybe_far_map = maybe_top;
                             t_far_map = 2 * (t_env_map - 0.5);
                         }
 
-                        var light_color = Vec3.splat(0);
+                        // TODO: How do we sample from the middle map?
                         _ = maybe_middle;
+                        var light_color = Vec3.splat(0);
                         //_ = sampleEnvironmentMap(screen_space_uv, normal.xyz(), normal.w(), maybe_middle);
 
                         if (maybe_far_map != null) {
                             var far_map_color = sampleEnvironmentMap(
                                 screen_space_uv,
-                                normal.xyz(),
+                                bounce_direction,
                                 normal.w(),
                                 maybe_far_map,
                             );

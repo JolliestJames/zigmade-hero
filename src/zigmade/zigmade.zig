@@ -1044,6 +1044,8 @@ fn makeEmptyBitmap(arena: *MemoryArena, width: i32, height: i32, clear_to_zero: 
 fn makeSphereNormalMap(
     bitmap: *Bitmap,
     roughness: f32,
+    cx: f32,
+    cy: f32,
 ) void {
     const inv_width = 1.0 / @as(f32, @floatFromInt(bitmap.width - 1));
     const inv_height = 1.0 / @as(f32, @floatFromInt(bitmap.height - 1));
@@ -1059,15 +1061,62 @@ fn makeSphereNormalMap(
                 inv_height * @as(f32, @floatFromInt(y)),
             );
 
-            const nx = 2.0 * bitmap_uv.x() - 1.0;
-            const ny = 2.0 * bitmap_uv.y() - 1.0;
+            const nx = cx * (2.0 * bitmap_uv.x() - 1.0);
+            const ny = cy * (2.0 * bitmap_uv.y() - 1.0);
             const root_term = 1.0 - nx * nx - ny * ny;
-            var normal = Vec3.init(0, 0, 1);
+            var normal = Vec3.init(0, 0.7071, 0.7071);
             var nz: f32 = 0;
 
             if (root_term >= 0) {
                 nz = @sqrt(root_term);
                 normal = Vec3.init(nx, ny, nz);
+            }
+
+            const color = Vec4.init(
+                255.0 * (0.5 * (normal.x() + 1.0)),
+                255.0 * (0.5 * (normal.y() + 1.0)),
+                255.0 * (0.5 * (normal.z() + 1.0)),
+                255.0 * roughness,
+            );
+
+            pixel[0] = (lossyCast(u32, color.a() + 0.5) << 24) |
+                (lossyCast(u32, color.r() + 0.5) << 16) |
+                (lossyCast(u32, color.g() + 0.5) << 8) |
+                (lossyCast(u32, color.b() + 0.5) << 0);
+
+            pixel += 1;
+        }
+
+        row += @as(u32, @intCast(bitmap.pitch));
+    }
+}
+
+fn makePyramidNormalMap(
+    bitmap: *Bitmap,
+    roughness: f32,
+) void {
+    var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(bitmap.memory)));
+
+    for (0..@intCast(bitmap.height)) |y| {
+        var pixel: [*]u32 = @alignCast(@ptrCast(row));
+
+        for (0..@intCast(bitmap.width)) |x| {
+            const inv_x = (@as(usize, @intCast(bitmap.width)) - 1) - x;
+            const seven = 0.7071;
+            var normal = Vec3.init(0, 0, seven);
+
+            if (x < y) {
+                if (inv_x < y) {
+                    normal.v[0] = -seven;
+                } else {
+                    normal.v[1] = seven;
+                }
+            } else {
+                if (inv_x < y) {
+                    normal.v[1] = -seven;
+                } else {
+                    normal.v[0] = seven;
+                }
             }
 
             const color = Vec4.init(
@@ -1448,7 +1497,9 @@ pub export fn updateAndRender(
             false,
         );
 
-        makeSphereNormalMap(&game_state.test_normal, 0);
+        //makeSphereNormalMap(&game_state.test_normal, 0, 1, 1);
+        makeSphereNormalMap(&game_state.test_normal, 0, 0, 1);
+        //makePyramidNormalMap(&game_state.test_normal, 0);
 
         transient_state.env_map_width = 512;
         transient_state.env_map_height = 256;
@@ -1958,9 +2009,8 @@ pub export fn updateAndRender(
     }
 
     game_state.time += input.dt_for_frame;
-    var angle = 0.1 * game_state.time;
+    var angle = 0.5 * game_state.time;
     const displacement = 100 * @cos(5 * angle);
-    _ = displacement;
 
     const map_color = [3]Vec3{
         Vec3.init(1, 0, 0),
@@ -1996,7 +2046,7 @@ pub export fn updateAndRender(
         }
     }
 
-    angle = 0;
+    angle += 0;
 
     // TODO: Let's add a perp operator
     const origin = screen_center;
@@ -2024,15 +2074,16 @@ pub export fn updateAndRender(
     else
         Vec4.splat(1);
 
+    //_ = displacement;
     _ = render.coordinateSystem(
         render_group,
-        //Vec2.add(
-        //    &Vec2.init(displacement, 0),
-        Vec2.sub(
-            &Vec2.sub(&origin, &Vec2.scale(&x_axis, 0.5)),
-            &Vec2.scale(&y_axis, 0.5),
+        Vec2.add(
+            &Vec2.init(displacement, 0),
+            &Vec2.sub(
+                &Vec2.sub(&origin, &Vec2.scale(&x_axis, 0.5)),
+                &Vec2.scale(&y_axis, 0.5),
+            ),
         ),
-        //),
         x_axis,
         y_axis,
         color,
