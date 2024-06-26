@@ -594,20 +594,35 @@ pub inline fn sampleEnvironmentMap(
     sample_direction: Vec3,
     roughness: f32,
     maybe_map: ?*EnvironmentMap,
+    distance_from_map_in_z: f32,
 ) Vec3 {
+    //
+    // NOTE: screen_space_uv tells us where the ray is being cast from in
+    // normalized screen coordinates
+    //
+    // sample_direction tells us what direction the cast is going -- it is
+    // does not need to be normalized, but its y must be positive
+    //
+    // roughness says which lods of map we sample from
+    //
+    // distance_from_map_in_z says how far the map is from the sample point
+    // in z, given in meters
+    //
+
     var result: Vec3 = undefined;
 
     if (maybe_map) |map| {
+        // NOTE: Pick which LOD to sample from
         const lod_index: u32 = @intFromFloat(roughness *
             @as(f32, @floatFromInt(map.lod.len - 1)) + 0.5);
-
         assert(lod_index < maybe_map.?.lod.len);
 
         const lod = &map.lod[lod_index];
 
-        assert(sample_direction.y() > 0);
-
-        const distance_from_map_in_z = 1.0;
+        // NOTE: Compute the distance to the map and the scaling
+        // factor for meters to uvs
+        // TODO: Parameterize this, should be different for x and y
+        // based on map
         const uvs_per_meter = 0.01;
         const c = (uvs_per_meter * distance_from_map_in_z) / sample_direction.y();
 
@@ -617,11 +632,14 @@ pub inline fn sampleEnvironmentMap(
             c,
         );
 
+        // NOTE: Find the intersection point
         var uv = Vec2.add(&screen_space_uv, &offset);
 
+        // NOTE: Clamp to the valid range
         uv.v[0] = math.clamp01(uv.x());
         uv.v[1] = math.clamp01(uv.y());
 
+        // NOTE: Bilinear sample
         // TODO: Formalize texture boundaries
         const tx = uv.x() * @as(f32, @floatFromInt(lod.width - 2));
         const ty = uv.y() * @as(f32, @floatFromInt(lod.height - 2));
@@ -634,6 +652,17 @@ pub inline fn sampleEnvironmentMap(
 
         assert(ix >= 0 and ix < lod.width);
         assert(iy >= 0 and iy < lod.height);
+
+        const texel_ptr = if (lod.pitch > 0)
+            @as([*]u8, @ptrCast(lod.memory)) +
+                @as(usize, @intCast(iy * lod.pitch)) +
+                @as(usize, @intCast(ix)) * @sizeOf(u32)
+        else
+            @as([*]u8, @ptrCast(lod.memory)) -
+                @as(usize, @intCast(iy * -lod.pitch)) +
+                @as(usize, @intCast(ix)) * @sizeOf(u32);
+
+        @as([*]u32, @alignCast(@ptrCast(texel_ptr)))[0] = 0xFFFFFFFF;
 
         const sample = bilinearSample(lod, ix, iy);
         result = SRGBBilinearBlend(sample, fx, fy).xyz();
@@ -691,6 +720,16 @@ pub fn drawRectangleSlowly(
 
     // NOTE: Premultiply color up front
     const color = _color.premultipliedAlpha(_color.a());
+
+    const x_axis_len = x_axis.length();
+    const y_axis_len = y_axis.length();
+    const nx_axis = Vec2.scale(&x_axis, y_axis_len / x_axis_len);
+    const ny_axis = Vec2.scale(&y_axis, x_axis_len / y_axis_len);
+
+    // NOTE: nz_scale could be a parameter if we want to have
+    // control over the amount of scaling in the z direction
+    // that the normals appear to have
+    const nz_scale = 0.5 * (x_axis_len + y_axis_len);
 
     const inv_x_axis_length_sq = 1 / Vec2.lengthSquared(&x_axis);
     const inv_y_axis_length_sq = 1 / Vec2.lengthSquared(&y_axis);
@@ -810,23 +849,37 @@ pub fn drawRectangleSlowly(
 
                         normal = unscaleAndBiasNormal(normal);
                         // TODO: Do we really need to do this?
-                        normal = normal.setXYZ(Vec3.normalize(&normal.xyz()));
 
                         // TODO: Rotate normals based on x/y axis
+                        normal = normal.setXY(
+                            Vec2.add(
+                                &Vec2.scale(&nx_axis, normal.x()),
+                                &Vec2.scale(&ny_axis, normal.y()),
+                            ),
+                        );
+                        normal.v[2] *= nz_scale;
+                        normal = normal.setXYZ(Vec3.normalize(&normal.xyz()));
 
                         // NOTE: The eye vector is always assumed to be [0, 0, 1]
                         // This is just the simplified version of -e + 2e^T N N
                         var bounce_direction = Vec3.scale(&normal.xyz(), 2 * normal.z());
                         bounce_direction.v[2] -= 1.0;
 
+                        // TODO: Eventually we need to support two mappings, one for
+                        // top-down view (which we don't do now) and one for sideways, which
+                        // is what's happening here
+                        bounce_direction.v[2] = -bounce_direction.z();
+
                         var maybe_far_map: ?*EnvironmentMap = null;
+                        var distance_from_map_in_z: f32 = 2.0;
                         const t_env_map = bounce_direction.y();
                         var t_far_map: f32 = 0;
 
                         if (t_env_map < -0.5) {
+                            // TODO: This path seems particularly broken
                             maybe_far_map = maybe_bottom;
                             t_far_map = -1.0 - 2 * t_env_map;
-                            bounce_direction.v[1] = -bounce_direction.y();
+                            distance_from_map_in_z = -distance_from_map_in_z;
                         } else if (t_env_map > 0.5) {
                             maybe_far_map = maybe_top;
                             t_far_map = 2 * (t_env_map - 0.5);
@@ -835,7 +888,6 @@ pub fn drawRectangleSlowly(
                         // TODO: How do we sample from the middle map?
                         _ = maybe_middle;
                         var light_color = Vec3.splat(0);
-                        //_ = sampleEnvironmentMap(screen_space_uv, normal.xyz(), normal.w(), maybe_middle);
 
                         if (maybe_far_map != null) {
                             var far_map_color = sampleEnvironmentMap(
@@ -843,17 +895,18 @@ pub fn drawRectangleSlowly(
                                 bounce_direction,
                                 normal.w(),
                                 maybe_far_map,
+                                distance_from_map_in_z,
                             );
 
                             light_color = Vec3.lerp(&light_color, t_far_map, &far_map_color);
+
+                            // TODO: Actually do a lighting model computation here
+
+                            texel = texel.setRGB(Vec3.add(
+                                &texel.rgb(),
+                                &Vec3.scale(&light_color, texel.a()),
+                            ));
                         }
-
-                        // TODO: Actually do a lighting model computation here
-
-                        texel = texel.setRGB(Vec3.add(
-                            &texel.rgb(),
-                            &Vec3.scale(&light_color, texel.a()),
-                        ));
                     }
 
                     texel = Vec4.hadamard(&texel, &color);

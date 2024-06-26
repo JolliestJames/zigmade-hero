@@ -181,6 +181,16 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
                 pub inline fn rgb(v: *const VecN) Vec3 {
                     return Vec3.init(v.r(), v.g(), v.b());
                 }
+                pub inline fn setXY(v: *const VecN, xy_v: Vec2) Vec4 {
+                    var result: VecN = undefined;
+
+                    result.v[0] = xy_v.x();
+                    result.v[1] = xy_v.y();
+                    result.v[2] = v.v[2];
+                    result.v[3] = v.v[3];
+
+                    return result;
+                }
                 pub inline fn setXYZ(v: *const VecN, xyz_v: Vec3) Vec4 {
                     var result: VecN = undefined;
 

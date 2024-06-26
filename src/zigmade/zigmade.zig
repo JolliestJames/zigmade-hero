@@ -1497,8 +1497,8 @@ pub export fn updateAndRender(
             false,
         );
 
-        //makeSphereNormalMap(&game_state.test_normal, 0, 1, 1);
-        makeSphereNormalMap(&game_state.test_normal, 0, 0, 1);
+        makeSphereNormalMap(&game_state.test_normal, 0, 1, 1);
+        //makeSphereNormalMap(&game_state.test_normal, 0, 0, 1);
         //makePyramidNormalMap(&game_state.test_normal, 0);
 
         transient_state.env_map_width = 512;
@@ -2010,7 +2010,7 @@ pub export fn updateAndRender(
 
     game_state.time += input.dt_for_frame;
     var angle = 0.5 * game_state.time;
-    const displacement = 100 * @cos(5 * angle);
+    const displacement = Vec2.init(100 * @cos(5 * angle), 100 * @sin(3 * angle));
 
     const map_color = [3]Vec3{
         Vec3.init(1, 0, 0),
@@ -2078,7 +2078,7 @@ pub export fn updateAndRender(
     _ = render.coordinateSystem(
         render_group,
         Vec2.add(
-            &Vec2.init(displacement, 0),
+            &displacement,
             &Vec2.sub(
                 &Vec2.sub(&origin, &Vec2.scale(&x_axis, 0.5)),
                 &Vec2.scale(&y_axis, 0.5),
