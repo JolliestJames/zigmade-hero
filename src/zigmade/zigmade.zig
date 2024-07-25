@@ -1065,10 +1065,9 @@ fn makeSphereNormalMap(
             const ny = cy * (2.0 * bitmap_uv.y() - 1.0);
             const root_term = 1.0 - nx * nx - ny * ny;
             var normal = Vec3.init(0, 0.7071, 0.7071);
-            var nz: f32 = 0;
 
             if (root_term >= 0) {
-                nz = @sqrt(root_term);
+                const nz = @sqrt(root_term);
                 normal = Vec3.init(nx, ny, nz);
             }
 
@@ -1077,6 +1076,55 @@ fn makeSphereNormalMap(
                 255.0 * (0.5 * (normal.y() + 1.0)),
                 255.0 * (0.5 * (normal.z() + 1.0)),
                 255.0 * roughness,
+            );
+
+            pixel[0] = (lossyCast(u32, color.a() + 0.5) << 24) |
+                (lossyCast(u32, color.r() + 0.5) << 16) |
+                (lossyCast(u32, color.g() + 0.5) << 8) |
+                (lossyCast(u32, color.b() + 0.5) << 0);
+
+            pixel += 1;
+        }
+
+        row += @as(u32, @intCast(bitmap.pitch));
+    }
+}
+
+fn makeSphereDiffuseMap(
+    bitmap: *Bitmap,
+    cx: f32,
+    cy: f32,
+) void {
+    const inv_width = 1.0 / @as(f32, @floatFromInt(bitmap.width - 1));
+    const inv_height = 1.0 / @as(f32, @floatFromInt(bitmap.height - 1));
+
+    var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(bitmap.memory)));
+
+    for (0..@intCast(bitmap.height)) |y| {
+        var pixel: [*]u32 = @alignCast(@ptrCast(row));
+
+        for (0..@intCast(bitmap.width)) |x| {
+            const bitmap_uv = Vec2.init(
+                inv_width * @as(f32, @floatFromInt(x)),
+                inv_height * @as(f32, @floatFromInt(y)),
+            );
+
+            const nx = cx * (2.0 * bitmap_uv.x() - 1.0);
+            const ny = cy * (2.0 * bitmap_uv.y() - 1.0);
+            const root_term = 1.0 - nx * nx - ny * ny;
+            var alpha: f32 = 0;
+
+            if (root_term >= 0) {
+                alpha = 1;
+            }
+
+            const base_color = Vec3.splat(0);
+            alpha *= 255;
+            const color = Vec4.init(
+                alpha * base_color.x(),
+                alpha * base_color.y(),
+                alpha * base_color.z(),
+                alpha,
             );
 
             pixel[0] = (lossyCast(u32, color.a() + 0.5) << 24) |
@@ -1498,6 +1546,7 @@ pub export fn updateAndRender(
         );
 
         makeSphereNormalMap(&game_state.test_normal, 0, 1, 1);
+        makeSphereDiffuseMap(&game_state.test_diffuse, 1, 1);
         //makeSphereNormalMap(&game_state.test_normal, 0, 0, 1);
         //makePyramidNormalMap(&game_state.test_normal, 0);
 
@@ -2009,8 +2058,6 @@ pub export fn updateAndRender(
     }
 
     game_state.time += input.dt_for_frame;
-    var angle = 0.5 * game_state.time;
-    const displacement = Vec2.init(100 * @cos(5 * angle), 100 * @sin(3 * angle));
 
     const map_color = [3]Vec3{
         Vec3.init(1, 0, 0),
@@ -2046,15 +2093,26 @@ pub export fn updateAndRender(
         }
     }
 
-    angle += 0;
+    transient_state.env_maps[0].pz = -1.5;
+    transient_state.env_maps[1].pz = 0.0;
+    transient_state.env_maps[2].pz = 1.5;
+
+    // angle = 0;
 
     // TODO: Let's add a perp operator
     const origin = screen_center;
+
+    const angle = 0.5 * game_state.time;
+    const displacement = if (true)
+        Vec2.init(100 * @cos(5 * angle), 100 * @sin(3 * angle))
+    else
+        Vec2.splat(0);
+
     var x_axis: Vec2 = undefined;
     var y_axis: Vec2 = undefined;
 
     if (true) {
-        x_axis = Vec2.scale(&Vec2.init(@cos(angle), @sin(angle)), 100);
+        x_axis = Vec2.scale(&Vec2.init(@cos(10 * angle), @sin(10 * angle)), 100);
         y_axis = Vec2.perp(&x_axis);
     } else {
         x_axis = Vec2.init(100, 0);

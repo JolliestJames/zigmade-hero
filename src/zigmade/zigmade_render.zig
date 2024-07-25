@@ -15,6 +15,7 @@ const Vec4 = math.Vec4;
 
 pub const EnvironmentMap = struct {
     lod: [4]Bitmap,
+    pz: f32,
 };
 
 pub const RenderBasis = extern struct {
@@ -404,6 +405,7 @@ pub fn renderGroupToOutput(
                         entry.top,
                         entry.middle,
                         entry.bottom,
+                        1.0 / render_group.meters_to_pixels,
                     );
 
                 const color = Vec4.init(1, 1, 0, 1);
@@ -623,7 +625,7 @@ pub inline fn sampleEnvironmentMap(
         // factor for meters to uvs
         // TODO: Parameterize this, should be different for x and y
         // based on map
-        const uvs_per_meter = 0.01;
+        const uvs_per_meter = 0.1;
         const c = (uvs_per_meter * distance_from_map_in_z) / sample_direction.y();
 
         // TODO: Make sure we know what direction z should go in y
@@ -653,16 +655,19 @@ pub inline fn sampleEnvironmentMap(
         assert(ix >= 0 and ix < lod.width);
         assert(iy >= 0 and iy < lod.height);
 
-        const texel_ptr = if (lod.pitch > 0)
-            @as([*]u8, @ptrCast(lod.memory)) +
-                @as(usize, @intCast(iy * lod.pitch)) +
-                @as(usize, @intCast(ix)) * @sizeOf(u32)
-        else
-            @as([*]u8, @ptrCast(lod.memory)) -
-                @as(usize, @intCast(iy * -lod.pitch)) +
-                @as(usize, @intCast(ix)) * @sizeOf(u32);
+        // NOTE: Turn this on to see where in the map you're sampling
+        if (false) {
+            const texel_ptr = if (lod.pitch > 0)
+                @as([*]u8, @ptrCast(lod.memory)) +
+                    @as(usize, @intCast(iy * lod.pitch)) +
+                    @as(usize, @intCast(ix)) * @sizeOf(u32)
+            else
+                @as([*]u8, @ptrCast(lod.memory)) -
+                    @as(usize, @intCast(iy * -lod.pitch)) +
+                    @as(usize, @intCast(ix)) * @sizeOf(u32);
 
-        @as([*]u32, @alignCast(@ptrCast(texel_ptr)))[0] = 0xFFFFFFFF;
+            @as([*]u32, @alignCast(@ptrCast(texel_ptr)))[0] = 0xFFFFFFFF;
+        }
 
         const sample = bilinearSample(lod, ix, iy);
         result = SRGBBilinearBlend(sample, fx, fy).xyz();
@@ -715,6 +720,7 @@ pub fn drawRectangleSlowly(
     maybe_top: ?*EnvironmentMap,
     maybe_middle: ?*EnvironmentMap,
     maybe_bottom: ?*EnvironmentMap,
+    pixels_to_meters: f32,
 ) void {
     //@setFloatMode(.Optimized);
 
@@ -745,6 +751,17 @@ pub fn drawRectangleSlowly(
 
     const inv_width_max = 1.0 / @as(f32, @floatFromInt(width_max));
     const inv_height_max = 1.0 / @as(f32, @floatFromInt(height_max));
+
+    // TODO: This will need to be specified separately
+    const origin_z = 0.5;
+    const origin_y = Vec2.add(
+        &Vec2.add(
+            &origin,
+            &Vec2.scale(&x_axis, 0.5),
+        ),
+        &Vec2.scale(&y_axis, 0.5),
+    ).y();
+    const fixed_cast_y = inv_height_max * origin_y;
 
     var x_min: i32 = width_max;
     var x_max: i32 = 0;
@@ -803,10 +820,24 @@ pub fn drawRectangleSlowly(
                 const edge_3: f32 = Vec2.inner(&Vec2.sub(&d, &y_axis), &Vec2.perp(&y_axis));
 
                 if (edge_0 < 0 and edge_1 < 0 and edge_2 < 0 and edge_3 < 0) {
-                    const screen_space_uv = Vec2.init(
-                        @as(f32, @floatFromInt(x)) * inv_width_max,
-                        @as(f32, @floatFromInt(y)) * inv_height_max,
-                    );
+                    var screen_space_uv: Vec2 = undefined;
+                    var z_diff: f32 = undefined;
+
+                    if (true) {
+                        screen_space_uv = Vec2.init(
+                            @as(f32, @floatFromInt(x)) * inv_width_max,
+                            fixed_cast_y,
+                        );
+
+                        z_diff = pixels_to_meters * (@as(f32, @floatFromInt(y)) - origin_y);
+                    } else {
+                        screen_space_uv = Vec2.init(
+                            @as(f32, @floatFromInt(x)) * inv_width_max,
+                            @as(f32, @floatFromInt(y)) * inv_height_max,
+                        );
+
+                        z_diff = 0;
+                    }
 
                     const u = inv_x_axis_length_sq * Vec2.inner(&d, &x_axis);
                     const v = inv_y_axis_length_sq * Vec2.inner(&d, &y_axis);
@@ -871,7 +902,8 @@ pub fn drawRectangleSlowly(
                         bounce_direction.v[2] = -bounce_direction.z();
 
                         var maybe_far_map: ?*EnvironmentMap = null;
-                        var distance_from_map_in_z: f32 = 2.0;
+                        const pz = origin_z + z_diff;
+                        //var map_z: f32 = 2.0;
                         const t_env_map = bounce_direction.y();
                         var t_far_map: f32 = 0;
 
@@ -879,7 +911,6 @@ pub fn drawRectangleSlowly(
                             // TODO: This path seems particularly broken
                             maybe_far_map = maybe_bottom;
                             t_far_map = -1.0 - 2 * t_env_map;
-                            distance_from_map_in_z = -distance_from_map_in_z;
                         } else if (t_env_map > 0.5) {
                             maybe_far_map = maybe_top;
                             t_far_map = 2 * (t_env_map - 0.5);
@@ -889,7 +920,12 @@ pub fn drawRectangleSlowly(
                         _ = maybe_middle;
                         var light_color = Vec3.splat(0);
 
-                        if (maybe_far_map != null) {
+                        t_far_map *= t_far_map;
+                        t_far_map *= t_far_map;
+
+                        if (maybe_far_map) |far_map| {
+                            const distance_from_map_in_z = far_map.pz - pz;
+
                             var far_map_color = sampleEnvironmentMap(
                                 screen_space_uv,
                                 bounce_direction,
@@ -899,12 +935,24 @@ pub fn drawRectangleSlowly(
                             );
 
                             light_color = Vec3.lerp(&light_color, t_far_map, &far_map_color);
+                        }
 
-                            // TODO: Actually do a lighting model computation here
+                        // TODO: Actually do a lighting model computation here
 
+                        texel = texel.setRGB(Vec3.add(
+                            &texel.rgb(),
+                            &Vec3.scale(&light_color, texel.a()),
+                        ));
+
+                        // NOTE: Draws the bounce direction
+                        if (false) {
                             texel = texel.setRGB(Vec3.add(
+                                &Vec3.splat(0.5),
+                                &Vec3.scale(&bounce_direction, 0.5),
+                            ));
+                            texel = texel.setRGB(Vec3.scale(
                                 &texel.rgb(),
-                                &Vec3.scale(&light_color, texel.a()),
+                                texel.a(),
                             ));
                         }
                     }
