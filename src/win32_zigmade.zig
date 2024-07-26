@@ -503,7 +503,7 @@ fn win32ResizeDibSection(
 
     buffer.info.bmiHeader.biSize = @sizeOf(@TypeOf(buffer.info.bmiHeader));
     buffer.info.bmiHeader.biWidth = buffer.width;
-    buffer.info.bmiHeader.biHeight = -buffer.height;
+    buffer.info.bmiHeader.biHeight = buffer.height;
     buffer.info.bmiHeader.biPlanes = 1;
     buffer.info.bmiHeader.biBitCount = 32;
     buffer.info.bmiHeader.biCompression = win32.BI_RGB;

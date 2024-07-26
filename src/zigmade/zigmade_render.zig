@@ -1,3 +1,21 @@
+// NOTE
+//
+// 1. Everywhere outside the renderer, y always goes upward, x to the right
+//
+// 2. All bitmaps including the render target are assumed to be bottom-up
+// (meaning that the first row pointer points to the bottom-most row when
+// viewed on screen)
+//
+// 3. Unless otherwise specified, all inputs to the renderer are in world
+// coordinates (meters), not pixels. Anything that is in pixel values will
+// be explicitly marked as such
+//
+// 4. z is a special coordinate because it is broken up into discrete slices,
+// and the renderer actually understands these slices (potentially)
+//
+// TODO: ZHANDLING
+//
+
 const std = @import("std");
 const assert = std.debug.assert;
 const game = @import("zigmade.zig");
@@ -7,11 +25,17 @@ const ety = @import("zigmade_entity.zig");
 
 const lossyCast = std.math.lossyCast;
 
-const Bitmap = game.Bitmap;
 const MemoryArena = game.MemoryArena;
 const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
+
+pub const Bitmap = struct {
+    width: i32,
+    height: i32,
+    pitch: i32,
+    memory: ?[*]void,
+};
 
 pub const EnvironmentMap = struct {
     lod: [4]Bitmap,
@@ -52,18 +76,6 @@ pub const RenderEntrySaturation = extern struct {
     level: f32,
 };
 
-pub const RenderEntryCoordinateSystem = extern struct {
-    origin: Vec2,
-    x_axis: Vec2,
-    y_axis: Vec2,
-    color: Vec4,
-    texture: *Bitmap,
-    normal_map: ?*Bitmap,
-    top: ?*EnvironmentMap,
-    middle: ?*EnvironmentMap,
-    bottom: ?*EnvironmentMap,
-};
-
 pub const RenderEntryBitmap = extern struct {
     bitmap: ?*Bitmap = null,
     entity_basis: RenderEntityBasis,
@@ -74,6 +86,19 @@ pub const RenderEntryRectangle = extern struct {
     entity_basis: RenderEntityBasis,
     dim: Vec2,
     color: Vec4,
+};
+
+// NOTE: This is only for test
+pub const RenderEntryCoordinateSystem = extern struct {
+    origin: Vec2,
+    x_axis: Vec2,
+    y_axis: Vec2,
+    color: Vec4,
+    texture: *Bitmap,
+    normal_map: ?*Bitmap,
+    top: ?*EnvironmentMap,
+    middle: ?*EnvironmentMap,
+    bottom: ?*EnvironmentMap,
 };
 
 // TODO: This is dumb, this should just be part of
@@ -137,7 +162,7 @@ pub inline fn pushPiece(
 
         piece.entity_basis.offset = Vec2.sub(
             &Vec2.scale(
-                &Vec2.init(offset.x(), -offset.y()),
+                &Vec2.init(offset.x(), offset.y()),
                 group.meters_to_pixels,
             ),
             &alignment,
@@ -302,16 +327,24 @@ inline fn getRenderEntityBasisP(
     entity_basis: *align(@alignOf(void)) RenderEntityBasis,
     screen_center: Vec2,
 ) Vec2 {
+    // TODO: ZHANDLING
+
     const entity_base_p = entity_basis.basis.p;
     const z_fudge = 1.0 + 0.1 * (entity_base_p.z() + entity_basis.offset_z);
 
-    const eg_x = screen_center.x() + render_group.meters_to_pixels * z_fudge * entity_base_p.x();
-    const eg_y = screen_center.y() - render_group.meters_to_pixels * z_fudge * entity_base_p.y();
-    const entity_z = -render_group.meters_to_pixels * entity_base_p.z();
+    const entity_ground_point = Vec2.add(
+        &screen_center,
+        &Vec2.scale(&entity_base_p.xy(), render_group.meters_to_pixels * z_fudge),
+    );
 
-    const result = Vec2.init(
-        eg_x + entity_basis.offset.v[0],
-        eg_y + entity_basis.offset.v[1] + entity_basis.entity_zc * entity_z,
+    const entity_z = render_group.meters_to_pixels * entity_base_p.z();
+
+    const result = Vec2.add(
+        &Vec2.add(
+            &entity_ground_point,
+            &Vec2.init(entity_basis.offset.v[0], entity_basis.offset.v[1]),
+        ),
+        &Vec2.init(0, entity_basis.entity_zc * entity_z),
     );
 
     return result;
@@ -355,7 +388,7 @@ pub fn renderGroupToOutput(
                 const entry = @as(*align(@alignOf(void)) RenderEntryBitmap, @ptrCast(data));
                 const p = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
 
-                if (false)
+                if (true)
                     if (entry.bitmap) |bitmap| {
                         // NOTE: With Casey's implementation, there will be one iteration of the game
                         // loop when a sword has transitioned from spatial to non_spatial during which
@@ -753,7 +786,7 @@ pub fn drawRectangleSlowly(
     const inv_height_max = 1.0 / @as(f32, @floatFromInt(height_max));
 
     // TODO: This will need to be specified separately
-    const origin_z = 0.5;
+    const origin_z = 0.0;
     const origin_y = Vec2.add(
         &Vec2.add(
             &origin,
@@ -893,7 +926,7 @@ pub fn drawRectangleSlowly(
 
                         // NOTE: The eye vector is always assumed to be [0, 0, 1]
                         // This is just the simplified version of -e + 2e^T N N
-                        var bounce_direction = Vec3.scale(&normal.xyz(), 2 * normal.z());
+                        var bounce_direction = Vec3.scale(&normal.xyz(), 2.0 * normal.z());
                         bounce_direction.v[2] -= 1.0;
 
                         // TODO: Eventually we need to support two mappings, one for
@@ -910,10 +943,10 @@ pub fn drawRectangleSlowly(
                         if (t_env_map < -0.5) {
                             // TODO: This path seems particularly broken
                             maybe_far_map = maybe_bottom;
-                            t_far_map = -1.0 - 2 * t_env_map;
+                            t_far_map = -1.0 - 2.0 * t_env_map;
                         } else if (t_env_map > 0.5) {
                             maybe_far_map = maybe_top;
-                            t_far_map = 2 * (t_env_map - 0.5);
+                            t_far_map = 2.0 * (t_env_map - 0.5);
                         }
 
                         // TODO: How do we sample from the middle map?
