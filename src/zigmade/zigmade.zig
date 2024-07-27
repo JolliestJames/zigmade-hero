@@ -96,6 +96,9 @@ const lossyCast = std.math.lossyCast;
 const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
+const vec2 = math.vec2;
+const vec3 = math.vec3;
+const vec4 = math.vec4;
 const Rectangle3 = math.Rectangle3;
 const Entity = sim.Entity;
 const SimRegion = sim.SimRegion;
@@ -114,7 +117,6 @@ const HeroBitmaps = struct {
     head: Bitmap,
     cape: Bitmap,
     torso: Bitmap,
-    alignment: Vec2,
 };
 
 pub const LowEntity = struct {
@@ -273,10 +275,12 @@ fn gameOutputSound(
     }
 }
 
-fn debugLoadBmp(
+fn debugLoadBMP(
     thread: *platform.ThreadContext,
     readEntireFile: platform.debugPlatformReadEntireFile,
     file_name: [*:0]const u8,
+    align_x: i32,
+    top_down_align_y: i32,
 ) Bitmap {
     var result: Bitmap = undefined;
 
@@ -288,6 +292,7 @@ fn debugLoadBmp(
         result.memory = pixels;
         result.width = @intCast(header.width);
         result.height = @intCast(header.height);
+        result.alignment = topDownAlign(&result, Vec2.fromInt(align_x, top_down_align_y));
 
         assert(result.height >= 0);
         assert(header.compression == 3);
@@ -327,7 +332,7 @@ fn debugLoadBmp(
             for (0..@intCast(header.width)) |_| {
                 const c = source_dest[0];
 
-                var texel = Vec4.init(
+                var texel = vec4(
                     @floatFromInt((c & red_mask) >> red_shift_down),
                     @floatFromInt((c & green_mask) >> green_shift_down),
                     @floatFromInt((c & blue_mask) >> blue_shift_down),
@@ -534,7 +539,7 @@ pub fn chunkPosFromTilePos(
     const tile_side_in_meters = 1.4;
     const tile_depth_in_meters = 3.0;
 
-    const tile_dim = Vec3.init(
+    const tile_dim = vec3(
         tile_side_in_meters,
         tile_side_in_meters,
         tile_depth_in_meters,
@@ -746,16 +751,16 @@ fn drawHitPoints(
     if (entity.hit_point_max >= 1) {
         const health_dim = Vec2.splat(0.2);
         const spacing_x = 1.5 * health_dim.x();
-        var hit_p = Vec2.init(
+        var hit_p = vec2(
             -0.5 * @as(f32, @floatFromInt(entity.hit_point_max - 1)) * spacing_x,
             -0.25,
         );
 
-        const d_hit_p = Vec2.init(spacing_x, 0);
+        const d_hit_p = vec2(spacing_x, 0);
 
         for (0..entity.hit_point_max) |index| {
             const hit_point = entity.hit_points[index];
-            var color = Vec4.init(1, 0, 0, 1);
+            var color = vec4(1, 0, 0, 1);
 
             if (hit_point.filled_amount == 0) {
                 color.v[0] = 0.2;
@@ -763,7 +768,7 @@ fn drawHitPoints(
                 color.v[2] = 0.2;
             }
 
-            render.pushRect(piece_group, hit_p, 0, health_dim, color, 0);
+            render.pushRect(piece_group, vec3(hit_p.x(), hit_p.y(), 0), health_dim, color);
             hit_p = Vec2.add(&hit_p, &d_hit_p);
         }
     }
@@ -868,8 +873,8 @@ fn makeSimpleGroundedCollision(
         EntityCollisionVolume,
     );
 
-    group.total_volume.offset_p = Vec3.init(0, 0, 0.5 * dim_z);
-    group.total_volume.dim = Vec3.init(dim_x, dim_y, dim_z);
+    group.total_volume.offset_p = vec3(0, 0, 0.5 * dim_z);
+    group.total_volume.dim = vec3(dim_x, dim_y, dim_z);
     group.volumes.?[0] = group.total_volume;
 
     return group;
@@ -902,7 +907,7 @@ fn fillGroundChunk(
         1,
     );
 
-    render.clear(render_group, Vec4.init(1, 1, 0, 1));
+    render.clear(render_group, vec4(1, 1, 0, 1));
 
     const buffer = &ground_buffer.bitmap;
 
@@ -928,7 +933,7 @@ fn fillGroundChunk(
                     329 * chunk_z),
             );
 
-            const center = Vec2.init(
+            const center = vec2(
                 @as(f32, @floatFromInt(chunk_offset_x)) * width,
                 @as(f32, @floatFromInt(chunk_offset_y)) * height,
             );
@@ -942,7 +947,7 @@ fn fillGroundChunk(
                     stamp = &game_state.stone[random.choice(&series, game_state.stone.len)];
                 }
 
-                const offset = Vec2.init(
+                const offset = vec2(
                     width * random.unilateral(&series),
                     height * random.unilateral(&series),
                 );
@@ -955,7 +960,7 @@ fn fillGroundChunk(
                 var p = Vec2.sub(&offset, &bitmap_center);
                 p = Vec2.add(&p, &center);
 
-                render.pushBitmap(render_group, stamp, p, 0, Vec2.splat(0), 1, 1);
+                render.pushBitmap(render_group, stamp, vec3(p.x(), p.y(), 0), Vec4.splat(1));
             }
         }
     }
@@ -978,7 +983,7 @@ fn fillGroundChunk(
                     329 * chunk_z),
             );
 
-            const center = Vec2.init(
+            const center = vec2(
                 @as(f32, @floatFromInt(chunk_offset_x)) * width,
                 @as(f32, @floatFromInt(chunk_offset_y)) * height,
             );
@@ -986,7 +991,7 @@ fn fillGroundChunk(
             for (0..50) |_| {
                 const stamp = &game_state.tuft[random.choice(&series, game_state.tuft.len)];
 
-                const offset = Vec2.init(
+                const offset = vec2(
                     width * random.unilateral(&series),
                     height * random.unilateral(&series),
                 );
@@ -999,7 +1004,7 @@ fn fillGroundChunk(
                 var p = Vec2.sub(&offset, &bitmap_center);
                 p = Vec2.add(&p, &center);
 
-                render.pushBitmap(render_group, stamp, p, 0, Vec2.splat(0), 1, 1);
+                render.pushBitmap(render_group, stamp, vec3(p.x(), p.y(), 0), Vec4.splat(1));
             }
         }
     }
@@ -1055,7 +1060,7 @@ fn makeSphereNormalMap(
         var pixel: [*]u32 = @alignCast(@ptrCast(row));
 
         for (0..@intCast(bitmap.width)) |x| {
-            const bitmap_uv = Vec2.init(
+            const bitmap_uv = vec2(
                 inv_width * @as(f32, @floatFromInt(x)),
                 inv_height * @as(f32, @floatFromInt(y)),
             );
@@ -1063,14 +1068,14 @@ fn makeSphereNormalMap(
             const nx = cx * (2.0 * bitmap_uv.x() - 1.0);
             const ny = cy * (2.0 * bitmap_uv.y() - 1.0);
             const root_term = 1.0 - nx * nx - ny * ny;
-            var normal = Vec3.init(0, 0.7071, 0.7071);
+            var normal = vec3(0, 0.7071, 0.7071);
 
             if (root_term >= 0) {
                 const nz = @sqrt(root_term);
-                normal = Vec3.init(nx, ny, nz);
+                normal = vec3(nx, ny, nz);
             }
 
-            const color = Vec4.init(
+            const color = vec4(
                 255.0 * (0.5 * (normal.x() + 1.0)),
                 255.0 * (0.5 * (normal.y() + 1.0)),
                 255.0 * (0.5 * (normal.z() + 1.0)),
@@ -1103,7 +1108,7 @@ fn makeSphereDiffuseMap(
         var pixel: [*]u32 = @alignCast(@ptrCast(row));
 
         for (0..@intCast(bitmap.width)) |x| {
-            const bitmap_uv = Vec2.init(
+            const bitmap_uv = vec2(
                 inv_width * @as(f32, @floatFromInt(x)),
                 inv_height * @as(f32, @floatFromInt(y)),
             );
@@ -1119,7 +1124,7 @@ fn makeSphereDiffuseMap(
 
             const base_color = Vec3.splat(0);
             alpha *= 255;
-            const color = Vec4.init(
+            const color = vec4(
                 alpha * base_color.x(),
                 alpha * base_color.y(),
                 alpha * base_color.z(),
@@ -1150,7 +1155,7 @@ fn makePyramidNormalMap(
         for (0..@intCast(bitmap.width)) |x| {
             const inv_x = (@as(usize, @intCast(bitmap.width)) - 1) - x;
             const seven = 0.7071;
-            var normal = Vec3.init(0, 0, seven);
+            var normal = vec3(0, 0, seven);
 
             if (x < y) {
                 if (inv_x < y) {
@@ -1166,7 +1171,7 @@ fn makePyramidNormalMap(
                 }
             }
 
-            const color = Vec4.init(
+            const color = vec4(
                 255.0 * (0.5 * (normal.x() + 1.0)),
                 255.0 * (0.5 * (normal.y() + 1.0)),
                 255.0 * (0.5 * (normal.z() + 1.0)),
@@ -1194,7 +1199,11 @@ fn topDownAlign(bitmap: *Bitmap, alignment: Vec2) Vec2 {
 }
 
 fn setTopDownAlign(bitmap: *HeroBitmaps, alignment: Vec2) void {
-    bitmap.alignment = topDownAlign(&bitmap.head, alignment);
+    const new_alignment = topDownAlign(&bitmap.head, alignment);
+
+    bitmap.head.alignment = new_alignment;
+    bitmap.cape.alignment = new_alignment;
+    bitmap.torso.alignment = new_alignment;
 }
 
 // GAME NEEDS FOUR THINGS
@@ -1226,7 +1235,7 @@ pub export fn updateAndRender(
         game_state.meters_to_pixels = 42;
         game_state.pixels_to_meters = 1 / game_state.meters_to_pixels;
 
-        const world_chunk_dim_in_meters = Vec3.init(
+        const world_chunk_dim_in_meters = vec3(
             game_state.pixels_to_meters * @as(f32, @floatFromInt(ground_buffer_width)),
             game_state.pixels_to_meters * @as(f32, @floatFromInt(ground_buffer_height)),
             game_state.typical_floor_height,
@@ -1265,13 +1274,7 @@ pub export fn updateAndRender(
         game_state.player_collision = makeSimpleGroundedCollision(game_state, 1, 0.5, 1.2);
         game_state.monster_collision = makeSimpleGroundedCollision(game_state, 1, 0.5, 0.5);
         game_state.familiar_collision = makeSimpleGroundedCollision(game_state, 1, 0.5, 0.5);
-
-        game_state.wall_collision = makeSimpleGroundedCollision(
-            game_state,
-            tile_side_in_meters,
-            tile_side_in_meters,
-            tile_depth_in_meters,
-        );
+        game_state.wall_collision = makeSimpleGroundedCollision(game_state, tile_side_in_meters, tile_side_in_meters, tile_depth_in_meters);
 
         game_state.standard_room_collision = makeSimpleGroundedCollision(
             game_state,
@@ -1280,70 +1283,44 @@ pub export fn updateAndRender(
             0.9 * tile_depth_in_meters,
         );
 
-        game_state.grass[0] =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/grass00.bmp");
-        game_state.grass[1] =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/grass01.bmp");
+        game_state.grass[0] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/grass00.bmp", 0, 0);
+        game_state.grass[1] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/grass01.bmp", 0, 0);
 
-        game_state.stone[0] =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/ground00.bmp");
-        game_state.stone[1] =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/ground01.bmp");
-        game_state.stone[2] =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/ground02.bmp");
-        game_state.stone[3] =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/ground03.bmp");
+        game_state.stone[0] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/ground00.bmp", 0, 0);
+        game_state.stone[1] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/ground01.bmp", 0, 0);
+        game_state.stone[2] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/ground02.bmp", 0, 0);
+        game_state.stone[3] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/ground03.bmp", 0, 0);
 
-        game_state.tuft[0] =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft00.bmp");
-        game_state.tuft[1] =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft01.bmp");
-        game_state.tuft[2] =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft02.bmp");
+        game_state.tuft[0] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft00.bmp", 0, 0);
+        game_state.tuft[1] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft01.bmp", 0, 0);
+        game_state.tuft[2] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft02.bmp", 0, 0);
 
-        game_state.backdrop =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_background.bmp");
-        game_state.shadow =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_shadow.bmp");
-        game_state.tree =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/tree00.bmp");
-        game_state.stairwell =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/rock02.bmp");
-        game_state.sword =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test2/rock03.bmp");
+        game_state.backdrop = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_background.bmp", 0, 0);
+        game_state.shadow = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_shadow.bmp", 72, 182);
+        game_state.tree = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/tree00.bmp", 40, 80);
+        game_state.stairwell = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/rock02.bmp", 0, 0);
+        game_state.sword = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/rock03.bmp", 29, 10);
 
         var bitmaps = &game_state.hero_bitmaps;
-        bitmaps[0].head =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_head.bmp");
-        bitmaps[0].cape =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_cape.bmp");
-        bitmaps[0].torso =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_torso.bmp");
-        setTopDownAlign(&bitmaps[0], .{ .v = .{ 72, 182 } });
+        bitmaps[0].head = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_head.bmp", 0, 0);
+        bitmaps[0].cape = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_cape.bmp", 0, 0);
+        bitmaps[0].torso = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_torso.bmp", 0, 0);
+        setTopDownAlign(&bitmaps[0], vec2(72, 182));
 
-        bitmaps[1].head =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_head.bmp");
-        bitmaps[1].cape =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_cape.bmp");
-        bitmaps[1].torso =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_torso.bmp");
-        setTopDownAlign(&bitmaps[1], .{ .v = .{ 72, 182 } });
+        bitmaps[1].head = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_head.bmp", 0, 0);
+        bitmaps[1].cape = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_cape.bmp", 0, 0);
+        bitmaps[1].torso = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_torso.bmp", 0, 0);
+        setTopDownAlign(&bitmaps[1], vec2(72, 182));
 
-        bitmaps[2].head =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_head.bmp");
-        bitmaps[2].cape =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_cape.bmp");
-        bitmaps[2].torso =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_torso.bmp");
-        setTopDownAlign(&bitmaps[2], .{ .v = .{ 72, 182 } });
+        bitmaps[2].head = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_head.bmp", 0, 0);
+        bitmaps[2].cape = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_cape.bmp", 0, 0);
+        bitmaps[2].torso = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_torso.bmp", 0, 0);
+        setTopDownAlign(&bitmaps[2], vec2(72, 182));
 
-        bitmaps[3].head =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_head.bmp");
-        bitmaps[3].cape =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_cape.bmp");
-        bitmaps[3].torso =
-            debugLoadBmp(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_torso.bmp");
-        setTopDownAlign(&bitmaps[3], .{ .v = .{ 72, 182 } });
+        bitmaps[3].head = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_head.bmp", 0, 0);
+        bitmaps[3].cape = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_cape.bmp", 0, 0);
+        bitmaps[3].torso = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_torso.bmp", 0, 0);
+        setTopDownAlign(&bitmaps[3], vec2(72, 182));
 
         var series = random.seed(0);
 
@@ -1546,7 +1523,7 @@ pub export fn updateAndRender(
             &game_state.test_diffuse,
             Vec2.splat(0),
             Vec2.fromInt(game_state.test_diffuse.width, game_state.test_diffuse.height),
-            Vec4.init(0.5, 0.5, 0.5, 1),
+            vec4(0.5, 0.5, 0.5, 1),
         );
 
         game_state.test_normal = makeEmptyBitmap(
@@ -1619,7 +1596,7 @@ pub export fn updateAndRender(
 
             if (controller.is_analog) {
                 // NOTE: Use analog movement tuning
-                hero.ddp = Vec2.init(controller.stick_average_x, controller.stick_average_y);
+                hero.ddp = vec2(controller.stick_average_x, controller.stick_average_y);
             } else {
                 // NOTE: Use digital movement tuning
 
@@ -1645,19 +1622,19 @@ pub export fn updateAndRender(
             }
 
             if (controller.buttons.map.action_up.ended_down) {
-                hero.d_sword = Vec2.init(0, 1);
+                hero.d_sword = vec2(0, 1);
             }
 
             if (controller.buttons.map.action_down.ended_down) {
-                hero.d_sword = Vec2.init(0, -1);
+                hero.d_sword = vec2(0, -1);
             }
 
             if (controller.buttons.map.action_left.ended_down) {
-                hero.d_sword = Vec2.init(-1, 0);
+                hero.d_sword = vec2(-1, 0);
             }
 
             if (controller.buttons.map.action_right.ended_down) {
-                hero.d_sword = Vec2.init(1, 0);
+                hero.d_sword = vec2(1, 0);
             }
         }
     }
@@ -1684,9 +1661,9 @@ pub export fn updateAndRender(
         .memory = @ptrCast(buffer.memory),
     };
 
-    render.clear(render_group, Vec4.init(0.25, 0.25, 0.25, 0));
+    render.clear(render_group, vec4(0.25, 0.25, 0.25, 0));
 
-    const screen_center = Vec2.init(
+    const screen_center = vec2(
         0.5 * @as(f32, @floatFromInt(draw_buffer.width)),
         0.5 * @as(f32, @floatFromInt(draw_buffer.height)),
     );
@@ -1696,28 +1673,18 @@ pub export fn updateAndRender(
 
     const camera_bounds_in_meters = Rectangle3.centerDim(
         &Vec3.splat(0),
-        &Vec3.init(screen_width_in_meters, screen_height_in_meters, 0),
+        &vec3(screen_width_in_meters, screen_height_in_meters, 0),
     );
 
     for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
         var ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
 
         if (world.isValid(&ground_buffer.p)) {
-            const bitmap = &ground_buffer.bitmap;
-            const delta = &world.subtract(game_world, &ground_buffer.p, &game_state.camera_p);
+            var bitmap = &ground_buffer.bitmap;
+            const delta = world.subtract(game_world, &ground_buffer.p, &game_state.camera_p);
+            bitmap.alignment = Vec2.fromInt(@divFloor(bitmap.width, 2), @divFloor(bitmap.height, 2));
 
-            render.pushBitmap(
-                render_group,
-                bitmap,
-                delta.xy(),
-                delta.z(),
-                Vec2.scale(
-                    &Vec2.fromInt(bitmap.width, bitmap.height),
-                    0.5,
-                ),
-                1,
-                1,
-            );
+            render.pushBitmap(render_group, bitmap, delta, Vec4.splat(1));
         }
     }
 
@@ -1802,7 +1769,7 @@ pub export fn updateAndRender(
                                 rel_p.xy(),
                                 0,
                                 game_world.chunk_dim_in_meters.xy(),
-                                Vec4.init(1, 1, 0, 1),
+                                vec4(1, 1, 0, 1),
                                 1,
                             );
                     }
@@ -1868,7 +1835,7 @@ pub export fn updateAndRender(
                                 .drag = 8,
                             };
 
-                            ddp = Vec3.init(hero.ddp.x(), hero.ddp.y(), 0);
+                            ddp = vec3(hero.ddp.x(), hero.ddp.y(), 0);
 
                             if (hero.d_sword.x() != 0 or hero.d_sword.y() != 0) {
                                 switch (entity.sword) {
@@ -1879,7 +1846,7 @@ pub export fn updateAndRender(
                                             sword.distance_limit = 5;
 
                                             var dp = Vec3.scale(
-                                                &Vec3.init(hero.d_sword.x(), hero.d_sword.y(), 0),
+                                                &vec3(hero.d_sword.x(), hero.d_sword.y(), 0),
                                                 5,
                                             );
 
@@ -1902,20 +1869,19 @@ pub export fn updateAndRender(
                     }
 
                     // TODO: z
-                    render.pushBitmap(render_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                    render.pushBitmap(render_group, &hero_bitmaps.torso, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
-                    render.pushBitmap(render_group, &hero_bitmaps.cape, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
-                    render.pushBitmap(render_group, &hero_bitmaps.head, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
+                    render.pushBitmap(render_group, &game_state.shadow, Vec3.splat(0), vec4(1, 1, 1, shadow_alpha));
+                    render.pushBitmap(render_group, &hero_bitmaps.torso, Vec3.splat(0), Vec4.splat(1));
+                    render.pushBitmap(render_group, &hero_bitmaps.cape, Vec3.splat(0), Vec4.splat(1));
+                    render.pushBitmap(render_group, &hero_bitmaps.head, Vec3.splat(0), Vec4.splat(1));
 
                     drawHitPoints(entity, render_group);
                 },
                 .wall => {
-                    const alignment = topDownAlign(&game_state.tree, Vec2.init(40, 80));
-                    render.pushBitmap(render_group, &game_state.tree, Vec2.splat(0), 0, alignment, 1, 1);
+                    render.pushBitmap(render_group, &game_state.tree, Vec3.splat(0), Vec4.splat(1));
                 },
                 .stairwell => {
-                    render.pushRect(render_group, Vec2.splat(0), 0, entity.walkable_dim, Vec4.init(1, 0.5, 0, 1), 0);
-                    render.pushRect(render_group, Vec2.splat(0), entity.walkable_height, entity.walkable_dim, Vec4.init(1, 1, 0, 1), 0);
+                    render.pushRect(render_group, Vec3.splat(0), entity.walkable_dim, vec4(1, 0.5, 0, 1));
+                    render.pushRect(render_group, vec3(0, 0, entity.walkable_height), entity.walkable_dim, vec4(1, 1, 0, 1));
                 },
                 .sword => {
                     move_spec = .{
@@ -1937,9 +1903,8 @@ pub export fn updateAndRender(
                         ety.makeEntityNonSpatial(entity);
                     }
 
-                    const alignment = topDownAlign(&game_state.sword, Vec2.init(29, 10));
-                    render.pushBitmap(render_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                    render.pushBitmap(render_group, &game_state.sword, Vec2.splat(0), 0, alignment, 1, 1);
+                    render.pushBitmap(render_group, &game_state.shadow, Vec3.splat(0), vec4(0, 0, 0, shadow_alpha));
+                    render.pushBitmap(render_group, &game_state.sword, Vec3.splat(0), Vec4.splat(1));
                 },
                 .familiar => {
                     var maybe_closest_hero: ?*Entity = null;
@@ -1984,26 +1949,20 @@ pub export fn updateAndRender(
                     }
 
                     const bob_sin = @sin(2 * entity.t_bob);
-                    render.pushBitmap(render_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, 0.5 * shadow_alpha + 0.2 * bob_sin, 0);
-                    render.pushBitmap(render_group, &hero_bitmaps.head, Vec2.splat(0), 0.25 * bob_sin, hero_bitmaps.alignment, 1, 1);
+                    const shadow_color = vec4(1, 1, 1, 0.5 * shadow_alpha + 0.2 * bob_sin);
+                    render.pushBitmap(render_group, &game_state.shadow, Vec3.splat(0), shadow_color);
+                    render.pushBitmap(render_group, &hero_bitmaps.head, vec3(0, 0, 0.25 * bob_sin), Vec4.splat(1));
                 },
                 .monster => {
-                    render.pushBitmap(render_group, &game_state.shadow, Vec2.splat(0), 0, hero_bitmaps.alignment, shadow_alpha, 0);
-                    render.pushBitmap(render_group, &hero_bitmaps.torso, Vec2.splat(0), 0, hero_bitmaps.alignment, 1, 1);
+                    render.pushBitmap(render_group, &game_state.shadow, Vec3.splat(0), vec4(0, 0, 0, shadow_alpha));
+                    render.pushBitmap(render_group, &hero_bitmaps.torso, Vec3.splat(0), Vec4.splat(1));
                     drawHitPoints(entity, render_group);
                 },
                 .space => {
                     for (0..entity.collision.volume_count) |volume_index| {
                         const volume = &entity.collision.volumes.?[volume_index];
 
-                        render.pushRectOutline(
-                            render_group,
-                            volume.offset_p.xy(),
-                            0,
-                            volume.dim.xy(),
-                            Vec4.init(0, 0.5, 1, 1),
-                            0,
-                        );
+                        render.pushRectOutline(render_group, Vec3.sub(&volume.offset_p, &vec3(0, 0, 0.5 * volume.dim.z())), volume.dim.xy(), vec4(0, 0.5, 1, 1));
                     }
                 },
                 else => unreachable,
@@ -2021,9 +1980,9 @@ pub export fn updateAndRender(
         game_state.time += input.dt_for_frame;
 
         const map_color = [3]Vec3{
-            Vec3.init(1, 0, 0),
-            Vec3.init(0, 1, 0),
-            Vec3.init(0, 0, 1),
+            vec3(1, 0, 0),
+            vec3(0, 1, 0),
+            vec3(0, 0, 1),
         };
 
         for (0..transient_state.env_maps.len) |map_index| {
@@ -2042,7 +2001,7 @@ pub export fn updateAndRender(
                     const color = if (checker_on)
                         map_color[map_index].toVec4(1)
                     else
-                        Vec4.init(0, 0, 0, 1);
+                        vec4(0, 0, 0, 1);
 
                     const min_p = Vec2.fromInt(x, y);
                     const max_p = Vec2.add(&min_p, &Vec2.fromInt(checker_width, checker_height));
@@ -2058,6 +2017,8 @@ pub export fn updateAndRender(
         transient_state.env_maps[1].pz = 0.0;
         transient_state.env_maps[2].pz = 1.5;
 
+        render.drawBitmap(&transient_state.env_maps[0].lod[0], &transient_state.ground_buffers[transient_state.ground_buffer_count - 1].bitmap, 125, 50, 1);
+
         // angle = 0;
 
         // TODO: Let's add a perp operator
@@ -2065,7 +2026,7 @@ pub export fn updateAndRender(
 
         const angle = 0.5 * game_state.time;
         const displacement = if (true)
-            Vec2.init(100 * @cos(5 * angle), 100 * @sin(3 * angle))
+            vec2(100 * @cos(5 * angle), 100 * @sin(3 * angle))
         else
             Vec2.splat(0);
 
@@ -2073,18 +2034,18 @@ pub export fn updateAndRender(
         var y_axis: Vec2 = undefined;
 
         if (true) {
-            x_axis = Vec2.scale(&Vec2.init(@cos(10 * angle), @sin(10 * angle)), 100);
+            x_axis = Vec2.scale(&vec2(@cos(10 * angle), @sin(10 * angle)), 100);
             y_axis = Vec2.perp(&x_axis);
         } else {
-            x_axis = Vec2.init(100, 0);
-            y_axis = Vec2.init(0, 100);
+            x_axis = vec2(100, 0);
+            y_axis = vec2(0, 100);
         }
 
         //var p_index: usize = 0;
         const c_angle = 5 * angle;
 
         const color = if (false)
-            Vec4.init(
+            vec4(
                 0.5 + 0.5 * @sin(c_angle),
                 0.5 + 0.5 * @sin(2.9 * c_angle),
                 0.5 + 0.5 * @cos(9.9 * c_angle),
@@ -2119,8 +2080,8 @@ pub export fn updateAndRender(
             var map = &transient_state.env_maps[map_index];
             const lod = &map.lod[0];
 
-            x_axis = Vec2.scale(&Vec2.init(@floatFromInt(lod.width), 0), 0.5);
-            y_axis = Vec2.scale(&Vec2.init(0, @floatFromInt(lod.height)), 0.5);
+            x_axis = Vec2.scale(&vec2(@floatFromInt(lod.width), 0), 0.5);
+            y_axis = Vec2.scale(&vec2(0, @floatFromInt(lod.height)), 0.5);
 
             _ = render.coordinateSystem(
                 render_group,
@@ -2137,7 +2098,7 @@ pub export fn updateAndRender(
 
             map_p = Vec2.add(&map_p, &Vec2.add(
                 &y_axis,
-                &Vec2.init(0, 6),
+                &vec2(0, 6),
             ));
         }
 

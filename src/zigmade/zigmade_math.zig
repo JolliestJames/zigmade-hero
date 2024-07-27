@@ -4,6 +4,9 @@ pub const Vec3 = Vec(3, f32);
 pub const Vec4 = Vec(4, f32);
 pub const Rectangle2 = Rectangle(Vec2);
 pub const Rectangle3 = Rectangle(Vec3);
+pub const vec2 = Vec2.init;
+pub const vec3 = Vec3.init;
+pub const vec4 = Vec4.init;
 
 pub inline fn square(f: f32) f32 {
     const result = f * f;

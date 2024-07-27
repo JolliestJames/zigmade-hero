@@ -7,6 +7,7 @@ const TILE_CHUNK_UNINITIALIZED = std.math.maxInt(i32);
 const TILES_PER_CHUNK = 8;
 
 const Vec3 = math.Vec3;
+const vec3 = math.vec3;
 const MemoryArena = game.MemoryArena;
 const LowEntity = game.LowEntity;
 
@@ -136,7 +137,7 @@ pub inline fn subtract(
 ) Vec3 {
     var result: Vec3 = undefined;
 
-    const d_tile = Vec3.init(
+    const d_tile = vec3(
         @as(f32, @floatFromInt(a.chunk_x)) -
             @as(f32, @floatFromInt(b.chunk_x)),
         @as(f32, @floatFromInt(a.chunk_y)) -

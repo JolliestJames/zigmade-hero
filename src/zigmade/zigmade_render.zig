@@ -15,6 +15,9 @@
 //
 // TODO: ZHANDLING
 //
+// 5. All color values specified to the renderer as Vec4s are in non-premultiplied
+// alpha
+//
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -29,8 +32,12 @@ const MemoryArena = game.MemoryArena;
 const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
+const vec2 = math.vec2;
+const vec3 = math.vec3;
+const vec4 = math.vec4;
 
 pub const Bitmap = struct {
+    alignment: Vec2 = Vec2.splat(0),
     width: i32,
     height: i32,
     pitch: i32,
@@ -48,9 +55,7 @@ pub const RenderBasis = extern struct {
 
 const RenderEntityBasis = extern struct {
     basis: *RenderBasis,
-    offset: Vec2,
-    offset_z: f32,
-    entity_zc: f32,
+    offset: Vec3,
 };
 
 // NOTE: Is there a better approximation for what a
@@ -112,6 +117,13 @@ pub const RenderGroup = struct {
     push_buffer_base: [*]u8,
 };
 
+const BilinearSample = struct {
+    a: u32,
+    b: u32,
+    c: u32,
+    d: u32,
+};
+
 pub inline fn pushRenderElement(
     group: *RenderGroup,
     comptime T: type,
@@ -145,80 +157,52 @@ pub inline fn pushRenderElement_(
     return result;
 }
 
-pub inline fn pushPiece(
+pub inline fn pushBitmap(
     group: *RenderGroup,
-    bitmap: ?*Bitmap,
-    offset: Vec2,
-    offset_z: f32,
-    alignment: Vec2,
+    bitmap: *Bitmap,
+    offset: Vec3,
     color: Vec4,
-    entity_zc: f32,
 ) void {
-    const maybe_piece = pushRenderElement(group, RenderEntryBitmap, .bitmap);
+    const maybe_entry = pushRenderElement(group, RenderEntryBitmap, .bitmap);
 
-    if (maybe_piece) |piece| {
-        piece.entity_basis.basis = group.default_basis;
-        piece.bitmap = bitmap;
+    if (maybe_entry) |entry| {
+        const alignment = vec3(bitmap.alignment.x(), bitmap.alignment.y(), 0);
 
-        piece.entity_basis.offset = Vec2.sub(
-            &Vec2.scale(
-                &Vec2.init(offset.x(), offset.y()),
+        entry.entity_basis.basis = group.default_basis;
+        entry.bitmap = bitmap;
+
+        const new_offset = Vec3.sub(
+            &Vec3.scale(
+                &offset,
                 group.meters_to_pixels,
             ),
             &alignment,
         );
 
-        piece.entity_basis.offset_z = offset_z;
-        piece.entity_basis.entity_zc = entity_zc;
-        piece.color = color;
+        entry.entity_basis.offset = new_offset;
+        entry.color = color;
     }
-}
-
-pub inline fn pushBitmap(
-    group: *RenderGroup,
-    bitmap: *Bitmap,
-    offset: Vec2,
-    offset_z: f32,
-    alignment: Vec2,
-    alpha: f32,
-    entity_zc: f32,
-) void {
-    pushPiece(
-        group,
-        bitmap,
-        offset,
-        offset_z,
-        alignment,
-        Vec4.init(1, 1, 1, alpha),
-        entity_zc,
-    );
 }
 
 pub inline fn pushRect(
     group: *RenderGroup,
-    offset: Vec2,
-    offset_z: f32,
+    offset: Vec3,
     dim: Vec2,
     color: Vec4,
-    entity_zc: f32,
 ) void {
     const maybe_piece = pushRenderElement(group, RenderEntryRectangle, .rectangle);
 
     if (maybe_piece) |piece| {
-        const half_dim = Vec2.scale(&dim, 0.5 * group.meters_to_pixels);
-
         piece.entity_basis.basis = group.default_basis;
 
-        piece.entity_basis.offset = Vec2.sub(
-            &Vec2.scale(
-                &Vec2.init(offset.x(), -offset.y()),
-                group.meters_to_pixels,
+        piece.entity_basis.offset = Vec3.scale(
+            &Vec3.sub(
+                &offset,
+                &vec3(dim.x() * 0.5, dim.y() * 0.5, 0),
             ),
-            &half_dim,
+            group.meters_to_pixels,
         );
 
-        piece.entity_basis.offset_z = offset_z;
-        piece.entity_basis.entity_zc = entity_zc;
         piece.color = color;
         piece.dim = Vec2.scale(&dim, group.meters_to_pixels);
     }
@@ -226,51 +210,19 @@ pub inline fn pushRect(
 
 pub inline fn pushRectOutline(
     group: *RenderGroup,
-    offset: Vec2,
-    offset_z: f32,
+    offset: Vec3,
     dim: Vec2,
     color: Vec4,
-    entity_zc: f32,
 ) void {
     const thickness = 0.1;
 
     // NOTE: Top and bottom
-    pushRect(
-        group,
-        Vec2.sub(&offset, &Vec2.init(0, 0.5 * dim.y())),
-        offset_z,
-        Vec2.init(dim.x(), thickness),
-        color,
-        entity_zc,
-    );
-
-    pushRect(
-        group,
-        Vec2.add(&offset, &Vec2.init(0, 0.5 * dim.y())),
-        offset_z,
-        Vec2.init(dim.x(), thickness),
-        color,
-        entity_zc,
-    );
+    pushRect(group, Vec3.sub(&offset, &vec3(0, 0.5 * dim.y(), 0)), vec2(dim.x(), thickness), color);
+    pushRect(group, Vec3.add(&offset, &vec3(0, 0.5 * dim.y(), 0)), vec2(dim.x(), thickness), color);
 
     // NOTE: Left and right
-    pushRect(
-        group,
-        Vec2.sub(&offset, &Vec2.init(0.5 * dim.x(), 0)),
-        offset_z,
-        Vec2.init(thickness, dim.y()),
-        color,
-        entity_zc,
-    );
-
-    pushRect(
-        group,
-        Vec2.add(&offset, &Vec2.init(0.5 * dim.x(), 0)),
-        offset_z,
-        Vec2.init(thickness, dim.y()),
-        color,
-        entity_zc,
-    );
+    pushRect(group, Vec3.sub(&offset, &vec3(0.5 * dim.x(), 0, 0)), vec2(thickness, dim.y()), color);
+    pushRect(group, Vec3.add(&offset, &vec3(0.5 * dim.x(), 0, 0)), vec2(thickness, dim.y()), color);
 }
 
 pub inline fn clear(group: *RenderGroup, color: Vec4) void {
@@ -327,24 +279,15 @@ inline fn getRenderEntityBasisP(
     entity_basis: *align(@alignOf(void)) RenderEntityBasis,
     screen_center: Vec2,
 ) Vec2 {
-    // TODO: ZHANDLING
+    // TODO: Figure out exactly how z-based XY displacement should work
 
-    const entity_base_p = entity_basis.basis.p;
-    const z_fudge = 1.0 + 0.1 * (entity_base_p.z() + entity_basis.offset_z);
-
-    const entity_ground_point = Vec2.add(
-        &screen_center,
-        &Vec2.scale(&entity_base_p.xy(), render_group.meters_to_pixels * z_fudge),
-    );
-
-    const entity_z = render_group.meters_to_pixels * entity_base_p.z();
-
+    const entity_base_p = Vec3.scale(&entity_basis.basis.p, render_group.meters_to_pixels);
+    const z_fudge = 1.0 + 0.1 * entity_base_p.z();
+    const entity_ground_point = Vec2.add(&screen_center, &Vec2.scale(&entity_base_p.xy(), z_fudge));
+    const offset = vec2(entity_basis.offset.v[0], entity_basis.offset.v[1]);
     const result = Vec2.add(
-        &Vec2.add(
-            &entity_ground_point,
-            &Vec2.init(entity_basis.offset.v[0], entity_basis.offset.v[1]),
-        ),
-        &Vec2.init(0, entity_basis.entity_zc * entity_z),
+        &Vec2.add(&entity_ground_point, &offset),
+        &vec2(0, entity_base_p.z() + entity_basis.offset.v[2]),
     );
 
     return result;
@@ -354,7 +297,7 @@ pub fn renderGroupToOutput(
     render_group: *RenderGroup,
     output_target: *const Bitmap,
 ) void {
-    const screen_center = Vec2.init(
+    const screen_center = vec2(
         0.5 * @as(f32, @floatFromInt(output_target.width)),
         0.5 * @as(f32, @floatFromInt(output_target.height)),
     );
@@ -441,7 +384,7 @@ pub fn renderGroupToOutput(
                         1.0 / render_group.meters_to_pixels,
                     );
 
-                const color = Vec4.init(1, 1, 0, 1);
+                const color = vec4(1, 1, 0, 1);
                 const dim = Vec2.splat(2);
                 var p = entry.origin;
 
@@ -508,7 +451,7 @@ pub fn allocateRenderGroup(
 }
 
 pub inline fn unpack4x8(to_unpack: u32) Vec4 {
-    const result = Vec4.init(
+    const result = vec4(
         @floatFromInt((to_unpack >> 16) & 0xFF),
         @floatFromInt((to_unpack >> 8) & 0xFF),
         @floatFromInt((to_unpack >> 0) & 0xFF),
@@ -663,7 +606,7 @@ pub inline fn sampleEnvironmentMap(
 
         // TODO: Make sure we know what direction z should go in y
         const offset = Vec2.scale(
-            &Vec2.init(sample_direction.x(), sample_direction.z()),
+            &vec2(sample_direction.x(), sample_direction.z()),
             c,
         );
 
@@ -708,13 +651,6 @@ pub inline fn sampleEnvironmentMap(
 
     return result;
 }
-
-const BilinearSample = struct {
-    a: u32,
-    b: u32,
-    c: u32,
-    d: u32,
-};
 
 inline fn bilinearSample(texture: *Bitmap, x: i32, y: i32) BilinearSample {
     var result: BilinearSample = undefined;
@@ -857,14 +793,14 @@ pub fn drawRectangleSlowly(
                     var z_diff: f32 = undefined;
 
                     if (true) {
-                        screen_space_uv = Vec2.init(
+                        screen_space_uv = vec2(
                             @as(f32, @floatFromInt(x)) * inv_width_max,
                             fixed_cast_y,
                         );
 
                         z_diff = pixels_to_meters * (@as(f32, @floatFromInt(y)) - origin_y);
                     } else {
-                        screen_space_uv = Vec2.init(
+                        screen_space_uv = vec2(
                             @as(f32, @floatFromInt(x)) * inv_width_max,
                             @as(f32, @floatFromInt(y)) * inv_height_max,
                         );
@@ -995,7 +931,7 @@ pub fn drawRectangleSlowly(
                     texel.v[1] = math.clamp01(texel.g());
                     texel.v[2] = math.clamp01(texel.b());
 
-                    var dest = Vec4.init(
+                    var dest = vec4(
                         @floatFromInt((pixel[0] >> 16) & 0xFF),
                         @floatFromInt((pixel[0] >> 8) & 0xFF),
                         @floatFromInt((pixel[0] >> 0) & 0xFF),
@@ -1033,30 +969,30 @@ pub fn drawRectOutline(buffer: *const Bitmap, min: Vec2, max: Vec2, color: Vec3,
     // NOTE: Top and bottom
     drawRectangle(
         buffer,
-        Vec2.init(min.x() - r, min.y() - r),
-        Vec2.init(max.x() + r, min.y() + r),
+        vec2(min.x() - r, min.y() - r),
+        vec2(max.x() + r, min.y() + r),
         color.toVec4(1),
     );
 
     drawRectangle(
         buffer,
-        Vec2.init(min.x() - r, max.y() - r),
-        Vec2.init(max.x() + r, max.y() + r),
+        vec2(min.x() - r, max.y() - r),
+        vec2(max.x() + r, max.y() + r),
         color.toVec4(1),
     );
 
     // NOTE: Left and right
     drawRectangle(
         buffer,
-        Vec2.init(min.x() - r, min.y() - r),
-        Vec2.init(min.x() + r, max.y() + r),
+        vec2(min.x() - r, min.y() - r),
+        vec2(min.x() + r, max.y() + r),
         color.toVec4(1),
     );
 
     drawRectangle(
         buffer,
-        Vec2.init(max.x() - r, min.y() - r),
-        Vec2.init(max.x() + r, max.y() + r),
+        vec2(max.x() - r, min.y() - r),
+        vec2(max.x() + r, max.y() + r),
         color.toVec4(1),
     );
 }
@@ -1116,7 +1052,7 @@ pub fn drawBitmap(
         var source: [*]align(@alignOf(u8)) u32 = @ptrCast(source_row);
 
         for (@intCast(min_x)..@intCast(max_x)) |_| {
-            var texel = Vec4.init(
+            var texel = vec4(
                 @as(f32, @floatFromInt((source[0] >> 16) & 0xFF)),
                 @as(f32, @floatFromInt((source[0] >> 8) & 0xFF)),
                 @as(f32, @floatFromInt((source[0] >> 0) & 0xFF)),
@@ -1126,7 +1062,7 @@ pub fn drawBitmap(
             texel = SRGB255ToLinear1(texel);
             texel = Vec4.scale(&texel, c_alpha);
 
-            var d = Vec4.init(
+            var d = vec4(
                 @floatFromInt((dest[0] >> 16) & 0xFF),
                 @floatFromInt((dest[0] >> 8) & 0xFF),
                 @floatFromInt((dest[0] >> 0) & 0xFF),
@@ -1171,7 +1107,7 @@ pub fn changeSaturation(
         var dest: [*]u32 = @alignCast(@ptrCast(dest_row));
 
         for (0..@intCast(buffer.width)) |_| {
-            var d = Vec4.init(
+            var d = vec4(
                 @floatFromInt((dest[0] >> 16) & 0xFF),
                 @floatFromInt((dest[0] >> 8) & 0xFF),
                 @floatFromInt((dest[0] >> 0) & 0xFF),
@@ -1181,10 +1117,10 @@ pub fn changeSaturation(
             d = SRGB255ToLinear1(d);
 
             const avg = 1.0 / 3.0 * (d.r() + d.g() + d.b());
-            const delta = Vec3.init(d.r() - avg, d.g() - avg, d.b() - avg);
+            const delta = vec3(d.r() - avg, d.g() - avg, d.b() - avg);
 
             var result = Vec3.add(
-                &Vec3.init(avg, avg, avg),
+                &vec3(avg, avg, avg),
                 &Vec3.scale(&delta, level),
             ).toVec4(d.a());
 
