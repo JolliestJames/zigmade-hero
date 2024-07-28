@@ -189,6 +189,7 @@ pub const GameState = struct {
     time: f32,
     test_diffuse: Bitmap,
     test_normal: Bitmap,
+    z_offset: f32,
 };
 
 const TransientState = struct {
@@ -1344,7 +1345,7 @@ pub export fn updateAndRender(
 
             door_direction = random.choice(
                 &series,
-                if (true or door_up or door_down) 2 else 3,
+                if (door_up or door_down) 2 else 3,
             );
 
             var created_z_door = false;
@@ -1621,20 +1622,34 @@ pub export fn updateAndRender(
                 hero.dz = 3.0;
             }
 
-            if (controller.buttons.map.action_up.ended_down) {
-                hero.d_sword = vec2(0, 1);
-            }
+            if (false) {
+                if (controller.buttons.map.action_up.ended_down) {
+                    hero.d_sword = vec2(0, 1);
+                }
 
-            if (controller.buttons.map.action_down.ended_down) {
-                hero.d_sword = vec2(0, -1);
-            }
+                if (controller.buttons.map.action_down.ended_down) {
+                    hero.d_sword = vec2(0, -1);
+                }
 
-            if (controller.buttons.map.action_left.ended_down) {
-                hero.d_sword = vec2(-1, 0);
-            }
+                if (controller.buttons.map.action_left.ended_down) {
+                    hero.d_sword = vec2(-1, 0);
+                }
 
-            if (controller.buttons.map.action_right.ended_down) {
-                hero.d_sword = vec2(1, 0);
+                if (controller.buttons.map.action_right.ended_down) {
+                    hero.d_sword = vec2(1, 0);
+                }
+            } else {
+                var zoom_rate: f32 = 0.0;
+
+                if (controller.buttons.map.action_up.ended_down) {
+                    zoom_rate = 1;
+                }
+
+                if (controller.buttons.map.action_down.ended_down) {
+                    zoom_rate = -1;
+                }
+
+                game_state.z_offset += zoom_rate * input.dt_for_frame;
             }
         }
     }
@@ -1644,7 +1659,6 @@ pub export fn updateAndRender(
     //
 
     const render_memory = beginTemporaryMemory(&transient_state.arena);
-
     defer endTemporaryMemory(render_memory);
 
     // TODO: Decide what our pushbuffer size is
@@ -1653,6 +1667,8 @@ pub export fn updateAndRender(
         platform.Megabytes(4),
         game_state.meters_to_pixels,
     );
+
+    render_group.global_alpha = 1.0; // math.clamp01(1.0 - game_state.z_offset);
 
     const draw_buffer = &Bitmap{
         .width = buffer.width,
@@ -1684,11 +1700,14 @@ pub export fn updateAndRender(
             const delta = world.subtract(game_world, &ground_buffer.p, &game_state.camera_p);
             bitmap.alignment = Vec2.fromInt(@divFloor(bitmap.width, 2), @divFloor(bitmap.height, 2));
 
-            render.pushBitmap(render_group, bitmap, delta, Vec4.splat(1));
+            var basis: *RenderBasis = pushStruct(&transient_state.arena, RenderBasis);
+            render_group.default_basis = basis;
+            basis.p = Vec3.add(&delta, &vec3(0, 0, game_state.z_offset));
+            render.pushBitmap(render_group, bitmap, Vec3.splat(0), Vec4.splat(1));
         }
     }
 
-    {
+    if (false) {
         const min_chunk_p = world.mapIntoChunkSpace(
             game_world,
             game_state.camera_p,
@@ -1972,11 +1991,11 @@ pub export fn updateAndRender(
                 sim.moveEntity(game_state, region, entity, input.dt_for_frame, &move_spec, ddp);
             }
 
-            basis.p = sim.getEntityGroundPoint(entity);
+            basis.p = Vec3.add(&sim.getEntityGroundPoint(entity), &vec3(0, 0, game_state.z_offset));
         }
     }
 
-    if (true) {
+    if (false) {
         game_state.time += input.dt_for_frame;
 
         const map_color = [3]Vec3{

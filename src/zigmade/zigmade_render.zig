@@ -11,7 +11,9 @@
 // be explicitly marked as such
 //
 // 4. z is a special coordinate because it is broken up into discrete slices,
-// and the renderer actually understands these slices (potentially)
+// and the renderer actually understands these slices. z slices are what control
+// the scaling of things, whereas z offsets inside a slice are what control y
+// offsetting
 //
 // TODO: ZHANDLING
 //
@@ -56,6 +58,7 @@ pub const RenderBasis = extern struct {
 const RenderEntityBasis = extern struct {
     basis: *RenderBasis,
     offset: Vec3,
+    scale: f32,
 };
 
 // NOTE: Is there a better approximation for what a
@@ -110,6 +113,7 @@ pub const RenderEntryCoordinateSystem = extern struct {
 // the renderer pushbuffer. Add correction of coordinates
 // in there and be done with it
 pub const RenderGroup = struct {
+    global_alpha: f32,
     default_basis: *RenderBasis,
     meters_to_pixels: f32,
     max_push_buffer_size: usize,
@@ -122,6 +126,11 @@ const BilinearSample = struct {
     b: u32,
     c: u32,
     d: u32,
+};
+
+const EntityBasisPResult = struct {
+    p: Vec2,
+    scale: f32,
 };
 
 pub inline fn pushRenderElement(
@@ -180,7 +189,7 @@ pub inline fn pushBitmap(
         );
 
         entry.entity_basis.offset = new_offset;
-        entry.color = color;
+        entry.color = Vec4.scale(&color, group.global_alpha);
     }
 }
 
@@ -278,17 +287,22 @@ inline fn getRenderEntityBasisP(
     render_group: *RenderGroup,
     entity_basis: *align(@alignOf(void)) RenderEntityBasis,
     screen_center: Vec2,
-) Vec2 {
+) EntityBasisPResult {
     // TODO: Figure out exactly how z-based XY displacement should work
 
     const entity_base_p = Vec3.scale(&entity_basis.basis.p, render_group.meters_to_pixels);
-    const z_fudge = 1.0 + 0.1 * entity_base_p.z();
-    const entity_ground_point = Vec2.add(&screen_center, &Vec2.scale(&entity_base_p.xy(), z_fudge));
-    const offset = vec2(entity_basis.offset.v[0], entity_basis.offset.v[1]);
-    const result = Vec2.add(
-        &Vec2.add(&entity_ground_point, &offset),
-        &vec2(0, entity_base_p.z() + entity_basis.offset.v[2]),
+    const z_fudge = 1.0 + 0.0015 * entity_base_p.z();
+    const offset: Vec3 = entity_basis.offset;
+    const entity_ground_point = Vec2.add(
+        &screen_center,
+        &Vec2.scale(
+            &Vec2.add(&entity_base_p.xy(), &offset.xy()),
+            z_fudge,
+        ),
     );
+    const center = entity_ground_point; // Vec2.add(&entity_ground_point, &vec2(0, entity_base_p.z() + offset.z()));
+
+    const result = EntityBasisPResult{ .p = center, .scale = z_fudge };
 
     return result;
 }
@@ -301,6 +315,8 @@ pub fn renderGroupToOutput(
         0.5 * @as(f32, @floatFromInt(output_target.width)),
         0.5 * @as(f32, @floatFromInt(output_target.height)),
     );
+
+    const pixels_to_meters = 1.0 / render_group.meters_to_pixels;
 
     var base: usize = 0;
     while (base < render_group.push_buffer_size) : (base += @sizeOf(RenderGroupEntryHeader)) {
@@ -329,9 +345,9 @@ pub fn renderGroupToOutput(
             },
             .bitmap => {
                 const entry = @as(*align(@alignOf(void)) RenderEntryBitmap, @ptrCast(data));
-                const p = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
+                const basis = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
 
-                if (true)
+                if (true) {
                     if (entry.bitmap) |bitmap| {
                         // NOTE: With Casey's implementation, there will be one iteration of the game
                         // loop when a sword has transitioned from spatial to non_spatial during which
@@ -340,23 +356,41 @@ pub fn renderGroupToOutput(
                         // important. An attempt to draw at that position in this case will cause an
                         // integer part of floating point value out of bounds panic.
                         if (!std.meta.eql(entry.entity_basis.basis.p.v, ety.invalidPos().v)) {
-                            drawBitmap(output_target, bitmap, p.x(), p.y(), entry.color.v[3]);
+                            if (false) {
+                                drawBitmap(output_target, bitmap, basis.p.x(), basis.p.y(), entry.color.v[3]);
+                            } else {
+                                drawRectangleSlowly(
+                                    output_target,
+                                    basis.p,
+                                    Vec2.scale(&vec2(@floatFromInt(bitmap.width), 0), basis.scale),
+                                    Vec2.scale(&vec2(0, @floatFromInt(bitmap.height)), basis.scale),
+                                    entry.color,
+                                    bitmap,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    pixels_to_meters,
+                                );
+                            }
                         }
                     } else unreachable;
+                }
 
                 base += @sizeOf(@TypeOf(entry.*));
             },
             .rectangle => {
                 const entry: *align(@alignOf(void)) RenderEntryRectangle = @ptrCast(data);
-                const p = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
+                const basis = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
                 const dim = entry.dim;
 
-                drawRectangle(
-                    output_target,
-                    p,
-                    Vec2.add(@alignCast(&p), @alignCast(&dim)),
-                    entry.color,
-                );
+                if (false)
+                    drawRectangle(
+                        output_target,
+                        basis.p,
+                        Vec2.add(@alignCast(&basis.p), @alignCast(&Vec2.scale(&dim, basis.scale))),
+                        entry.color,
+                    );
 
                 base += @sizeOf(@TypeOf(entry.*));
             },
@@ -381,7 +415,7 @@ pub fn renderGroupToOutput(
                         entry.top,
                         entry.middle,
                         entry.bottom,
-                        1.0 / render_group.meters_to_pixels,
+                        pixels_to_meters,
                     );
 
                 const color = vec4(1, 1, 0, 1);
@@ -446,6 +480,7 @@ pub fn allocateRenderGroup(
     result.meters_to_pixels = meters_to_pixels;
     result.max_push_buffer_size = max_push_buffer_size;
     result.push_buffer_size = 0;
+    result.global_alpha = 1.0;
 
     return result;
 }
