@@ -384,7 +384,7 @@ pub fn renderGroupToOutput(
                 const basis = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
                 const dim = entry.dim;
 
-                if (false)
+                if (true)
                     drawRectangle(
                         output_target,
                         basis.p,

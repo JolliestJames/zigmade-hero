@@ -38,6 +38,17 @@ pub inline fn clamp01(value: f32) f32 {
     return result;
 }
 
+pub inline fn clamp01MapToRange(min: f32, t: f32, max: f32) f32 {
+    var result: f32 = 0;
+
+    const range = max - min;
+    if (range != 0) {
+        result = clamp01((t - min) / range);
+    }
+
+    return result;
+}
+
 pub inline fn safeRatioN(numerator: f32, divisor: f32, n: f32) f32 {
     var result: f32 = n;
 

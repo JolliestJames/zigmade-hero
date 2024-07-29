@@ -189,7 +189,6 @@ pub const GameState = struct {
     time: f32,
     test_diffuse: Bitmap,
     test_normal: Bitmap,
-    z_offset: f32,
 };
 
 const TransientState = struct {
@@ -1244,12 +1243,7 @@ pub export fn updateAndRender(
 
         // TODO: Can we just use Zig's own arena allocator?
         // TODO: Let's start partitioning our memory space
-        initializeArena(
-            &game_state.world_arena,
-            memory.permanent_storage_size - @sizeOf(GameState),
-            memory.permanent_storage + @sizeOf(GameState),
-        );
-
+        initializeArena(&game_state.world_arena, memory.permanent_storage_size - @sizeOf(GameState), memory.permanent_storage + @sizeOf(GameState));
         defer checkArena(&game_state.world_arena);
 
         // NOTE: Reserve entity slot 0 as the null entity
@@ -1345,19 +1339,19 @@ pub export fn updateAndRender(
 
             door_direction = random.choice(
                 &series,
-                if (door_up or door_down) 2 else 3,
+                if (door_up or door_down) 2 else 4,
             );
 
             var created_z_door = false;
 
-            if (door_direction == 2) {
-                created_z_door = true;
+            door_direction = 3;
 
-                if (abs_tile_z == screen_base_z) {
-                    door_up = true;
-                } else {
-                    door_down = true;
-                }
+            if (door_direction == 3) {
+                created_z_door = true;
+                door_down = true;
+            } else if (door_direction == 2) {
+                created_z_door = true;
+                door_up = true;
             } else if (door_direction == 1) {
                 door_right = true;
             } else {
@@ -1401,15 +1395,13 @@ pub export fn updateAndRender(
                     }
 
                     if (should_be_door) {
-                        _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
+                        if ((tile_y % 2) == 0 and (tile_x % 2) == 0)
+                            _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
                     } else if (created_z_door) {
-                        if (tile_x == 10 and tile_y == 5) {
-                            _ = addStair(
-                                game_state,
-                                abs_tile_x,
-                                abs_tile_y,
-                                if (door_down) abs_tile_z - 1 else abs_tile_z,
-                            );
+                        if ((@mod(abs_tile_z, 2) == 0 and tile_x == 10 and tile_y == 5) or
+                            (@mod(abs_tile_z, 2) != 0 and tile_x == 6 and tile_y == 5))
+                        {
+                            _ = addStair(game_state, abs_tile_x, abs_tile_y, if (door_down) abs_tile_z - 1 else abs_tile_z);
                         }
                     }
                 }
@@ -1429,11 +1421,10 @@ pub export fn updateAndRender(
             door_right = false;
             door_top = false;
 
-            if (door_direction == 2) {
-                if (abs_tile_z == screen_base_z)
-                    abs_tile_z = screen_base_z + 1
-                else
-                    abs_tile_z = screen_base_z;
+            if (door_direction == 3) {
+                abs_tile_z -= 1;
+            } else if (door_direction == 2) {
+                abs_tile_z += 1;
             } else if (door_direction == 1) {
                 screen_x += 1;
             } else {
@@ -1489,12 +1480,7 @@ pub export fn updateAndRender(
     var transient_state: *TransientState = @alignCast(@ptrCast(memory.transient_storage));
 
     if (!transient_state.is_initialized) {
-        initializeArena(
-            &transient_state.arena,
-            memory.transient_storage_size - @sizeOf(TransientState),
-            memory.transient_storage + @sizeOf(TransientState),
-        );
-
+        initializeArena(&transient_state.arena, memory.transient_storage_size - @sizeOf(TransientState), memory.transient_storage + @sizeOf(TransientState));
         defer checkArena(&transient_state.arena);
 
         // TODO: Pick a real number here
@@ -1622,34 +1608,20 @@ pub export fn updateAndRender(
                 hero.dz = 3.0;
             }
 
-            if (false) {
-                if (controller.buttons.map.action_up.ended_down) {
-                    hero.d_sword = vec2(0, 1);
-                }
+            if (controller.buttons.map.action_up.ended_down) {
+                hero.d_sword = vec2(0, 1);
+            }
 
-                if (controller.buttons.map.action_down.ended_down) {
-                    hero.d_sword = vec2(0, -1);
-                }
+            if (controller.buttons.map.action_down.ended_down) {
+                hero.d_sword = vec2(0, -1);
+            }
 
-                if (controller.buttons.map.action_left.ended_down) {
-                    hero.d_sword = vec2(-1, 0);
-                }
+            if (controller.buttons.map.action_left.ended_down) {
+                hero.d_sword = vec2(-1, 0);
+            }
 
-                if (controller.buttons.map.action_right.ended_down) {
-                    hero.d_sword = vec2(1, 0);
-                }
-            } else {
-                var zoom_rate: f32 = 0.0;
-
-                if (controller.buttons.map.action_up.ended_down) {
-                    zoom_rate = 1;
-                }
-
-                if (controller.buttons.map.action_down.ended_down) {
-                    zoom_rate = -1;
-                }
-
-                game_state.z_offset += zoom_rate * input.dt_for_frame;
+            if (controller.buttons.map.action_right.ended_down) {
+                hero.d_sword = vec2(1, 0);
             }
         }
     }
@@ -1668,8 +1640,6 @@ pub export fn updateAndRender(
         game_state.meters_to_pixels,
     );
 
-    render_group.global_alpha = 1.0; // math.clamp01(1.0 - game_state.z_offset);
-
     const draw_buffer = &Bitmap{
         .width = buffer.width,
         .height = buffer.height,
@@ -1687,27 +1657,30 @@ pub export fn updateAndRender(
     const screen_width_in_meters = @as(f32, @floatFromInt(draw_buffer.width)) * pixels_to_meters;
     const screen_height_in_meters = @as(f32, @floatFromInt(draw_buffer.height)) * pixels_to_meters;
 
-    const camera_bounds_in_meters = Rectangle3.centerDim(
+    var camera_bounds_in_meters = Rectangle3.centerDim(
         &Vec3.splat(0),
         &vec3(screen_width_in_meters, screen_height_in_meters, 0),
     );
 
-    for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
-        var ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
-
-        if (world.isValid(&ground_buffer.p)) {
-            var bitmap = &ground_buffer.bitmap;
-            const delta = world.subtract(game_world, &ground_buffer.p, &game_state.camera_p);
-            bitmap.alignment = Vec2.fromInt(@divFloor(bitmap.width, 2), @divFloor(bitmap.height, 2));
-
-            var basis: *RenderBasis = pushStruct(&transient_state.arena, RenderBasis);
-            render_group.default_basis = basis;
-            basis.p = Vec3.add(&delta, &vec3(0, 0, game_state.z_offset));
-            render.pushBitmap(render_group, bitmap, Vec3.splat(0), Vec4.splat(1));
-        }
-    }
+    camera_bounds_in_meters.min.v[2] = -3.0 * game_state.typical_floor_height;
+    camera_bounds_in_meters.max.v[2] = 1 * game_state.typical_floor_height;
 
     if (false) {
+        for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
+            var ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
+
+            if (world.isValid(&ground_buffer.p)) {
+                var bitmap = &ground_buffer.bitmap;
+                const delta = world.subtract(game_world, &ground_buffer.p, &game_state.camera_p);
+                bitmap.alignment = Vec2.fromInt(@divFloor(bitmap.width, 2), @divFloor(bitmap.height, 2));
+
+                var basis: *RenderBasis = pushStruct(&transient_state.arena, RenderBasis);
+                render_group.default_basis = basis;
+                basis.p = delta; // Vec3.add(&delta, &vec3(0, 0, game_state.z_offset));
+                render.pushBitmap(render_group, bitmap, Vec3.splat(0), Vec4.splat(1));
+            }
+        }
+
         const min_chunk_p = world.mapIntoChunkSpace(
             game_world,
             game_state.camera_p,
@@ -1755,11 +1728,7 @@ pub export fn updateAndRender(
                                 maybe_furthest_buffer = null;
                                 break;
                             } else if (world.isValid(&ground_buffer.p)) {
-                                var d = world.subtract(
-                                    game_world,
-                                    &ground_buffer.p,
-                                    &game_state.camera_p,
-                                );
+                                var d = world.subtract(game_world, &ground_buffer.p, &game_state.camera_p);
 
                                 const buffer_length_sq = Vec2.lengthSquared(&d.xy());
 
@@ -1798,21 +1767,18 @@ pub export fn updateAndRender(
     }
 
     // TODO: How big do we actually want to expand here?
-    const sim_bounds_expansion = Vec3.splat(15);
+    // TODO: Do we want to simulate upper floors, etc.
+    const sim_bounds_expansion = vec3(15, 15, 0);
     const sim_bounds = Rectangle3.addRadius(&camera_bounds_in_meters, &sim_bounds_expansion);
     const sim_memory = beginTemporaryMemory(&transient_state.arena);
     defer endTemporaryMemory(sim_memory);
 
-    var region = sim.beginSim(
-        &transient_state.arena,
-        game_state,
-        game_world,
-        game_state.camera_p,
-        sim_bounds,
-        input.dt_for_frame,
-    );
-
+    var sim_center_p = game_state.camera_p;
+    var region = sim.beginSim(&transient_state.arena, game_state, game_world, sim_center_p, sim_bounds, input.dt_for_frame);
     defer sim.endSim(region, game_state);
+
+    // NOTE: This is the camera position relative to the origin of this region
+    const camera_p = world.subtract(game_world, &game_state.camera_p, &sim_center_p);
 
     // TODO: Move this out into the zigmade_entity
     for (0..region.entity_count) |index| {
@@ -1833,6 +1799,21 @@ pub export fn updateAndRender(
 
             var basis: *RenderBasis = pushStruct(&transient_state.arena, RenderBasis);
             render_group.default_basis = basis;
+
+            // TODO: Probably indicates we want to separate update and render for entities
+            // sometime soon
+            const camera_relative_ground_p = Vec3.sub(&sim.getEntityGroundPoint(entity), &camera_p);
+            const fade_top_end_z: f32 = 0.75 * game_state.typical_floor_height;
+            const fade_top_start_z: f32 = 0.5 * game_state.typical_floor_height;
+            const fade_bottom_start_z: f32 = -2.0 * game_state.typical_floor_height;
+            const fade_bottom_end_z: f32 = -2.25 * game_state.typical_floor_height;
+            render_group.global_alpha = 1.0;
+
+            if (camera_relative_ground_p.z() > fade_top_start_z) {
+                render_group.global_alpha = math.clamp01MapToRange(fade_top_end_z, camera_relative_ground_p.z(), fade_top_start_z);
+            } else if (camera_relative_ground_p.z() < fade_bottom_start_z) {
+                render_group.global_alpha = math.clamp01MapToRange(fade_bottom_end_z, camera_relative_ground_p.z(), fade_bottom_start_z);
+            }
 
             var hero_bitmaps = &game_state.hero_bitmaps[entity.facing_direction];
 
@@ -1991,9 +1972,11 @@ pub export fn updateAndRender(
                 sim.moveEntity(game_state, region, entity, input.dt_for_frame, &move_spec, ddp);
             }
 
-            basis.p = Vec3.add(&sim.getEntityGroundPoint(entity), &vec3(0, 0, game_state.z_offset));
+            basis.p = sim.getEntityGroundPoint(entity);
         }
     }
+
+    render_group.global_alpha = 1.0;
 
     if (false) {
         game_state.time += input.dt_for_frame;

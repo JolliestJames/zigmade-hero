@@ -7,6 +7,7 @@ const ety = @import("zigmade_entity.zig");
 
 const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
+const vec3 = math.vec3;
 const Rectangle2 = math.Rectangle2;
 const Rectangle3 = math.Rectangle3;
 const MemoryArena = game.MemoryArena;
@@ -322,18 +323,10 @@ pub fn beginSim(
 
     sim_region.world = game_world;
     sim_region.origin = origin;
-    sim_region.updatable_bounds = Rectangle3.addRadius(
-        &bounds,
-        &Vec3.splat(sim_region.max_entity_radius),
-    );
-
+    sim_region.updatable_bounds = Rectangle3.addRadius(&bounds, &vec3(sim_region.max_entity_radius, sim_region.max_entity_radius, 0));
     sim_region.bounds = Rectangle3.addRadius(
         &sim_region.updatable_bounds,
-        &Vec3.init(
-            update_safety_margin,
-            update_safety_margin,
-            update_safety_margin_z,
-        ),
+        &vec3(update_safety_margin, update_safety_margin, update_safety_margin_z),
     );
 
     // TODO: need to be more specific about entity counts
@@ -366,13 +359,7 @@ pub fn beginSim(
             var chunk_x = min_chunk_p.chunk_x;
 
             while (chunk_x <= max_chunk_p.chunk_x) : (chunk_x += 1) {
-                const chunk = world.getWorldChunk(
-                    game_world,
-                    chunk_x,
-                    chunk_y,
-                    chunk_z,
-                    null,
-                );
+                const chunk = world.getWorldChunk(game_world, chunk_x, chunk_y, chunk_z, null);
 
                 if (chunk) |c| {
                     var block: ?*world.WorldEntityBlock = &c.first_block;
@@ -429,13 +416,7 @@ pub fn endSim(
             else
                 world.mapIntoChunkSpace(game_world, region.origin, entity.p);
 
-            world.changeEntityLocation(
-                &game_state.world_arena,
-                game_world,
-                entity.storage_index,
-                &game_state.low_entities[entity.storage_index],
-                &new_p,
-            );
+            world.changeEntityLocation(&game_state.world_arena, game_world, entity.storage_index, &game_state.low_entities[entity.storage_index], &new_p);
 
             if (entity.storage_index == game_state.camera_entity_index) {
                 var new_camera_p = game_state.camera_p;
@@ -459,9 +440,9 @@ pub fn endSim(
                         new_camera_p.abs_tile_y -%= 9;
                     }
                 } else {
-                    const z_offset = new_camera_p.offset_.z();
+                    //const z_offset = new_camera_p.offset_.z();
                     new_camera_p = stored.p;
-                    new_camera_p.offset_.v[2] = z_offset;
+                    //new_camera_p.offset_.v[2] = z_offset;
                 }
 
                 game_state.camera_p = new_camera_p;
@@ -766,7 +747,7 @@ pub fn moveEntity(
     acceleration = Vec3.add(&acceleration, &drag);
 
     if (!entity.flags.z_supported) {
-        acceleration = Vec3.add(&acceleration, &Vec3.init(0, 0, -9.8));
+        acceleration = Vec3.add(&acceleration, &vec3(0, 0, -9.8));
     }
 
     var player_d = Vec3.add(
@@ -831,7 +812,7 @@ pub fn moveEntity(
                             for (0..test_entity.collision.volume_count) |test_volume_index| {
                                 var test_volume = &test_entity.collision.volumes.?[test_volume_index];
 
-                                const minkowski_diameter = Vec3.init(
+                                const minkowski_diameter = vec3(
                                     test_volume.dim.x() + volume.dim.x(),
                                     test_volume.dim.y() + volume.dim.y(),
                                     test_volume.dim.z() + volume.dim.z(),
@@ -848,46 +829,10 @@ pub fn moveEntity(
                                 // TODO: Do we want an open inclusion at the max corner?
                                 if (rel.z() >= min_c.z() and rel.z() < max_c.z()) {
                                     const walls = [_]TestWall{
-                                        TestWall.init(
-                                            min_c.x(),
-                                            rel.x(),
-                                            rel.y(),
-                                            player_d.x(),
-                                            player_d.y(),
-                                            min_c.y(),
-                                            max_c.y(),
-                                            Vec3.init(-1, 0, 0),
-                                        ),
-                                        TestWall.init(
-                                            max_c.x(),
-                                            rel.x(),
-                                            rel.y(),
-                                            player_d.x(),
-                                            player_d.y(),
-                                            min_c.y(),
-                                            max_c.y(),
-                                            Vec3.init(1, 0, 0),
-                                        ),
-                                        TestWall.init(
-                                            min_c.y(),
-                                            rel.y(),
-                                            rel.x(),
-                                            player_d.y(),
-                                            player_d.x(),
-                                            min_c.x(),
-                                            max_c.x(),
-                                            Vec3.init(0, -1, 0),
-                                        ),
-                                        TestWall.init(
-                                            max_c.y(),
-                                            rel.y(),
-                                            rel.x(),
-                                            player_d.y(),
-                                            player_d.x(),
-                                            min_c.x(),
-                                            max_c.x(),
-                                            Vec3.init(0, 1, 0),
-                                        ),
+                                        TestWall.init(min_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), min_c.y(), max_c.y(), vec3(-1, 0, 0)),
+                                        TestWall.init(max_c.x(), rel.x(), rel.y(), player_d.x(), player_d.y(), min_c.y(), max_c.y(), vec3(1, 0, 0)),
+                                        TestWall.init(min_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), min_c.x(), max_c.x(), vec3(0, -1, 0)),
+                                        TestWall.init(max_c.y(), rel.y(), rel.x(), player_d.y(), player_d.x(), min_c.x(), max_c.x(), vec3(0, 1, 0)),
                                     };
 
                                     if (test_entity.flags.traversable) {
@@ -978,11 +923,7 @@ pub fn moveEntity(
                 wall_normal = wall_normal_max;
             }
 
-            entity.p = Vec3.add(
-                &entity.p,
-                &Vec3.scale(&player_d, t_stop),
-            );
-
+            entity.p = Vec3.add(&entity.p, &Vec3.scale(&player_d, t_stop));
             distance_remaining -= t_stop * player_delta_length;
 
             if (hit_entity) |hit| {
