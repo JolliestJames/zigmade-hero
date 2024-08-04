@@ -129,8 +129,9 @@ const BilinearSample = struct {
 };
 
 const EntityBasisPResult = struct {
-    p: Vec2,
-    scale: f32,
+    p: Vec2 = Vec2.splat(0),
+    scale: f32 = 0,
+    valid: bool = false,
 };
 
 pub inline fn pushRenderElement(
@@ -288,21 +289,29 @@ inline fn getRenderEntityBasisP(
     entity_basis: *align(@alignOf(void)) RenderEntityBasis,
     screen_center: Vec2,
 ) EntityBasisPResult {
-    // TODO: Figure out exactly how z-based XY displacement should work
+    var result: EntityBasisPResult = .{};
 
     const entity_base_p = Vec3.scale(&entity_basis.basis.p, render_group.meters_to_pixels);
-    const z_fudge = 1.0 + 0.0015 * entity_base_p.z();
-    const offset: Vec3 = entity_basis.offset;
-    const entity_ground_point = Vec2.add(
-        &screen_center,
-        &Vec2.scale(
-            &Vec2.add(&entity_base_p.xy(), &offset.xy()),
-            z_fudge,
-        ),
-    );
-    const center = entity_ground_point; // Vec2.add(&entity_ground_point, &vec2(0, entity_base_p.z() + offset.z()));
+    const entity_base_offset = entity_basis.offset;
 
-    const result = EntityBasisPResult{ .p = center, .scale = z_fudge };
+    // TODO: The values of 20 and 20 seem wrong, did we mess something up?
+    const focal_length = render_group.meters_to_pixels * 20.0;
+    const camera_distance_above_target = render_group.meters_to_pixels * 20.0;
+    const distance_to_pz = camera_distance_above_target - entity_base_p.z();
+    const near_clip_plane = render_group.meters_to_pixels * 0.2;
+
+    const raw_xy = Vec2.add(&entity_base_p.xy(), &entity_base_offset.xy());
+    const raw_xyz = vec3(raw_xy.x(), raw_xy.y(), 1.0);
+
+    if (distance_to_pz > near_clip_plane) {
+        const projected_xy = Vec3.scale(&Vec3.scale(&raw_xyz, focal_length), 1.0 / distance_to_pz);
+
+        result = .{
+            .p = Vec2.add(&screen_center, &projected_xy.xy()),
+            .scale = projected_xy.z(),
+            .valid = true,
+        };
+    }
 
     return result;
 }

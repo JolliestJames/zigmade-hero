@@ -1231,9 +1231,9 @@ pub export fn updateAndRender(
         const tiles_per_width = 17;
         const tiles_per_height = 9;
 
-        game_state.typical_floor_height = 3;
-        game_state.meters_to_pixels = 42;
-        game_state.pixels_to_meters = 1 / game_state.meters_to_pixels;
+        game_state.typical_floor_height = 3.0;
+        game_state.meters_to_pixels = 42.0;
+        game_state.pixels_to_meters = 1.0 / game_state.meters_to_pixels;
 
         const world_chunk_dim_in_meters = vec3(
             game_state.pixels_to_meters * @as(f32, @floatFromInt(ground_buffer_width)),
@@ -1241,7 +1241,7 @@ pub export fn updateAndRender(
             game_state.typical_floor_height,
         );
 
-        // TODO: Can we just use Zig's own arena allocator?
+        // TODO: Can we just use a Zig allocator?
         // TODO: Let's start partitioning our memory space
         initializeArena(&game_state.world_arena, memory.permanent_storage_size - @sizeOf(GameState), memory.permanent_storage + @sizeOf(GameState));
         defer checkArena(&game_state.world_arena);
@@ -1395,7 +1395,7 @@ pub export fn updateAndRender(
                     }
 
                     if (should_be_door) {
-                        if ((tile_y % 2) == 0 and (tile_x % 2) == 0)
+                        if ((tile_y % 2) == 1 or (tile_x % 2) == 1)
                             _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
                     } else if (created_z_door) {
                         if ((@mod(abs_tile_z, 2) == 0 and tile_x == 10 and tile_y == 5) or
@@ -1959,10 +1959,12 @@ pub export fn updateAndRender(
                     drawHitPoints(entity, render_group);
                 },
                 .space => {
-                    for (0..entity.collision.volume_count) |volume_index| {
-                        const volume = &entity.collision.volumes.?[volume_index];
+                    if (false) {
+                        for (0..entity.collision.volume_count) |volume_index| {
+                            const volume = &entity.collision.volumes.?[volume_index];
 
-                        render.pushRectOutline(render_group, Vec3.sub(&volume.offset_p, &vec3(0, 0, 0.5 * volume.dim.z())), volume.dim.xy(), vec4(0, 0.5, 1, 1));
+                            render.pushRectOutline(render_group, Vec3.sub(&volume.offset_p, &vec3(0, 0, 0.5 * volume.dim.z())), volume.dim.xy(), vec4(0, 0.5, 1, 1));
+                        }
                     }
                 },
                 else => unreachable,
