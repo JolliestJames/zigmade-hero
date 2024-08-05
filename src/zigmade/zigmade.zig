@@ -173,8 +173,6 @@ pub const GameState = struct {
     tree: Bitmap,
     sword: Bitmap,
     stairwell: Bitmap,
-    meters_to_pixels: f32,
-    pixels_to_meters: f32,
     // TODO: Must be power of two
     collision_rule_hash: [256]?*PairwiseCollisionRule,
     first_free_collision_rule: ?*PairwiseCollisionRule,
@@ -292,7 +290,8 @@ fn debugLoadBMP(
         result.memory = pixels;
         result.width = @intCast(header.width);
         result.height = @intCast(header.height);
-        result.alignment = topDownAlign(&result, Vec2.fromInt(align_x, top_down_align_y));
+        result.align_percentage = topDownAlign(&result, Vec2.fromInt(align_x, top_down_align_y));
+        result.width_over_height = math.safeRatio0(@floatFromInt(result.width), @floatFromInt(result.height));
 
         assert(result.height >= 0);
         assert(header.compression == 3);
@@ -901,11 +900,7 @@ fn fillGroundChunk(
 ) void {
     // TODO: Decide what our pushbuffer size is
     const ground_memory = beginTemporaryMemory(&transient_state.arena);
-    const render_group = render.allocateRenderGroup(
-        &transient_state.arena,
-        platform.Megabytes(4),
-        1,
-    );
+    const render_group = render.allocateRenderGroup(&transient_state.arena, platform.Megabytes(4));
 
     render.clear(render_group, vec4(1, 1, 0, 1));
 
@@ -960,7 +955,7 @@ fn fillGroundChunk(
                 var p = Vec2.sub(&offset, &bitmap_center);
                 p = Vec2.add(&p, &center);
 
-                render.pushBitmap(render_group, stamp, vec3(p.x(), p.y(), 0), Vec4.splat(1));
+                render.pushBitmap(render_group, stamp, 1.0, vec3(p.x(), p.y(), 0), Vec4.splat(1));
             }
         }
     }
@@ -1004,7 +999,7 @@ fn fillGroundChunk(
                 var p = Vec2.sub(&offset, &bitmap_center);
                 p = Vec2.add(&p, &center);
 
-                render.pushBitmap(render_group, stamp, vec3(p.x(), p.y(), 0), Vec4.splat(1));
+                render.pushBitmap(render_group, stamp, 1.0, vec3(p.x(), p.y(), 0), Vec4.splat(1));
             }
         }
     }
@@ -1195,15 +1190,18 @@ fn topDownAlign(bitmap: *Bitmap, alignment: Vec2) Vec2 {
 
     new_align.v[1] = @as(f32, @floatFromInt(bitmap.height - 1)) - alignment.y();
 
+    new_align.v[0] = math.safeRatio0(new_align.x(), @floatFromInt(bitmap.width));
+    new_align.v[1] = math.safeRatio0(new_align.y(), @floatFromInt(bitmap.height));
+
     return new_align;
 }
 
 fn setTopDownAlign(bitmap: *HeroBitmaps, alignment: Vec2) void {
     const new_alignment = topDownAlign(&bitmap.head, alignment);
 
-    bitmap.head.alignment = new_alignment;
-    bitmap.cape.alignment = new_alignment;
-    bitmap.torso.alignment = new_alignment;
+    bitmap.head.align_percentage = new_alignment;
+    bitmap.cape.align_percentage = new_alignment;
+    bitmap.torso.align_percentage = new_alignment;
 }
 
 // GAME NEEDS FOUR THINGS
@@ -1223,8 +1221,10 @@ pub export fn updateAndRender(
     const ground_buffer_width = 256;
     const ground_buffer_height = 256;
 
-    assert(@sizeOf(GameState) <= memory.permanent_storage_size);
+    // TODO: Remove this
+    const pixels_to_meters = 1.0 / 42.0;
 
+    assert(@sizeOf(GameState) <= memory.permanent_storage_size);
     var game_state: *GameState = @alignCast(@ptrCast(memory.permanent_storage));
 
     if (!memory.is_initialized) {
@@ -1232,12 +1232,10 @@ pub export fn updateAndRender(
         const tiles_per_height = 9;
 
         game_state.typical_floor_height = 3.0;
-        game_state.meters_to_pixels = 42.0;
-        game_state.pixels_to_meters = 1.0 / game_state.meters_to_pixels;
 
         const world_chunk_dim_in_meters = vec3(
-            game_state.pixels_to_meters * @as(f32, @floatFromInt(ground_buffer_width)),
-            game_state.pixels_to_meters * @as(f32, @floatFromInt(ground_buffer_height)),
+            pixels_to_meters * @as(f32, @floatFromInt(ground_buffer_width)),
+            pixels_to_meters * @as(f32, @floatFromInt(ground_buffer_height)),
             game_state.typical_floor_height,
         );
 
@@ -1559,8 +1557,6 @@ pub export fn updateAndRender(
 
     const game_world = game_state.world.?;
 
-    const pixels_to_meters = 1 / game_state.meters_to_pixels;
-
     //
     // NOTE: Movement
     //
@@ -1634,11 +1630,7 @@ pub export fn updateAndRender(
     defer endTemporaryMemory(render_memory);
 
     // TODO: Decide what our pushbuffer size is
-    var render_group = render.allocateRenderGroup(
-        &transient_state.arena,
-        platform.Megabytes(4),
-        game_state.meters_to_pixels,
-    );
+    var render_group = render.allocateRenderGroup(&transient_state.arena, platform.Megabytes(4));
 
     const draw_buffer = &Bitmap{
         .width = buffer.width,
@@ -1677,7 +1669,7 @@ pub export fn updateAndRender(
                 var basis: *RenderBasis = pushStruct(&transient_state.arena, RenderBasis);
                 render_group.default_basis = basis;
                 basis.p = delta; // Vec3.add(&delta, &vec3(0, 0, game_state.z_offset));
-                render.pushBitmap(render_group, bitmap, Vec3.splat(0), Vec4.splat(1));
+                render.pushBitmap(render_group, bitmap, 1.0, Vec3.splat(0), Vec4.splat(1));
             }
         }
 
@@ -1775,6 +1767,9 @@ pub export fn updateAndRender(
 
     var sim_center_p = game_state.camera_p;
     var region = sim.beginSim(&transient_state.arena, game_state, game_world, sim_center_p, sim_bounds, input.dt_for_frame);
+    // TODO: Make sure we hoist the camera update out to a place where the renderer can know
+    // about the location of the camera at the end of the frame so there isn't a frame of lag
+    // in camera updating compared to the hero
     defer sim.endSim(region, game_state);
 
     // NOTE: This is the camera position relative to the origin of this region
@@ -1869,15 +1864,16 @@ pub export fn updateAndRender(
                     }
 
                     // TODO: z
-                    render.pushBitmap(render_group, &game_state.shadow, Vec3.splat(0), vec4(1, 1, 1, shadow_alpha));
-                    render.pushBitmap(render_group, &hero_bitmaps.torso, Vec3.splat(0), Vec4.splat(1));
-                    render.pushBitmap(render_group, &hero_bitmaps.cape, Vec3.splat(0), Vec4.splat(1));
-                    render.pushBitmap(render_group, &hero_bitmaps.head, Vec3.splat(0), Vec4.splat(1));
+                    const hero_size_c = 2.5;
+                    render.pushBitmap(render_group, &game_state.shadow, hero_size_c * 1.0, Vec3.splat(0), vec4(1, 1, 1, shadow_alpha));
+                    render.pushBitmap(render_group, &hero_bitmaps.torso, hero_size_c * 1.2, Vec3.splat(0), Vec4.splat(1));
+                    render.pushBitmap(render_group, &hero_bitmaps.cape, hero_size_c * 1.2, Vec3.splat(0), Vec4.splat(1));
+                    render.pushBitmap(render_group, &hero_bitmaps.head, hero_size_c * 1.2, Vec3.splat(0), Vec4.splat(1));
 
                     drawHitPoints(entity, render_group);
                 },
                 .wall => {
-                    render.pushBitmap(render_group, &game_state.tree, Vec3.splat(0), Vec4.splat(1));
+                    render.pushBitmap(render_group, &game_state.tree, 2.5, Vec3.splat(0), Vec4.splat(1));
                 },
                 .stairwell => {
                     render.pushRect(render_group, Vec3.splat(0), entity.walkable_dim, vec4(1, 0.5, 0, 1));
@@ -1903,8 +1899,8 @@ pub export fn updateAndRender(
                         ety.makeEntityNonSpatial(entity);
                     }
 
-                    render.pushBitmap(render_group, &game_state.shadow, Vec3.splat(0), vec4(0, 0, 0, shadow_alpha));
-                    render.pushBitmap(render_group, &game_state.sword, Vec3.splat(0), Vec4.splat(1));
+                    render.pushBitmap(render_group, &game_state.shadow, 0.5, Vec3.splat(0), vec4(0, 0, 0, shadow_alpha));
+                    render.pushBitmap(render_group, &game_state.sword, 0.5, Vec3.splat(0), Vec4.splat(1));
                 },
                 .familiar => {
                     var maybe_closest_hero: ?*Entity = null;
@@ -1950,12 +1946,12 @@ pub export fn updateAndRender(
 
                     const bob_sin = @sin(2 * entity.t_bob);
                     const shadow_color = vec4(1, 1, 1, 0.5 * shadow_alpha + 0.2 * bob_sin);
-                    render.pushBitmap(render_group, &game_state.shadow, Vec3.splat(0), shadow_color);
-                    render.pushBitmap(render_group, &hero_bitmaps.head, vec3(0, 0, 0.25 * bob_sin), Vec4.splat(1));
+                    render.pushBitmap(render_group, &game_state.shadow, 2.5, Vec3.splat(0), shadow_color);
+                    render.pushBitmap(render_group, &hero_bitmaps.head, 2.5, vec3(0, 0, 0.25 * bob_sin), Vec4.splat(1));
                 },
                 .monster => {
-                    render.pushBitmap(render_group, &game_state.shadow, Vec3.splat(0), vec4(0, 0, 0, shadow_alpha));
-                    render.pushBitmap(render_group, &hero_bitmaps.torso, Vec3.splat(0), Vec4.splat(1));
+                    render.pushBitmap(render_group, &game_state.shadow, 4.5, Vec3.splat(0), vec4(0, 0, 0, shadow_alpha));
+                    render.pushBitmap(render_group, &hero_bitmaps.torso, 4.5, Vec3.splat(0), Vec4.splat(1));
                     drawHitPoints(entity, render_group);
                 },
                 .space => {
@@ -1980,6 +1976,7 @@ pub export fn updateAndRender(
 
     render_group.global_alpha = 1.0;
 
+    // NOTE: Normal map sampling
     if (false) {
         game_state.time += input.dt_for_frame;
 

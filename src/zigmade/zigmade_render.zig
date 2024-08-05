@@ -6,9 +6,10 @@
 // (meaning that the first row pointer points to the bottom-most row when
 // viewed on screen)
 //
-// 3. Unless otherwise specified, all inputs to the renderer are in world
-// coordinates (meters), not pixels. Anything that is in pixel values will
-// be explicitly marked as such
+// 3. It is mandatory that all inputs to the renderer are in world
+// coordinates (meters), not pixels. If something absolutely has to be
+// specified in pixels, that will be marked explicitly in the API, but
+// this should be rare
 //
 // 4. z is a special coordinate because it is broken up into discrete slices,
 // and the renderer actually understands these slices. z slices are what control
@@ -39,7 +40,8 @@ const vec3 = math.vec3;
 const vec4 = math.vec4;
 
 pub const Bitmap = struct {
-    alignment: Vec2 = Vec2.splat(0),
+    align_percentage: Vec2 = Vec2.splat(0),
+    width_over_height: f32 = 0,
     width: i32,
     height: i32,
     pitch: i32,
@@ -87,6 +89,7 @@ pub const RenderEntrySaturation = extern struct {
 pub const RenderEntryBitmap = extern struct {
     bitmap: ?*Bitmap = null,
     entity_basis: RenderEntityBasis,
+    size: Vec2,
     color: Vec4,
 };
 
@@ -115,7 +118,6 @@ pub const RenderEntryCoordinateSystem = extern struct {
 pub const RenderGroup = struct {
     global_alpha: f32,
     default_basis: *RenderBasis,
-    meters_to_pixels: f32,
     max_push_buffer_size: usize,
     push_buffer_size: usize,
     push_buffer_base: [*]u8,
@@ -170,27 +172,23 @@ pub inline fn pushRenderElement_(
 pub inline fn pushBitmap(
     group: *RenderGroup,
     bitmap: *Bitmap,
+    height: f32,
     offset: Vec3,
     color: Vec4,
 ) void {
     const maybe_entry = pushRenderElement(group, RenderEntryBitmap, .bitmap);
 
     if (maybe_entry) |entry| {
-        const alignment = vec3(bitmap.alignment.x(), bitmap.alignment.y(), 0);
-
         entry.entity_basis.basis = group.default_basis;
         entry.bitmap = bitmap;
 
-        const new_offset = Vec3.sub(
-            &Vec3.scale(
-                &offset,
-                group.meters_to_pixels,
-            ),
-            &alignment,
-        );
+        const size = vec2(height * bitmap.width_over_height, height);
+        const alignment = Vec2.hadamard(&bitmap.align_percentage, &size);
+        const new_offset = Vec3.sub(&offset, &vec3(alignment.x(), alignment.y(), 0));
 
         entry.entity_basis.offset = new_offset;
         entry.color = Vec4.scale(&color, group.global_alpha);
+        entry.size = size;
     }
 }
 
@@ -204,17 +202,9 @@ pub inline fn pushRect(
 
     if (maybe_piece) |piece| {
         piece.entity_basis.basis = group.default_basis;
-
-        piece.entity_basis.offset = Vec3.scale(
-            &Vec3.sub(
-                &offset,
-                &vec3(dim.x() * 0.5, dim.y() * 0.5, 0),
-            ),
-            group.meters_to_pixels,
-        );
-
+        piece.entity_basis.offset = Vec3.sub(&offset, &vec3(dim.x() * 0.5, dim.y() * 0.5, 0));
         piece.color = color;
-        piece.dim = Vec2.scale(&dim, group.meters_to_pixels);
+        piece.dim = dim;
     }
 }
 
@@ -285,20 +275,21 @@ pub inline fn coordinateSystem(
 }
 
 inline fn getRenderEntityBasisP(
-    render_group: *RenderGroup,
+    _: *RenderGroup,
     entity_basis: *align(@alignOf(void)) RenderEntityBasis,
-    screen_center: Vec2,
+    screen_dim: Vec2,
+    meters_to_pixels: f32,
 ) EntityBasisPResult {
     var result: EntityBasisPResult = .{};
 
-    const entity_base_p = Vec3.scale(&entity_basis.basis.p, render_group.meters_to_pixels);
+    const screen_center = Vec2.scale(&screen_dim, 0.5);
+    const entity_base_p = entity_basis.basis.p;
     const entity_base_offset = entity_basis.offset;
 
-    // TODO: The values of 20 and 20 seem wrong, did we mess something up?
-    const focal_length = render_group.meters_to_pixels * 20.0;
-    const camera_distance_above_target = render_group.meters_to_pixels * 20.0;
+    const focal_length = 6.0;
+    const camera_distance_above_target = 5.0;
     const distance_to_pz = camera_distance_above_target - entity_base_p.z();
-    const near_clip_plane = render_group.meters_to_pixels * 0.2;
+    const near_clip_plane = 0.2;
 
     const raw_xy = Vec2.add(&entity_base_p.xy(), &entity_base_offset.xy());
     const raw_xyz = vec3(raw_xy.x(), raw_xy.y(), 1.0);
@@ -307,8 +298,8 @@ inline fn getRenderEntityBasisP(
         const projected_xy = Vec3.scale(&Vec3.scale(&raw_xyz, focal_length), 1.0 / distance_to_pz);
 
         result = .{
-            .p = Vec2.add(&screen_center, &projected_xy.xy()),
-            .scale = projected_xy.z(),
+            .p = Vec2.add(&screen_center, &Vec2.scale(&projected_xy.xy(), meters_to_pixels)),
+            .scale = meters_to_pixels * projected_xy.z(),
             .valid = true,
         };
     }
@@ -320,12 +311,11 @@ pub fn renderGroupToOutput(
     render_group: *RenderGroup,
     output_target: *const Bitmap,
 ) void {
-    const screen_center = vec2(
-        0.5 * @as(f32, @floatFromInt(output_target.width)),
-        0.5 * @as(f32, @floatFromInt(output_target.height)),
-    );
+    const screen_dim = vec2(@as(f32, @floatFromInt(output_target.width)), @as(f32, @floatFromInt(output_target.height)));
 
-    const pixels_to_meters = 1.0 / render_group.meters_to_pixels;
+    // TODO: Remove this
+    const meters_to_pixels = screen_dim.x() / 20.0;
+    const pixels_to_meters = 1.0 / meters_to_pixels;
 
     var base: usize = 0;
     while (base < render_group.push_buffer_size) : (base += @sizeOf(RenderGroupEntryHeader)) {
@@ -354,7 +344,7 @@ pub fn renderGroupToOutput(
             },
             .bitmap => {
                 const entry = @as(*align(@alignOf(void)) RenderEntryBitmap, @ptrCast(data));
-                const basis = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
+                const basis = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_dim, meters_to_pixels);
 
                 if (true) {
                     if (entry.bitmap) |bitmap| {
@@ -371,8 +361,8 @@ pub fn renderGroupToOutput(
                                 drawRectangleSlowly(
                                     output_target,
                                     basis.p,
-                                    Vec2.scale(&vec2(@floatFromInt(bitmap.width), 0), basis.scale),
-                                    Vec2.scale(&vec2(0, @floatFromInt(bitmap.height)), basis.scale),
+                                    Vec2.scale(&vec2(entry.size.v[0], 0), basis.scale),
+                                    Vec2.scale(&vec2(0, entry.size.v[1]), basis.scale),
                                     entry.color,
                                     bitmap,
                                     null,
@@ -390,7 +380,7 @@ pub fn renderGroupToOutput(
             },
             .rectangle => {
                 const entry: *align(@alignOf(void)) RenderEntryRectangle = @ptrCast(data);
-                const basis = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_center);
+                const basis = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_dim, meters_to_pixels);
                 const dim = entry.dim;
 
                 if (true)
@@ -474,7 +464,6 @@ pub fn renderGroupToOutput(
 pub fn allocateRenderGroup(
     arena: *MemoryArena,
     max_push_buffer_size: usize,
-    meters_to_pixels: f32,
 ) *RenderGroup {
     var result: *RenderGroup = game.pushStruct(arena, RenderGroup);
 
@@ -486,7 +475,6 @@ pub fn allocateRenderGroup(
 
     result.default_basis = game.pushStruct(arena, RenderBasis);
     result.default_basis.p = Vec3.splat(0);
-    result.meters_to_pixels = meters_to_pixels;
     result.max_push_buffer_size = max_push_buffer_size;
     result.push_buffer_size = 0;
     result.global_alpha = 1.0;
