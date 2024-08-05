@@ -255,16 +255,8 @@ pub inline fn entityOverlaps(
     volume: EntityCollisionVolume,
     rect: Rectangle3,
 ) bool {
-    const grown = Rectangle3.addRadius(
-        &rect,
-        &Vec3.scale(&volume.dim, 0.5),
-    );
-
-    const result = Rectangle3.isInRectangle(
-        &grown,
-        &Vec3.add(&pos, &volume.offset_p),
-    );
-
+    const grown = Rectangle3.addRadius(&rect, &Vec3.scale(&volume.dim, 0.5));
+    const result = Rectangle3.isInRectangle(&grown, &Vec3.add(&pos, &volume.offset_p));
     return result;
 }
 

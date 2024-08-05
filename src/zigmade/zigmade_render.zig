@@ -35,6 +35,7 @@ const MemoryArena = game.MemoryArena;
 const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
+const Rectangle2 = math.Rectangle2;
 const vec2 = math.vec2;
 const vec3 = math.vec3;
 const vec4 = math.vec4;
@@ -112,10 +113,21 @@ pub const RenderEntryCoordinateSystem = extern struct {
     bottom: ?*EnvironmentMap,
 };
 
+pub const RenderGroupCamera = struct {
+    // NOTE: Camera parameters
+    focal_length: f32,
+    distance_above_target: f32,
+};
+
 // TODO: This is dumb, this should just be part of
 // the renderer pushbuffer. Add correction of coordinates
 // in there and be done with it
 pub const RenderGroup = struct {
+    game_camera: RenderGroupCamera,
+    render_camera: RenderGroupCamera,
+    // NOTE: Translates meters on the monitor into pixels on the monitor
+    meters_to_pixels: f32,
+    monitor_half_dim_in_meters: Vec2,
     global_alpha: f32,
     default_basis: *RenderBasis,
     max_push_buffer_size: usize,
@@ -274,11 +286,37 @@ pub inline fn coordinateSystem(
     return maybe_entry.?;
 }
 
+inline fn unproject(
+    group: *const RenderGroup,
+    projected_xy: Vec2,
+    at_distance_from_camera: f32,
+) Vec2 {
+    const world_xy = Vec2.scale(&projected_xy, at_distance_from_camera / group.game_camera.focal_length);
+
+    return world_xy;
+}
+
+inline fn getCameraRectangleAtDistance(
+    group: *RenderGroup,
+    distance_from_camera: f32,
+) Rectangle2 {
+    const raw_xy = unproject(group, group.monitor_half_dim_in_meters, distance_from_camera);
+
+    const result = Rectangle2.centerHalfDim(&vec2(0, 0), &raw_xy);
+
+    return result;
+}
+
+pub inline fn getCameraRectangleAtTarget(group: *RenderGroup) Rectangle2 {
+    const result = getCameraRectangleAtDistance(group, group.game_camera.distance_above_target);
+
+    return result;
+}
+
 inline fn getRenderEntityBasisP(
-    _: *RenderGroup,
+    render_group: *RenderGroup,
     entity_basis: *align(@alignOf(void)) RenderEntityBasis,
     screen_dim: Vec2,
-    meters_to_pixels: f32,
 ) EntityBasisPResult {
     var result: EntityBasisPResult = .{};
 
@@ -286,20 +324,18 @@ inline fn getRenderEntityBasisP(
     const entity_base_p = entity_basis.basis.p;
     const entity_base_offset = entity_basis.offset;
 
-    const focal_length = 6.0;
-    const camera_distance_above_target = 5.0;
-    const distance_to_pz = camera_distance_above_target - entity_base_p.z();
+    const distance_to_pz = render_group.render_camera.distance_above_target - entity_base_p.z();
     const near_clip_plane = 0.2;
 
     const raw_xy = Vec2.add(&entity_base_p.xy(), &entity_base_offset.xy());
     const raw_xyz = vec3(raw_xy.x(), raw_xy.y(), 1.0);
 
     if (distance_to_pz > near_clip_plane) {
-        const projected_xy = Vec3.scale(&Vec3.scale(&raw_xyz, focal_length), 1.0 / distance_to_pz);
+        const projected_xy = Vec3.scale(&Vec3.scale(&raw_xyz, render_group.render_camera.focal_length), 1.0 / distance_to_pz);
 
         result = .{
-            .p = Vec2.add(&screen_center, &Vec2.scale(&projected_xy.xy(), meters_to_pixels)),
-            .scale = meters_to_pixels * projected_xy.z(),
+            .p = Vec2.add(&screen_center, &Vec2.scale(&projected_xy.xy(), render_group.meters_to_pixels)),
+            .scale = render_group.meters_to_pixels * projected_xy.z(),
             .valid = true,
         };
     }
@@ -313,9 +349,7 @@ pub fn renderGroupToOutput(
 ) void {
     const screen_dim = vec2(@as(f32, @floatFromInt(output_target.width)), @as(f32, @floatFromInt(output_target.height)));
 
-    // TODO: Remove this
-    const meters_to_pixels = screen_dim.x() / 20.0;
-    const pixels_to_meters = 1.0 / meters_to_pixels;
+    const pixels_to_meters = 1.0 / render_group.meters_to_pixels;
 
     var base: usize = 0;
     while (base < render_group.push_buffer_size) : (base += @sizeOf(RenderGroupEntryHeader)) {
@@ -344,7 +378,7 @@ pub fn renderGroupToOutput(
             },
             .bitmap => {
                 const entry = @as(*align(@alignOf(void)) RenderEntryBitmap, @ptrCast(data));
-                const basis = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_dim, meters_to_pixels);
+                const basis = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_dim);
 
                 if (true) {
                     if (entry.bitmap) |bitmap| {
@@ -380,7 +414,7 @@ pub fn renderGroupToOutput(
             },
             .rectangle => {
                 const entry: *align(@alignOf(void)) RenderEntryRectangle = @ptrCast(data);
-                const basis = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_dim, meters_to_pixels);
+                const basis = getRenderEntityBasisP(render_group, &entry.entity_basis, screen_dim);
                 const dim = entry.dim;
 
                 if (true)
@@ -464,6 +498,8 @@ pub fn renderGroupToOutput(
 pub fn allocateRenderGroup(
     arena: *MemoryArena,
     max_push_buffer_size: usize,
+    resolution_pixels_x: usize,
+    resolution_pixels_y: usize,
 ) *RenderGroup {
     var result: *RenderGroup = game.pushStruct(arena, RenderGroup);
 
@@ -477,7 +513,25 @@ pub fn allocateRenderGroup(
     result.default_basis.p = Vec3.splat(0);
     result.max_push_buffer_size = max_push_buffer_size;
     result.push_buffer_size = 0;
+
+    // NOTE: Horizontal measurement of monitor in meters
+    const monitor_width = 0.635;
+    // NOTE: Length in meters the person is sitting from their monitor
+    result.game_camera.focal_length = 0.6;
+    result.game_camera.distance_above_target = 9.0;
+    result.render_camera = result.game_camera;
+    result.render_camera.distance_above_target = 30.0;
+
     result.global_alpha = 1.0;
+
+    // TODO: Adjust based on buffer size
+    result.meters_to_pixels = @as(f32, @floatFromInt(resolution_pixels_x)) * monitor_width;
+
+    const pixels_to_meters = 1.0 / result.meters_to_pixels;
+    result.monitor_half_dim_in_meters = vec2(
+        0.5 * @as(f32, @floatFromInt(resolution_pixels_x)) * pixels_to_meters,
+        0.5 * @as(f32, @floatFromInt(resolution_pixels_y)) * pixels_to_meters,
+    );
 
     return result;
 }

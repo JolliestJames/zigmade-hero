@@ -94,6 +94,12 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
                 pub inline fn y(v: *const VecN) Scalar {
                     return v.v[1];
                 }
+                pub inline fn u(v: *const VecN) Scalar {
+                    return v.v[0];
+                }
+                pub inline fn v_(v: *const VecN) Scalar {
+                    return v.v[1];
+                }
                 pub inline fn clamp01(v: *const VecN) VecN {
                     var result: VecN = undefined;
 
@@ -126,6 +132,15 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
                 pub inline fn z(v: *const VecN) Scalar {
                     return v.v[2];
                 }
+                pub inline fn u(v: *const VecN) Scalar {
+                    return v.v[0];
+                }
+                pub inline fn v_(v: *const VecN) Scalar {
+                    return v.v[1];
+                }
+                pub inline fn w(v: *const VecN) Scalar {
+                    return v.v[2];
+                }
                 pub inline fn r(v: *const VecN) Scalar {
                     return v.v[0];
                 }
@@ -137,6 +152,12 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
                 }
                 pub inline fn xy(v: *const VecN) Vec2 {
                     return Vec2.init(v.v[0], v.v[1]);
+                }
+                pub inline fn uv(v: *const VecN) Vec2 {
+                    return Vec2.init(v.v[0], v.v[1]);
+                }
+                pub inline fn vw(v: *const VecN) Vec2 {
+                    return Vec2.init(v.v[1], v.v[2]);
                 }
                 pub inline fn clamp01(v: *const VecN) VecN {
                     var result: VecN = undefined;
@@ -191,6 +212,9 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
                 }
                 pub inline fn xyz(v: *const VecN) Vec3 {
                     return Vec3.init(v.x(), v.y(), v.z());
+                }
+                pub inline fn uvw(v: *const VecN) Vec3 {
+                    return Vec3.init(v.u(), v.v(), v.w());
                 }
                 pub inline fn rgb(v: *const VecN) Vec3 {
                     return Vec3.init(v.r(), v.g(), v.b());
@@ -427,6 +451,11 @@ pub fn Rectangle(comptime VecN: type) type {
             return result;
         }
 
+        pub inline fn getDim(rect: *const RectangleN) VecN {
+            const result = VecN.sub(&rect.max, &rect.min);
+            return result;
+        }
+
         pub inline fn getCenter(rect: *const RectangleN) VecN {
             const result = VecN.scale(
                 VecN.add(rect.min, rect.max),
@@ -435,7 +464,7 @@ pub fn Rectangle(comptime VecN: type) type {
             return result;
         }
 
-        pub inline fn rectMinMax(min: *const VecN, max: *const VecN) RectangleN {
+        pub inline fn rectMinMax(min: VecN, max: VecN) RectangleN {
             var result: RectangleN = undefined;
 
             result.min = min;
@@ -444,7 +473,7 @@ pub fn Rectangle(comptime VecN: type) type {
             return result;
         }
 
-        pub inline fn rectMinDim(min: *const VecN, dim: *const VecN) RectangleN {
+        pub inline fn rectMinDim(min: VecN, dim: VecN) RectangleN {
             var result: RectangleN = undefined;
 
             result.min = min;

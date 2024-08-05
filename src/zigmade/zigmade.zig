@@ -898,9 +898,10 @@ fn fillGroundChunk(
     ground_buffer: *GroundBuffer,
     chunk_p: *const WorldPosition,
 ) void {
+    // TODO: How do we want to control ground chunk resolution
     // TODO: Decide what our pushbuffer size is
     const ground_memory = beginTemporaryMemory(&transient_state.arena);
-    const render_group = render.allocateRenderGroup(&transient_state.arena, platform.Megabytes(4));
+    const render_group = render.allocateRenderGroup(&transient_state.arena, platform.Megabytes(4), 2560, 1440);
 
     render.clear(render_group, vec4(1, 1, 0, 1));
 
@@ -1342,7 +1343,7 @@ pub export fn updateAndRender(
 
             var created_z_door = false;
 
-            door_direction = 3;
+            //door_direction = 3;
 
             if (door_direction == 3) {
                 created_z_door = true;
@@ -1629,15 +1630,20 @@ pub export fn updateAndRender(
     const render_memory = beginTemporaryMemory(&transient_state.arena);
     defer endTemporaryMemory(render_memory);
 
-    // TODO: Decide what our pushbuffer size is
-    var render_group = render.allocateRenderGroup(&transient_state.arena, platform.Megabytes(4));
-
     const draw_buffer = &Bitmap{
         .width = buffer.width,
         .height = buffer.height,
         .pitch = buffer.pitch,
         .memory = @ptrCast(buffer.memory),
     };
+
+    // TODO: Decide what our pushbuffer size is
+    var render_group = render.allocateRenderGroup(
+        &transient_state.arena,
+        platform.Megabytes(4),
+        @intCast(draw_buffer.width),
+        @intCast(draw_buffer.height),
+    );
 
     render.clear(render_group, vec4(0.25, 0.25, 0.25, 0));
 
@@ -1646,17 +1652,17 @@ pub export fn updateAndRender(
         0.5 * @as(f32, @floatFromInt(draw_buffer.height)),
     );
 
-    const screen_width_in_meters = @as(f32, @floatFromInt(draw_buffer.width)) * pixels_to_meters;
-    const screen_height_in_meters = @as(f32, @floatFromInt(draw_buffer.height)) * pixels_to_meters;
+    const screen_bounds = render.getCameraRectangleAtTarget(render_group);
 
-    var camera_bounds_in_meters = Rectangle3.centerDim(
-        &Vec3.splat(0),
-        &vec3(screen_width_in_meters, screen_height_in_meters, 0),
+    var camera_bounds_in_meters = Rectangle3.rectMinMax(
+        vec3(screen_bounds.min.x(), screen_bounds.min.y(), 0),
+        vec3(screen_bounds.max.x(), screen_bounds.max.y(), 0),
     );
 
     camera_bounds_in_meters.min.v[2] = -3.0 * game_state.typical_floor_height;
     camera_bounds_in_meters.max.v[2] = 1 * game_state.typical_floor_height;
 
+    // NOTE: Draw the ground
     if (false) {
         for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
             var ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
@@ -1750,7 +1756,6 @@ pub export fn updateAndRender(
                                 0,
                                 game_world.chunk_dim_in_meters.xy(),
                                 vec4(1, 1, 0, 1),
-                                1,
                             );
                     }
                 }
@@ -1774,6 +1779,11 @@ pub export fn updateAndRender(
 
     // NOTE: This is the camera position relative to the origin of this region
     const camera_p = world.subtract(game_world, &game_state.camera_p, &sim_center_p);
+
+    render.pushRectOutline(render_group, Vec3.splat(0), screen_bounds.getDim(), vec4(1, 1, 0, 1));
+    //render.pushRectOutline(render_group, Vec3.splat(0), camera_bounds_in_meters.getDim().xy(), vec4(1, 1, 1, 1));
+    render.pushRectOutline(render_group, Vec3.splat(0), sim_bounds.getDim().xy(), vec4(0, 1, 1, 1));
+    render.pushRectOutline(render_group, Vec3.splat(0), region.bounds.getDim().xy(), vec4(1, 0, 1, 1));
 
     // TODO: Move this out into the zigmade_entity
     for (0..region.entity_count) |index| {
