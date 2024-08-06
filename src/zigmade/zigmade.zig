@@ -273,6 +273,16 @@ fn gameOutputSound(
     }
 }
 
+fn debugLoadBMPDefault(
+    thread: *platform.ThreadContext,
+    readEntireFile: platform.debugPlatformReadEntireFile,
+    file_name: [*:0]const u8,
+) Bitmap {
+    var result = debugLoadBMP(thread, readEntireFile, file_name, 0, 0);
+    result.align_percentage = Vec2.splat(0.5);
+    return result;
+}
+
 fn debugLoadBMP(
     thread: *platform.ThreadContext,
     readEntireFile: platform.debugPlatformReadEntireFile,
@@ -898,19 +908,26 @@ fn fillGroundChunk(
     ground_buffer: *GroundBuffer,
     chunk_p: *const WorldPosition,
 ) void {
-    // TODO: How do we want to control ground chunk resolution
     // TODO: Decide what our pushbuffer size is
     const ground_memory = beginTemporaryMemory(&transient_state.arena);
-    const render_group = render.allocateRenderGroup(&transient_state.arena, platform.Megabytes(4), 2560, 1440);
+
+    // TODO: Need to be able to set an orthographic display mode here
+    var buffer = &ground_buffer.bitmap;
+    buffer.align_percentage = Vec2.splat(0.5);
+    buffer.width_over_height = 1.0;
+    const render_group = render.allocateRenderGroup(&transient_state.arena, platform.Megabytes(4), @intCast(buffer.width), @intCast(buffer.height));
 
     render.clear(render_group, vec4(1, 1, 0, 1));
 
-    const buffer = &ground_buffer.bitmap;
-
     ground_buffer.p = chunk_p.*;
 
-    const width: f32 = @floatFromInt(buffer.width);
-    const height: f32 = @floatFromInt(buffer.height);
+    const game_world = game_state.world.?;
+    const width: f32 = game_world.chunk_dim_in_meters.x();
+    const height: f32 = game_world.chunk_dim_in_meters.y();
+    var half_dim = Vec2.scale(&vec2(width, height), 0.5);
+
+    // TODO: Once we switch to orthographic STOP MULTIPLYING THIS
+    half_dim = Vec2.scale(&half_dim, 2.0);
 
     var chunk_offset_y: i32 = -1;
     while (chunk_offset_y <= 1) : (chunk_offset_y += 1) {
@@ -929,10 +946,7 @@ fn fillGroundChunk(
                     329 * chunk_z),
             );
 
-            const center = vec2(
-                @as(f32, @floatFromInt(chunk_offset_x)) * width,
-                @as(f32, @floatFromInt(chunk_offset_y)) * height,
-            );
+            const center = vec2(@as(f32, @floatFromInt(chunk_offset_x)) * width, @as(f32, @floatFromInt(chunk_offset_y)) * height);
 
             for (0..100) |_| {
                 var stamp: *Bitmap = undefined;
@@ -943,20 +957,10 @@ fn fillGroundChunk(
                     stamp = &game_state.stone[random.choice(&series, game_state.stone.len)];
                 }
 
-                const offset = vec2(
-                    width * random.unilateral(&series),
-                    height * random.unilateral(&series),
-                );
+                const offset = Vec2.hadamard(&half_dim, &vec2(random.bilateral(&series), random.bilateral(&series)));
+                const p = Vec2.add(&center, &offset);
 
-                const bitmap_center = Vec2.scale(
-                    &Vec2.fromInt(stamp.width, stamp.height),
-                    0.5,
-                );
-
-                var p = Vec2.sub(&offset, &bitmap_center);
-                p = Vec2.add(&p, &center);
-
-                render.pushBitmap(render_group, stamp, 1.0, vec3(p.x(), p.y(), 0), Vec4.splat(1));
+                render.pushBitmap(render_group, stamp, 4.0, vec3(p.x(), p.y(), 0), Vec4.splat(1));
             }
         }
     }
@@ -987,20 +991,10 @@ fn fillGroundChunk(
             for (0..50) |_| {
                 const stamp = &game_state.tuft[random.choice(&series, game_state.tuft.len)];
 
-                const offset = vec2(
-                    width * random.unilateral(&series),
-                    height * random.unilateral(&series),
-                );
+                const offset = Vec2.hadamard(&half_dim, &vec2(random.bilateral(&series), random.bilateral(&series)));
+                const p = Vec2.add(&center, &offset);
 
-                const bitmap_center = Vec2.scale(
-                    &Vec2.fromInt(stamp.width, stamp.height),
-                    0.5,
-                );
-
-                var p = Vec2.sub(&offset, &bitmap_center);
-                p = Vec2.add(&p, &center);
-
-                render.pushBitmap(render_group, stamp, 1.0, vec3(p.x(), p.y(), 0), Vec4.splat(1));
+                render.pushBitmap(render_group, stamp, 0.4, vec3(p.x(), p.y(), 0), Vec4.splat(1));
             }
         }
     }
@@ -1277,43 +1271,43 @@ pub export fn updateAndRender(
             0.9 * tile_depth_in_meters,
         );
 
-        game_state.grass[0] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/grass00.bmp", 0, 0);
-        game_state.grass[1] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/grass01.bmp", 0, 0);
+        game_state.grass[0] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/grass00.bmp");
+        game_state.grass[1] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/grass01.bmp");
 
-        game_state.stone[0] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/ground00.bmp", 0, 0);
-        game_state.stone[1] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/ground01.bmp", 0, 0);
-        game_state.stone[2] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/ground02.bmp", 0, 0);
-        game_state.stone[3] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/ground03.bmp", 0, 0);
+        game_state.stone[0] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/ground00.bmp");
+        game_state.stone[1] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/ground01.bmp");
+        game_state.stone[2] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/ground02.bmp");
+        game_state.stone[3] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/ground03.bmp");
 
-        game_state.tuft[0] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft00.bmp", 0, 0);
-        game_state.tuft[1] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft01.bmp", 0, 0);
-        game_state.tuft[2] = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft02.bmp", 0, 0);
+        game_state.tuft[0] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft00.bmp");
+        game_state.tuft[1] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft01.bmp");
+        game_state.tuft[2] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft02.bmp");
 
-        game_state.backdrop = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_background.bmp", 0, 0);
+        game_state.backdrop = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_background.bmp");
         game_state.shadow = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_shadow.bmp", 72, 182);
         game_state.tree = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/tree00.bmp", 40, 80);
-        game_state.stairwell = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/rock02.bmp", 0, 0);
+        game_state.stairwell = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/rock02.bmp");
         game_state.sword = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/rock03.bmp", 29, 10);
 
         var bitmaps = &game_state.hero_bitmaps;
-        bitmaps[0].head = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_head.bmp", 0, 0);
-        bitmaps[0].cape = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_cape.bmp", 0, 0);
-        bitmaps[0].torso = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_torso.bmp", 0, 0);
+        bitmaps[0].head = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_head.bmp");
+        bitmaps[0].cape = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_cape.bmp");
+        bitmaps[0].torso = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_torso.bmp");
         setTopDownAlign(&bitmaps[0], vec2(72, 182));
 
-        bitmaps[1].head = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_head.bmp", 0, 0);
-        bitmaps[1].cape = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_cape.bmp", 0, 0);
-        bitmaps[1].torso = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_torso.bmp", 0, 0);
+        bitmaps[1].head = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_head.bmp");
+        bitmaps[1].cape = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_cape.bmp");
+        bitmaps[1].torso = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_torso.bmp");
         setTopDownAlign(&bitmaps[1], vec2(72, 182));
 
-        bitmaps[2].head = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_head.bmp", 0, 0);
-        bitmaps[2].cape = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_cape.bmp", 0, 0);
-        bitmaps[2].torso = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_torso.bmp", 0, 0);
+        bitmaps[2].head = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_head.bmp");
+        bitmaps[2].cape = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_cape.bmp");
+        bitmaps[2].torso = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_torso.bmp");
         setTopDownAlign(&bitmaps[2], vec2(72, 182));
 
-        bitmaps[3].head = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_head.bmp", 0, 0);
-        bitmaps[3].cape = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_cape.bmp", 0, 0);
-        bitmaps[3].torso = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_torso.bmp", 0, 0);
+        bitmaps[3].head = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_head.bmp");
+        bitmaps[3].cape = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_cape.bmp");
+        bitmaps[3].torso = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_torso.bmp");
         setTopDownAlign(&bitmaps[3], vec2(72, 182));
 
         var series = random.seed(0);
@@ -1394,8 +1388,7 @@ pub export fn updateAndRender(
                     }
 
                     if (should_be_door) {
-                        if ((tile_y % 2) == 1 or (tile_x % 2) == 1)
-                            _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
+                        _ = addWall(game_state, abs_tile_x, abs_tile_y, abs_tile_z);
                     } else if (created_z_door) {
                         if ((@mod(abs_tile_z, 2) == 0 and tile_x == 10 and tile_y == 5) or
                             (@mod(abs_tile_z, 2) != 0 and tile_x == 6 and tile_y == 5))
@@ -1663,57 +1656,62 @@ pub export fn updateAndRender(
     camera_bounds_in_meters.max.v[2] = 1 * game_state.typical_floor_height;
 
     // NOTE: Draw the ground
-    if (false) {
+    if (true) {
+        // NOTE: Rendering
         for (0..transient_state.ground_buffer_count) |ground_buffer_index| {
             var ground_buffer = &transient_state.ground_buffers[ground_buffer_index];
 
             if (world.isValid(&ground_buffer.p)) {
-                var bitmap = &ground_buffer.bitmap;
+                const bitmap = &ground_buffer.bitmap;
                 const delta = world.subtract(game_world, &ground_buffer.p, &game_state.camera_p);
-                bitmap.alignment = Vec2.fromInt(@divFloor(bitmap.width, 2), @divFloor(bitmap.height, 2));
 
-                var basis: *RenderBasis = pushStruct(&transient_state.arena, RenderBasis);
-                render_group.default_basis = basis;
-                basis.p = delta; // Vec3.add(&delta, &vec3(0, 0, game_state.z_offset));
-                render.pushBitmap(render_group, bitmap, 1.0, Vec3.splat(0), Vec4.splat(1));
+                if (delta.z() >= -1.0 and delta.z() < 1.0) {
+                    var basis: *RenderBasis = pushStruct(&transient_state.arena, RenderBasis);
+                    render_group.default_basis = basis;
+                    basis.p = delta;
+
+                    const ground_side_in_meters = game_world.chunk_dim_in_meters.x();
+                    render.pushBitmap(render_group, bitmap, ground_side_in_meters, Vec3.splat(0), Vec4.splat(1));
+
+                    if (true)
+                        render.pushRectOutline(
+                            render_group,
+                            Vec3.splat(0),
+                            Vec2.splat(ground_side_in_meters),
+                            vec4(1, 1, 0, 1),
+                        );
+                }
             }
         }
 
-        const min_chunk_p = world.mapIntoChunkSpace(
-            game_world,
-            game_state.camera_p,
-            Rectangle3.getMinCorner(&camera_bounds_in_meters),
-        );
+        // NOTE: Updating
+        {
+            const min_chunk_p = world.mapIntoChunkSpace(
+                game_world,
+                game_state.camera_p,
+                Rectangle3.getMinCorner(&camera_bounds_in_meters),
+            );
 
-        const max_chunk_p = world.mapIntoChunkSpace(
-            game_world,
-            game_state.camera_p,
-            Rectangle3.getMaxCorner(&camera_bounds_in_meters),
-        );
+            const max_chunk_p = world.mapIntoChunkSpace(
+                game_world,
+                game_state.camera_p,
+                Rectangle3.getMaxCorner(&camera_bounds_in_meters),
+            );
 
-        var chunk_z = min_chunk_p.chunk_z;
-        while (chunk_z <= max_chunk_p.chunk_z) : (chunk_z += 1) {
-            var chunk_y = min_chunk_p.chunk_y;
-            while (chunk_y <= max_chunk_p.chunk_y) : (chunk_y += 1) {
-                var chunk_x = min_chunk_p.chunk_x;
-                while (chunk_x <= max_chunk_p.chunk_x) : (chunk_x += 1) {
-                    //const maybe_chunk = world.getWorldChunk(
-                    //    game_world,
-                    //    chunk_x,
-                    //    chunk_y,
-                    //    chunk_z,
-                    //    null,
-                    //);
-
-                    //if (maybe_chunk) |chunk|
-                    {
+            var chunk_z = min_chunk_p.chunk_z;
+            while (chunk_z <= max_chunk_p.chunk_z) : (chunk_z += 1) {
+                var chunk_y = min_chunk_p.chunk_y;
+                while (chunk_y <= max_chunk_p.chunk_y) : (chunk_y += 1) {
+                    var chunk_x = min_chunk_p.chunk_x;
+                    while (chunk_x <= max_chunk_p.chunk_x) : (chunk_x += 1) {
                         var chunk_center_p = world.centeredChunkPoint(chunk_x, chunk_y, chunk_z);
 
-                        var rel_p = world.subtract(
+                        const rel_p = world.subtract(
                             game_world,
                             &chunk_center_p,
                             &game_state.camera_p,
                         );
+                        _ = rel_p;
 
                         // TODO: This is super inefficient, fix it
                         var furthest_buffer_length_sq: f32 = 0;
@@ -1748,15 +1746,6 @@ pub export fn updateAndRender(
                                 &chunk_center_p,
                             );
                         }
-
-                        if (false)
-                            render.pushRectOutline(
-                                render_group,
-                                rel_p.xy(),
-                                0,
-                                game_world.chunk_dim_in_meters.xy(),
-                                vec4(1, 1, 0, 1),
-                            );
                     }
                 }
             }
@@ -1779,6 +1768,10 @@ pub export fn updateAndRender(
 
     // NOTE: This is the camera position relative to the origin of this region
     const camera_p = world.subtract(game_world, &game_state.camera_p, &sim_center_p);
+
+    var _basis: *RenderBasis = pushStruct(&transient_state.arena, RenderBasis);
+    _basis.p = Vec3.splat(0);
+    render_group.default_basis = _basis;
 
     render.pushRectOutline(render_group, Vec3.splat(0), screen_bounds.getDim(), vec4(1, 1, 0, 1));
     //render.pushRectOutline(render_group, Vec3.splat(0), camera_bounds_in_meters.getDim().xy(), vec4(1, 1, 1, 1));

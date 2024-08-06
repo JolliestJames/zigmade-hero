@@ -520,7 +520,7 @@ pub fn allocateRenderGroup(
     result.game_camera.focal_length = 0.6;
     result.game_camera.distance_above_target = 9.0;
     result.render_camera = result.game_camera;
-    result.render_camera.distance_above_target = 30.0;
+    //result.render_camera.distance_above_target = 50.0;
 
     result.global_alpha = 1.0;
 
