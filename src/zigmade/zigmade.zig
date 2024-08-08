@@ -80,8 +80,16 @@
 
 const std = @import("std");
 const assert = std.debug.assert;
+const print = std.debug.print;
+
 const rotl = std.math.rotl;
+
+const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
+
 const platform = @import("zigmade_platform");
+const rdtsc = platform.rdtsc;
+const internal = platform.internal;
+
 const world = @import("zigmade_world.zig");
 const math = @import("zigmade_math.zig");
 const sim = @import("zigmade_sim_region.zig");
@@ -89,7 +97,6 @@ const ety = @import("zigmade_entity.zig");
 const intrinsics = @import("zigmade_intrinsics.zig");
 const render = @import("zigmade_render.zig");
 const random = @import("zigmade_random.zig");
-const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
 
 const lossyCast = std.math.lossyCast;
 
@@ -921,80 +928,80 @@ fn fillGroundChunk(
 
     ground_buffer.p = chunk_p.*;
 
-    const game_world = game_state.world.?;
-    const width: f32 = game_world.chunk_dim_in_meters.x();
-    const height: f32 = game_world.chunk_dim_in_meters.y();
-    var half_dim = Vec2.scale(&vec2(width, height), 0.5);
+    // NOTE: Push stamps to render group
+    if (false) {
+        const game_world = game_state.world.?;
+        const width: f32 = game_world.chunk_dim_in_meters.x();
+        const height: f32 = game_world.chunk_dim_in_meters.y();
+        var half_dim = Vec2.scale(&vec2(width, height), 0.5);
 
-    // TODO: Once we switch to orthographic STOP MULTIPLYING THIS
-    half_dim = Vec2.scale(&half_dim, 2.0);
+        // TODO: Once we switch to orthographic STOP MULTIPLYING THIS
+        half_dim = Vec2.scale(&half_dim, 2.0);
 
-    var chunk_offset_y: i32 = -1;
-    while (chunk_offset_y <= 1) : (chunk_offset_y += 1) {
-        var chunk_offset_x: i32 = -1;
-        while (chunk_offset_x <= 1) : (chunk_offset_x += 1) {
-            const chunk_x = chunk_p.chunk_x + chunk_offset_x;
-            const chunk_y = chunk_p.chunk_y + chunk_offset_y;
-            const chunk_z = chunk_p.chunk_z;
+        var chunk_offset_y: i32 = -1;
+        while (chunk_offset_y <= 1) : (chunk_offset_y += 1) {
+            var chunk_offset_x: i32 = -1;
+            while (chunk_offset_x <= 1) : (chunk_offset_x += 1) {
+                const chunk_x = chunk_p.chunk_x + chunk_offset_x;
+                const chunk_y = chunk_p.chunk_y + chunk_offset_y;
+                const chunk_z = chunk_p.chunk_z;
 
-            // TODO: Maybe make random number generation more systemic
-            // TODO: Look into wang hashing or some other spatial seed
-            // generation thing
-            var series = random.seed(
-                @abs(139 * chunk_x +
-                    593 * chunk_y +
-                    329 * chunk_z),
-            );
+                // TODO: Maybe make random number generation more systemic
+                // TODO: Look into wang hashing or some other spatial seed
+                // generation thing
+                var series = random.seed(
+                    @abs(139 * chunk_x +
+                        593 * chunk_y +
+                        329 * chunk_z),
+                );
 
-            const center = vec2(@as(f32, @floatFromInt(chunk_offset_x)) * width, @as(f32, @floatFromInt(chunk_offset_y)) * height);
+                const center = vec2(@as(f32, @floatFromInt(chunk_offset_x)) * width, @as(f32, @floatFromInt(chunk_offset_y)) * height);
 
-            for (0..100) |_| {
-                var stamp: *Bitmap = undefined;
+                for (0..100) |_| {
+                    var stamp: *Bitmap = undefined;
 
-                if (random.choice(&series, 2) > 0) {
-                    stamp = &game_state.grass[random.choice(&series, game_state.grass.len)];
-                } else {
-                    stamp = &game_state.stone[random.choice(&series, game_state.stone.len)];
+                    if (random.choice(&series, 2) > 0) {
+                        stamp = &game_state.grass[random.choice(&series, game_state.grass.len)];
+                    } else {
+                        stamp = &game_state.stone[random.choice(&series, game_state.stone.len)];
+                    }
+
+                    const offset = Vec2.hadamard(&half_dim, &vec2(random.bilateral(&series), random.bilateral(&series)));
+                    const p = Vec2.add(&center, &offset);
+
+                    render.pushBitmap(render_group, stamp, 4.0, vec3(p.x(), p.y(), 0), Vec4.splat(1));
                 }
-
-                const offset = Vec2.hadamard(&half_dim, &vec2(random.bilateral(&series), random.bilateral(&series)));
-                const p = Vec2.add(&center, &offset);
-
-                render.pushBitmap(render_group, stamp, 4.0, vec3(p.x(), p.y(), 0), Vec4.splat(1));
             }
         }
-    }
 
-    chunk_offset_y = -1;
+        chunk_offset_y = -1;
 
-    while (chunk_offset_y <= 1) : (chunk_offset_y += 1) {
-        var chunk_offset_x: i32 = -1;
-        while (chunk_offset_x <= 1) : (chunk_offset_x += 1) {
-            const chunk_x = chunk_p.chunk_x + chunk_offset_x;
-            const chunk_y = chunk_p.chunk_y + chunk_offset_y;
-            const chunk_z = chunk_p.chunk_z;
+        while (chunk_offset_y <= 1) : (chunk_offset_y += 1) {
+            var chunk_offset_x: i32 = -1;
+            while (chunk_offset_x <= 1) : (chunk_offset_x += 1) {
+                const chunk_x = chunk_p.chunk_x + chunk_offset_x;
+                const chunk_y = chunk_p.chunk_y + chunk_offset_y;
+                const chunk_z = chunk_p.chunk_z;
 
-            // TODO: Maybe make random number generation more systemic
-            // TODO: Look into wang hashing or some other spatial seed
-            // generation thing
-            var series = random.seed(
-                @abs(139 * chunk_x +
-                    593 * chunk_y +
-                    329 * chunk_z),
-            );
+                // TODO: Maybe make random number generation more systemic
+                // TODO: Look into wang hashing or some other spatial seed
+                // generation thing
+                var series = random.seed(
+                    @abs(139 * chunk_x +
+                        593 * chunk_y +
+                        329 * chunk_z),
+                );
 
-            const center = vec2(
-                @as(f32, @floatFromInt(chunk_offset_x)) * width,
-                @as(f32, @floatFromInt(chunk_offset_y)) * height,
-            );
+                const center = vec2(@as(f32, @floatFromInt(chunk_offset_x)) * width, @as(f32, @floatFromInt(chunk_offset_y)) * height);
 
-            for (0..50) |_| {
-                const stamp = &game_state.tuft[random.choice(&series, game_state.tuft.len)];
+                for (0..50) |_| {
+                    const stamp = &game_state.tuft[random.choice(&series, game_state.tuft.len)];
 
-                const offset = Vec2.hadamard(&half_dim, &vec2(random.bilateral(&series), random.bilateral(&series)));
-                const p = Vec2.add(&center, &offset);
+                    const offset = Vec2.hadamard(&half_dim, &vec2(random.bilateral(&series), random.bilateral(&series)));
+                    const p = Vec2.add(&center, &offset);
 
-                render.pushBitmap(render_group, stamp, 0.4, vec3(p.x(), p.y(), 0), Vec4.splat(1));
+                    render.pushBitmap(render_group, stamp, 0.4, vec3(p.x(), p.y(), 0), Vec4.splat(1));
+                }
             }
         }
     }
@@ -1206,10 +1213,17 @@ fn setTopDownAlign(bitmap: *HeroBitmaps, alignment: Vec2) void {
 // - sound buffer
 pub export fn updateAndRender(
     thread: *platform.ThreadContext,
-    memory: *platform.GameMemory,
+    game_memory: *platform.GameMemory,
     input: *platform.GameInput,
     buffer: *platform.GameOffscreenBuffer,
 ) void {
+    if (INTERNAL) {
+        internal.debug_global_memory = game_memory;
+    }
+
+    platform.beginTimedBlock(.update_and_render);
+    defer platform.endTimedBlock(.update_and_render);
+
     assert(@sizeOf(@TypeOf(input.controllers[0].buttons.map)) ==
         @sizeOf(platform.GameButtonState) * input.controllers[0].buttons.array.len);
 
@@ -1219,10 +1233,10 @@ pub export fn updateAndRender(
     // TODO: Remove this
     const pixels_to_meters = 1.0 / 42.0;
 
-    assert(@sizeOf(GameState) <= memory.permanent_storage_size);
-    var game_state: *GameState = @alignCast(@ptrCast(memory.permanent_storage));
+    assert(@sizeOf(GameState) <= game_memory.permanent_storage_size);
+    var game_state: *GameState = @alignCast(@ptrCast(game_memory.permanent_storage));
 
-    if (!memory.is_initialized) {
+    if (!game_memory.is_initialized) {
         const tiles_per_width = 17;
         const tiles_per_height = 9;
 
@@ -1236,7 +1250,7 @@ pub export fn updateAndRender(
 
         // TODO: Can we just use a Zig allocator?
         // TODO: Let's start partitioning our memory space
-        initializeArena(&game_state.world_arena, memory.permanent_storage_size - @sizeOf(GameState), memory.permanent_storage + @sizeOf(GameState));
+        initializeArena(&game_state.world_arena, game_memory.permanent_storage_size - @sizeOf(GameState), game_memory.permanent_storage + @sizeOf(GameState));
         defer checkArena(&game_state.world_arena);
 
         // NOTE: Reserve entity slot 0 as the null entity
@@ -1271,43 +1285,43 @@ pub export fn updateAndRender(
             0.9 * tile_depth_in_meters,
         );
 
-        game_state.grass[0] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/grass00.bmp");
-        game_state.grass[1] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/grass01.bmp");
+        game_state.grass[0] = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test2/grass00.bmp");
+        game_state.grass[1] = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test2/grass01.bmp");
 
-        game_state.stone[0] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/ground00.bmp");
-        game_state.stone[1] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/ground01.bmp");
-        game_state.stone[2] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/ground02.bmp");
-        game_state.stone[3] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/ground03.bmp");
+        game_state.stone[0] = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test2/ground00.bmp");
+        game_state.stone[1] = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test2/ground01.bmp");
+        game_state.stone[2] = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test2/ground02.bmp");
+        game_state.stone[3] = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test2/ground03.bmp");
 
-        game_state.tuft[0] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft00.bmp");
-        game_state.tuft[1] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft01.bmp");
-        game_state.tuft[2] = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/tuft02.bmp");
+        game_state.tuft[0] = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test2/tuft00.bmp");
+        game_state.tuft[1] = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test2/tuft01.bmp");
+        game_state.tuft[2] = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test2/tuft02.bmp");
 
-        game_state.backdrop = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_background.bmp");
-        game_state.shadow = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_shadow.bmp", 72, 182);
-        game_state.tree = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/tree00.bmp", 40, 80);
-        game_state.stairwell = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test2/rock02.bmp");
-        game_state.sword = debugLoadBMP(thread, memory.debugPlatformReadEntireFile, "data/test2/rock03.bmp", 29, 10);
+        game_state.backdrop = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_background.bmp");
+        game_state.shadow = debugLoadBMP(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_shadow.bmp", 72, 182);
+        game_state.tree = debugLoadBMP(thread, game_memory.debugPlatformReadEntireFile, "data/test2/tree00.bmp", 40, 80);
+        game_state.stairwell = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test2/rock02.bmp");
+        game_state.sword = debugLoadBMP(thread, game_memory.debugPlatformReadEntireFile, "data/test2/rock03.bmp", 29, 10);
 
         var bitmaps = &game_state.hero_bitmaps;
-        bitmaps[0].head = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_head.bmp");
-        bitmaps[0].cape = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_cape.bmp");
-        bitmaps[0].torso = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_right_torso.bmp");
+        bitmaps[0].head = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_right_head.bmp");
+        bitmaps[0].cape = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_right_cape.bmp");
+        bitmaps[0].torso = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_right_torso.bmp");
         setTopDownAlign(&bitmaps[0], vec2(72, 182));
 
-        bitmaps[1].head = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_head.bmp");
-        bitmaps[1].cape = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_cape.bmp");
-        bitmaps[1].torso = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_back_torso.bmp");
+        bitmaps[1].head = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_back_head.bmp");
+        bitmaps[1].cape = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_back_cape.bmp");
+        bitmaps[1].torso = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_back_torso.bmp");
         setTopDownAlign(&bitmaps[1], vec2(72, 182));
 
-        bitmaps[2].head = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_head.bmp");
-        bitmaps[2].cape = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_cape.bmp");
-        bitmaps[2].torso = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_left_torso.bmp");
+        bitmaps[2].head = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_left_head.bmp");
+        bitmaps[2].cape = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_left_cape.bmp");
+        bitmaps[2].torso = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_left_torso.bmp");
         setTopDownAlign(&bitmaps[2], vec2(72, 182));
 
-        bitmaps[3].head = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_head.bmp");
-        bitmaps[3].cape = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_cape.bmp");
-        bitmaps[3].torso = debugLoadBMPDefault(thread, memory.debugPlatformReadEntireFile, "data/test/test_hero_front_torso.bmp");
+        bitmaps[3].head = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_front_head.bmp");
+        bitmaps[3].cape = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_front_cape.bmp");
+        bitmaps[3].torso = debugLoadBMPDefault(thread, game_memory.debugPlatformReadEntireFile, "data/test/test_hero_front_torso.bmp");
         setTopDownAlign(&bitmaps[3], vec2(72, 182));
 
         var series = random.seed(0);
@@ -1464,15 +1478,15 @@ pub export fn updateAndRender(
             }
         }
 
-        memory.is_initialized = true;
+        game_memory.is_initialized = true;
     }
 
     // NOTE: Transient initialization
-    assert(@sizeOf(TransientState) <= memory.transient_storage_size);
-    var transient_state: *TransientState = @alignCast(@ptrCast(memory.transient_storage));
+    assert(@sizeOf(TransientState) <= game_memory.transient_storage_size);
+    var transient_state: *TransientState = @alignCast(@ptrCast(game_memory.transient_storage));
 
     if (!transient_state.is_initialized) {
-        initializeArena(&transient_state.arena, memory.transient_storage_size - @sizeOf(TransientState), memory.transient_storage + @sizeOf(TransientState));
+        initializeArena(&transient_state.arena, game_memory.transient_storage_size - @sizeOf(TransientState), game_memory.transient_storage + @sizeOf(TransientState));
         defer checkArena(&transient_state.arena);
 
         // TODO: Pick a real number here
@@ -1640,11 +1654,7 @@ pub export fn updateAndRender(
 
     render.clear(render_group, vec4(0.25, 0.25, 0.25, 0));
 
-    const screen_center = vec2(
-        0.5 * @as(f32, @floatFromInt(draw_buffer.width)),
-        0.5 * @as(f32, @floatFromInt(draw_buffer.height)),
-    );
-
+    const screen_center = vec2(0.5 * @as(f32, @floatFromInt(draw_buffer.width)), 0.5 * @as(f32, @floatFromInt(draw_buffer.height)));
     const screen_bounds = render.getCameraRectangleAtTarget(render_group);
 
     var camera_bounds_in_meters = Rectangle3.rectMinMax(
@@ -2106,14 +2116,10 @@ pub export fn updateAndRender(
             ));
         }
 
-        if (false)
-            render.saturation(render_group, 0.5 + 0.5 * @sin(10 * game_state.time));
+        if (false) render.saturation(render_group, 0.5 + 0.5 * @sin(10 * game_state.time));
     }
 
-    render.renderGroupToOutput(
-        render_group,
-        draw_buffer,
-    );
+    render.renderGroupToOutput(render_group, draw_buffer);
 }
 
 // NOTE: At the moment, this must be a very fast function

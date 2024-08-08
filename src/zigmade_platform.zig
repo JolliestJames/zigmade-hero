@@ -1,6 +1,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const INTERNAL = @import("builtin").mode == std.builtin.Mode.Debug;
+
 pub inline fn Kilobytes(comptime value: comptime_int) comptime_int {
     return (1024 * value);
 }
@@ -126,6 +128,50 @@ const debugPlatformWriteEntireFile = *const fn (
     ?*anyopaque,
 ) bool;
 
+pub inline fn rdtsc() u64 {
+    var low: u32 = undefined;
+    var high: u32 = undefined;
+
+    asm ("rdtsc"
+        : [low] "={eax}" (low),
+          [high] "={edx}" (high),
+    );
+
+    return (@as(u64, @intCast((high))) << 32) | @as(u64, @intCast(low));
+}
+
+pub const internal = struct {
+    pub var debug_global_memory: *GameMemory = undefined;
+
+    pub const DebugCycleTimerType = enum(u32) {
+        update_and_render,
+        render_group_to_output,
+        draw_rectangle_slowly,
+        test_pixel,
+        fill_pixel,
+    };
+
+    pub const DebugCycleTimer = struct {
+        cycle_count: u64 = 0,
+        hit_count: u64 = 0,
+    };
+
+    pub inline fn beginTimedBlock(id: DebugCycleTimerType) void {
+        if (debug_global_memory.counters) |*counters| {
+            counters[@intFromEnum(id)].cycle_count = rdtsc();
+        }
+    }
+
+    pub inline fn endTimedBlock(id: DebugCycleTimerType) void {
+        if (debug_global_memory.counters) |*counters| {
+            counters[@intFromEnum(id)].cycle_count += (rdtsc() - counters[@intFromEnum(id)].cycle_count);
+            counters[@intFromEnum(id)].hit_count += 1;
+        }
+    }
+};
+
+pub const debug_cycle_timer_count = @typeInfo(internal.DebugCycleTimerType).Enum.fields.len;
+
 pub const GameMemory = struct {
     is_initialized: bool = false,
     permanent_storage_size: u32 = 0,
@@ -136,7 +182,12 @@ pub const GameMemory = struct {
     debugPlatformReadEntireFile: debugPlatformReadEntireFile,
     debugPlatformFreeFileMemory: debugPlatformFreeFileMemory,
     debugPlatformWriteEntireFile: debugPlatformWriteEntireFile,
+    counters: ?[debug_cycle_timer_count]internal.DebugCycleTimer =
+        if (INTERNAL) [_]internal.DebugCycleTimer{.{}} ** debug_cycle_timer_count else null,
 };
+
+pub const beginTimedBlock = internal.beginTimedBlock;
+pub const endTimedBlock = internal.endTimedBlock;
 
 pub const updateAndRender = *const fn (
     *ThreadContext,

@@ -18,7 +18,10 @@
 
 const std = @import("std");
 const assert = std.debug.assert;
+const print = std.debug.print;
+
 const platform = @import("zigmade_platform");
+const rdtsc = platform.rdtsc;
 
 const DWORD = std.os.windows.DWORD;
 const WINAPI = std.os.windows.WINAPI;
@@ -437,7 +440,7 @@ fn win32InitDirectSound(
                             primary_buffer,
                             &wave_format,
                         ))) {
-                            std.debug.print("Primary buffer format set.\n", .{});
+                            print("Primary buffer format set.\n", .{});
                         } else {
                             // TODO: diagnostic
                         }
@@ -462,7 +465,7 @@ fn win32InitDirectSound(
                     null,
                 ))) {
                     global_secondary_buffer = maybe_secondary_buffer.?;
-                    std.debug.print("Secondary buffer format created.\n", .{});
+                    print("Secondary buffer format created.\n", .{});
                 } else {
                     // TODO: diagnostic
                 }
@@ -960,18 +963,6 @@ fn win32ProcessPendingMessages(
     }
 }
 
-inline fn rdtsc() u64 {
-    var low: u32 = undefined;
-    var high: u32 = undefined;
-
-    asm ("rdtsc"
-        : [low] "={eax}" (low),
-          [high] "={edx}" (high),
-    );
-
-    return (@as(u64, @intCast((high))) << 32) | @as(u64, @intCast(low));
-}
-
 inline fn win32GetWallClock() win32.LARGE_INTEGER {
     var result: win32.LARGE_INTEGER = undefined;
     _ = win32.QueryPerformanceCounter(&result);
@@ -984,6 +975,25 @@ inline fn win32GetSecondsElapsed(
 ) f32 {
     return (@as(f32, @floatFromInt(end.QuadPart - start.QuadPart)) /
         @as(f32, @floatFromInt(global_perf_count_frequency)));
+}
+
+fn handleDebugCycleCounters(game_memory: *platform.GameMemory) void {
+    if (game_memory.counters) |*counters| {
+        print("DEBUG CYCLE COUNTS:\n", .{});
+
+        for (counters, 0..) |*counter, i| {
+            if (counter.hit_count > 0) {
+                print("  {}: {} cy, {} h, {}cy/h\n", .{
+                    i,
+                    counter.cycle_count,
+                    counter.hit_count,
+                    counter.cycle_count / counter.hit_count,
+                });
+                counter.hit_count = 0;
+                counter.cycle_count = 0;
+            }
+        }
+    }
 }
 
 // TODO: Move debug sync display code into platform API once we
@@ -1798,12 +1808,8 @@ pub export fn wWinMain(
                         }
 
                         if (game.updateAndRender) |updateAndRender| {
-                            updateAndRender(
-                                &thread,
-                                &game_memory,
-                                new_input,
-                                &offscreen_buffer,
-                            );
+                            updateAndRender(&thread, &game_memory, new_input, &offscreen_buffer);
+                            handleDebugCycleCounters(&game_memory);
                         }
 
                         const audio_wall_clock = win32GetWallClock();
@@ -1943,7 +1949,7 @@ pub export fn wWinMain(
                                     @as(f32, @floatFromInt(sound_output.samples_per_second));
 
                                 if (DEBUG_SYNC_DISPLAY) {
-                                    std.debug.print(
+                                    print(
                                         "BTL: {}, TC {}, BTW: {} - PC: {}, WC: {}, DELTA: {}, ({d:1.6})s\n",
                                         .{
                                             byte_to_lock,
@@ -2084,7 +2090,7 @@ pub export fn wWinMain(
                             );
                             win32.OutputDebugStringA(@ptrCast(&fps_buffer));
 
-                            std.debug.print("{d:6.2}ms/f, {d:6.2}f/s, {d:6.2}mc/f\n", .{
+                            print("{d:6.2}ms/f, {d:6.2}f/s, {d:6.2}mc/f\n", .{
                                 ms_per_frame,
                                 fps,
                                 mega_cycles_per_frame,

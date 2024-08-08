@@ -347,6 +347,9 @@ pub fn renderGroupToOutput(
     render_group: *RenderGroup,
     output_target: *const Bitmap,
 ) void {
+    platform.beginTimedBlock(.render_group_to_output);
+    defer platform.endTimedBlock(.render_group_to_output);
+
     const screen_dim = vec2(@as(f32, @floatFromInt(output_target.width)), @as(f32, @floatFromInt(output_target.height)));
 
     const pixels_to_meters = 1.0 / render_group.meters_to_pixels;
@@ -777,6 +780,8 @@ pub fn drawRectangleSlowly(
     maybe_bottom: ?*EnvironmentMap,
     pixels_to_meters: f32,
 ) void {
+    platform.beginTimedBlock(.draw_rectangle_slowly);
+    defer platform.endTimedBlock(.draw_rectangle_slowly);
     //@setFloatMode(.Optimized);
 
     // NOTE: Premultiply color up front
@@ -857,6 +862,10 @@ pub fn drawRectangleSlowly(
         var pixel: [*]u32 = @alignCast(@ptrCast(row));
 
         for (@intCast(x_min)..@intCast(x_max)) |x| {
+            platform.beginTimedBlock(.test_pixel);
+            defer platform.endTimedBlock(.test_pixel);
+
+            // NOTE: Test and fill pixels
             if (true) {
                 const pixel_p = Vec2.fromInt(x, y);
                 const d = Vec2.sub(&pixel_p, &origin);
@@ -864,17 +873,14 @@ pub fn drawRectangleSlowly(
                 // TODO: Perp inner
                 // TODO: Simpler origin
                 const edge_0: f32 = Vec2.inner(&d, &Vec2.negate(&Vec2.perp(&x_axis)));
-                const edge_1: f32 = Vec2.inner(
-                    &Vec2.sub(&d, &x_axis),
-                    &Vec2.negate(&Vec2.perp(&y_axis)),
-                );
-                const edge_2: f32 = Vec2.inner(
-                    &Vec2.sub(&Vec2.sub(&d, &x_axis), &y_axis),
-                    &Vec2.perp(&x_axis),
-                );
+                const edge_1: f32 = Vec2.inner(&Vec2.sub(&d, &x_axis), &Vec2.negate(&Vec2.perp(&y_axis)));
+                const edge_2: f32 = Vec2.inner(&Vec2.sub(&Vec2.sub(&d, &x_axis), &y_axis), &Vec2.perp(&x_axis));
                 const edge_3: f32 = Vec2.inner(&Vec2.sub(&d, &y_axis), &Vec2.perp(&y_axis));
 
                 if (edge_0 < 0 and edge_1 < 0 and edge_2 < 0 and edge_3 < 0) {
+                    platform.beginTimedBlock(.fill_pixel);
+                    defer platform.endTimedBlock(.fill_pixel);
+
                     var screen_space_uv: Vec2 = undefined;
                     var z_diff: f32 = undefined;
 
@@ -919,96 +925,99 @@ pub fn drawRectangleSlowly(
                     const texel_sample = bilinearSample(texture, ix, iy);
                     var texel = SRGBBilinearBlend(texel_sample, fx, fy);
 
-                    if (maybe_normal_map) |normal_map| {
-                        const normal_sample = bilinearSample(normal_map, ix, iy);
+                    // NOTE: Normal map compositing
+                    if (false) {
+                        if (maybe_normal_map) |normal_map| {
+                            const normal_sample = bilinearSample(normal_map, ix, iy);
 
-                        var normal_a = unpack4x8(normal_sample.a);
-                        var normal_b = unpack4x8(normal_sample.b);
-                        var normal_c = unpack4x8(normal_sample.c);
-                        var normal_d = unpack4x8(normal_sample.d);
+                            var normal_a = unpack4x8(normal_sample.a);
+                            var normal_b = unpack4x8(normal_sample.b);
+                            var normal_c = unpack4x8(normal_sample.c);
+                            var normal_d = unpack4x8(normal_sample.d);
 
-                        var normal = Vec4.lerp(
-                            &Vec4.lerp(&normal_a, fx, &normal_b),
-                            fy,
-                            &Vec4.lerp(&normal_c, fx, &normal_d),
-                        );
-
-                        normal = unscaleAndBiasNormal(normal);
-                        // TODO: Do we really need to do this?
-
-                        // TODO: Rotate normals based on x/y axis
-                        normal = normal.setXY(
-                            Vec2.add(
-                                &Vec2.scale(&nx_axis, normal.x()),
-                                &Vec2.scale(&ny_axis, normal.y()),
-                            ),
-                        );
-                        normal.v[2] *= nz_scale;
-                        normal = normal.setXYZ(Vec3.normalize(&normal.xyz()));
-
-                        // NOTE: The eye vector is always assumed to be [0, 0, 1]
-                        // This is just the simplified version of -e + 2e^T N N
-                        var bounce_direction = Vec3.scale(&normal.xyz(), 2.0 * normal.z());
-                        bounce_direction.v[2] -= 1.0;
-
-                        // TODO: Eventually we need to support two mappings, one for
-                        // top-down view (which we don't do now) and one for sideways, which
-                        // is what's happening here
-                        bounce_direction.v[2] = -bounce_direction.z();
-
-                        var maybe_far_map: ?*EnvironmentMap = null;
-                        const pz = origin_z + z_diff;
-                        //var map_z: f32 = 2.0;
-                        const t_env_map = bounce_direction.y();
-                        var t_far_map: f32 = 0;
-
-                        if (t_env_map < -0.5) {
-                            // TODO: This path seems particularly broken
-                            maybe_far_map = maybe_bottom;
-                            t_far_map = -1.0 - 2.0 * t_env_map;
-                        } else if (t_env_map > 0.5) {
-                            maybe_far_map = maybe_top;
-                            t_far_map = 2.0 * (t_env_map - 0.5);
-                        }
-
-                        // TODO: How do we sample from the middle map?
-                        _ = maybe_middle;
-                        var light_color = Vec3.splat(0);
-
-                        t_far_map *= t_far_map;
-                        t_far_map *= t_far_map;
-
-                        if (maybe_far_map) |far_map| {
-                            const distance_from_map_in_z = far_map.pz - pz;
-
-                            var far_map_color = sampleEnvironmentMap(
-                                screen_space_uv,
-                                bounce_direction,
-                                normal.w(),
-                                maybe_far_map,
-                                distance_from_map_in_z,
+                            var normal = Vec4.lerp(
+                                &Vec4.lerp(&normal_a, fx, &normal_b),
+                                fy,
+                                &Vec4.lerp(&normal_c, fx, &normal_d),
                             );
 
-                            light_color = Vec3.lerp(&light_color, t_far_map, &far_map_color);
-                        }
+                            normal = unscaleAndBiasNormal(normal);
+                            // TODO: Do we really need to do this?
 
-                        // TODO: Actually do a lighting model computation here
+                            // TODO: Rotate normals based on x/y axis
+                            normal = normal.setXY(
+                                Vec2.add(
+                                    &Vec2.scale(&nx_axis, normal.x()),
+                                    &Vec2.scale(&ny_axis, normal.y()),
+                                ),
+                            );
+                            normal.v[2] *= nz_scale;
+                            normal = normal.setXYZ(Vec3.normalize(&normal.xyz()));
 
-                        texel = texel.setRGB(Vec3.add(
-                            &texel.rgb(),
-                            &Vec3.scale(&light_color, texel.a()),
-                        ));
+                            // NOTE: The eye vector is always assumed to be [0, 0, 1]
+                            // This is just the simplified version of -e + 2e^T N N
+                            var bounce_direction = Vec3.scale(&normal.xyz(), 2.0 * normal.z());
+                            bounce_direction.v[2] -= 1.0;
 
-                        // NOTE: Draws the bounce direction
-                        if (false) {
+                            // TODO: Eventually we need to support two mappings, one for
+                            // top-down view (which we don't do now) and one for sideways, which
+                            // is what's happening here
+                            bounce_direction.v[2] = -bounce_direction.z();
+
+                            var maybe_far_map: ?*EnvironmentMap = null;
+                            const pz = origin_z + z_diff;
+                            //var map_z: f32 = 2.0;
+                            const t_env_map = bounce_direction.y();
+                            var t_far_map: f32 = 0;
+
+                            if (t_env_map < -0.5) {
+                                // TODO: This path seems particularly broken
+                                maybe_far_map = maybe_bottom;
+                                t_far_map = -1.0 - 2.0 * t_env_map;
+                            } else if (t_env_map > 0.5) {
+                                maybe_far_map = maybe_top;
+                                t_far_map = 2.0 * (t_env_map - 0.5);
+                            }
+
+                            // TODO: How do we sample from the middle map?
+                            _ = maybe_middle;
+                            var light_color = Vec3.splat(0);
+
+                            t_far_map *= t_far_map;
+                            t_far_map *= t_far_map;
+
+                            if (maybe_far_map) |far_map| {
+                                const distance_from_map_in_z = far_map.pz - pz;
+
+                                var far_map_color = sampleEnvironmentMap(
+                                    screen_space_uv,
+                                    bounce_direction,
+                                    normal.w(),
+                                    maybe_far_map,
+                                    distance_from_map_in_z,
+                                );
+
+                                light_color = Vec3.lerp(&light_color, t_far_map, &far_map_color);
+                            }
+
+                            // TODO: Actually do a lighting model computation here
+
                             texel = texel.setRGB(Vec3.add(
-                                &Vec3.splat(0.5),
-                                &Vec3.scale(&bounce_direction, 0.5),
-                            ));
-                            texel = texel.setRGB(Vec3.scale(
                                 &texel.rgb(),
-                                texel.a(),
+                                &Vec3.scale(&light_color, texel.a()),
                             ));
+
+                            // NOTE: Draws the bounce direction
+                            if (false) {
+                                texel = texel.setRGB(Vec3.add(
+                                    &Vec3.splat(0.5),
+                                    &Vec3.scale(&bounce_direction, 0.5),
+                                ));
+                                texel = texel.setRGB(Vec3.scale(
+                                    &texel.rgb(),
+                                    texel.a(),
+                                ));
+                            }
                         }
                     }
 
