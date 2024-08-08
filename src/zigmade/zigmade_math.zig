@@ -353,10 +353,7 @@ pub fn Vec(comptime n_value: usize, comptime Scalar: type) type {
         pub inline fn lerp(a: *const VecN, t: f32, b: *const VecN) VecN {
             var result: VecN = undefined;
 
-            result = VecN.add(
-                &VecN.scale(a, 1.0 - t),
-                &VecN.scale(b, t),
-            );
+            result = VecN.add(&VecN.scale(a, 1.0 - t), &VecN.scale(b, t));
 
             return result;
         }

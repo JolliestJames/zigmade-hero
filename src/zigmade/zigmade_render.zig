@@ -395,17 +395,13 @@ pub fn renderGroupToOutput(
                             if (false) {
                                 drawBitmap(output_target, bitmap, basis.p.x(), basis.p.y(), entry.color.v[3]);
                             } else {
-                                drawRectangleSlowly(
+                                drawRectangleHopefullyQuickly(
                                     output_target,
                                     basis.p,
                                     Vec2.scale(&vec2(entry.size.v[0], 0), basis.scale),
                                     Vec2.scale(&vec2(0, entry.size.v[1]), basis.scale),
                                     entry.color,
                                     bitmap,
-                                    null,
-                                    null,
-                                    null,
-                                    null,
                                     pixels_to_meters,
                                 );
                             }
@@ -1048,6 +1044,260 @@ pub fn drawRectangleSlowly(
                         (lossyCast(u32, blended_255.r() + 0.5) << 16) |
                         (lossyCast(u32, blended_255.g() + 0.5) << 8) |
                         (lossyCast(u32, blended_255.b() + 0.5) << 0);
+                }
+            } else {
+                pixel[0] = color32;
+            }
+
+            pixel += 1;
+        }
+
+        row += @as(u32, @intCast(buffer.pitch));
+    }
+}
+
+pub fn drawRectangleHopefullyQuickly(
+    buffer: *const Bitmap,
+    origin: Vec2,
+    x_axis: Vec2,
+    y_axis: Vec2,
+    _color: Vec4,
+    texture: *Bitmap,
+    _: f32,
+) void {
+    platform.beginTimedBlock(.draw_rectangle_hopefully_quickly);
+    defer platform.endTimedBlock(.draw_rectangle_hopefully_quickly);
+    //@setFloatMode(.Optimized);
+
+    // NOTE: Premultiply color up front
+    const color = _color.premultipliedAlpha(_color.a());
+
+    //const x_axis_len = x_axis.length();
+    //const y_axis_len = y_axis.length();
+    //const nx_axis = Vec2.scale(&x_axis, y_axis_len / x_axis_len);
+    //const ny_axis = Vec2.scale(&y_axis, x_axis_len / y_axis_len);
+
+    // NOTE: nz_scale could be a parameter if we want to have
+    // control over the amount of scaling in the z direction
+    // that the normals appear to have
+    //const nz_scale = 0.5 * (x_axis_len + y_axis_len);
+
+    const inv_x_axis_length_sq = 1 / Vec2.lengthSquared(&x_axis);
+    const inv_y_axis_length_sq = 1 / Vec2.lengthSquared(&y_axis);
+
+    const color32: u32 =
+        (@as(u32, (@intFromFloat(@round(color.a() * 255.0)))) << 24) |
+        (@as(u32, (@intFromFloat(@round(color.r() * 255.0)))) << 16) |
+        (@as(u32, (@intFromFloat(@round(color.g() * 255.0)))) << 8) |
+        (@as(u32, (@intFromFloat(@round(color.b() * 255.0)))) << 0);
+
+    const width_max = buffer.width - 1;
+    const height_max = buffer.height - 1;
+
+    //const inv_width_max = 1.0 / @as(f32, @floatFromInt(width_max));
+    //const inv_height_max = 1.0 / @as(f32, @floatFromInt(height_max));
+
+    // TODO: This will need to be specified separately
+    //const origin_z = 0.0;
+    //const origin_y = Vec2.add(
+    //    &Vec2.add(
+    //        &origin,
+    //        &Vec2.scale(&x_axis, 0.5),
+    //    ),
+    //    &Vec2.scale(&y_axis, 0.5),
+    //).y();
+    //const fixed_cast_y = inv_height_max * origin_y;
+
+    var x_min: i32 = width_max;
+    var x_max: i32 = 0;
+    var y_min: i32 = height_max;
+    var y_max: i32 = 0;
+
+    const p: [4]Vec2 = .{
+        origin,
+        Vec2.add(&origin, &x_axis),
+        Vec2.add(&origin, &Vec2.add(&x_axis, &y_axis)),
+        Vec2.add(&origin, &y_axis),
+    };
+
+    for (0..p.len) |p_index| {
+        const test_p = p[p_index];
+        const floor_x: i32 = @intFromFloat(@floor(test_p.x()));
+        const ceil_x: i32 = @intFromFloat(@ceil(test_p.x()));
+        const floor_y: i32 = @intFromFloat(@floor(test_p.y()));
+        const ceil_y: i32 = @intFromFloat(@ceil(test_p.y()));
+
+        if (x_min > floor_x) x_min = floor_x;
+        if (y_min > floor_y) y_min = floor_y;
+        if (x_max < ceil_x) x_max = ceil_x;
+        if (y_max < ceil_y) y_max = ceil_y;
+    }
+
+    if (x_min < 0) x_min = 0;
+    if (y_min < 0) y_min = 0;
+    if (x_max > width_max) x_max = width_max;
+    if (y_max > height_max) y_max = height_max;
+
+    const nx_axis = Vec2.scale(&x_axis, inv_x_axis_length_sq);
+    const ny_axis = Vec2.scale(&y_axis, inv_y_axis_length_sq);
+
+    const inv_255 = 1.0 / 255.0;
+    const one_255 = 255.0;
+
+    var row: [*]u8 = @as([*]u8, @alignCast(@ptrCast(buffer.memory))) +
+        (@as(u32, @intCast(x_min)) *
+        @as(u32, @intCast(platform.BITMAP_BYTES_PER_PIXEL))) +
+        @as(u32, @bitCast(y_min *% buffer.pitch));
+
+    for (@intCast(y_min)..@intCast(y_max)) |y| {
+        var pixel: [*]u32 = @alignCast(@ptrCast(row));
+
+        for (@intCast(x_min)..@intCast(x_max)) |x| {
+            platform.beginTimedBlock(.test_pixel);
+            defer platform.endTimedBlock(.test_pixel);
+
+            // NOTE: Test and fill pixels
+            if (true) {
+                const pixel_p = Vec2.fromInt(x, y);
+                const d = Vec2.sub(&pixel_p, &origin);
+
+                const u = Vec2.inner(&d, &nx_axis);
+                const v = Vec2.inner(&d, &ny_axis);
+
+                if (u >= 0 and u <= 1 and v >= 0 and v <= 1) {
+                    platform.beginTimedBlock(.fill_pixel);
+                    defer platform.endTimedBlock(.fill_pixel);
+
+                    // TODO: Formalize texture boundaries
+                    const tx = u * @as(f32, @floatFromInt(texture.width - 2));
+                    const ty = v * @as(f32, @floatFromInt(texture.height - 2));
+
+                    const ix: i32 = @intFromFloat(tx);
+                    const iy: i32 = @intFromFloat(ty);
+
+                    const fx = tx - @as(f32, @floatFromInt(ix));
+                    const fy = ty - @as(f32, @floatFromInt(iy));
+
+                    assert(ix >= 0 and ix < texture.width);
+                    assert(iy >= 0 and iy < texture.height);
+
+                    const offset = iy * texture.pitch + ix * @sizeOf(u32);
+
+                    const texel_ptr = if (offset > 0)
+                        @as([*]u8, @ptrCast(texture.memory)) + @as(usize, @intCast(offset))
+                    else
+                        @as([*]u8, @ptrCast(texture.memory)) - @as(usize, @intCast(-offset));
+
+                    const c_offset = if (texture.pitch > 0)
+                        texel_ptr + @as(usize, @intCast(texture.pitch))
+                    else
+                        texel_ptr - @as(usize, @intCast(-texture.pitch));
+
+                    const b_offset = texel_ptr + @sizeOf(u32);
+                    const d_offset = c_offset + @sizeOf(u32);
+
+                    const sample_a = @as(*align(@alignOf(u8)) u32, @ptrCast(texel_ptr)).*;
+                    const sample_b = @as(*align(@alignOf(u8)) u32, @ptrCast(b_offset)).*;
+                    const sample_c = @as(*align(@alignOf(u8)) u32, @ptrCast(c_offset)).*;
+                    const sample_d = @as(*align(@alignOf(u8)) u32, @ptrCast(d_offset)).*;
+
+                    // NOTE: Unpack texel samples
+                    var texel_A_r: f32 = @floatFromInt((sample_a >> 16) & 0xFF);
+                    var texel_A_g: f32 = @floatFromInt((sample_a >> 8) & 0xFF);
+                    var texel_A_b: f32 = @floatFromInt((sample_a >> 0) & 0xFF);
+                    var texel_A_a: f32 = @floatFromInt((sample_a >> 24) & 0xFF);
+
+                    var texel_B_r: f32 = @floatFromInt((sample_b >> 16) & 0xFF);
+                    var texel_B_g: f32 = @floatFromInt((sample_b >> 8) & 0xFF);
+                    var texel_B_b: f32 = @floatFromInt((sample_b >> 0) & 0xFF);
+                    var texel_B_a: f32 = @floatFromInt((sample_b >> 24) & 0xFF);
+
+                    var texel_C_r: f32 = @floatFromInt((sample_c >> 16) & 0xFF);
+                    var texel_C_g: f32 = @floatFromInt((sample_c >> 8) & 0xFF);
+                    var texel_C_b: f32 = @floatFromInt((sample_c >> 0) & 0xFF);
+                    var texel_C_a: f32 = @floatFromInt((sample_c >> 24) & 0xFF);
+
+                    var texel_D_r: f32 = @floatFromInt((sample_d >> 16) & 0xFF);
+                    var texel_D_g: f32 = @floatFromInt((sample_d >> 8) & 0xFF);
+                    var texel_D_b: f32 = @floatFromInt((sample_d >> 0) & 0xFF);
+                    var texel_D_a: f32 = @floatFromInt((sample_d >> 24) & 0xFF);
+
+                    // NOTE: Convert texture from srgb to "linear" brightness space
+                    texel_A_r = math.square(inv_255 * texel_A_r);
+                    texel_A_g = math.square(inv_255 * texel_A_g);
+                    texel_A_b = math.square(inv_255 * texel_A_b);
+                    texel_A_a = inv_255 * texel_A_a;
+
+                    texel_B_r = math.square(inv_255 * texel_B_r);
+                    texel_B_g = math.square(inv_255 * texel_B_g);
+                    texel_B_b = math.square(inv_255 * texel_B_b);
+                    texel_B_a = inv_255 * texel_B_a;
+
+                    texel_C_r = math.square(inv_255 * texel_C_r);
+                    texel_C_g = math.square(inv_255 * texel_C_g);
+                    texel_C_b = math.square(inv_255 * texel_C_b);
+                    texel_C_a = inv_255 * texel_C_a;
+
+                    texel_D_r = math.square(inv_255 * texel_D_r);
+                    texel_D_g = math.square(inv_255 * texel_D_g);
+                    texel_D_b = math.square(inv_255 * texel_D_b);
+                    texel_D_a = inv_255 * texel_D_a;
+
+                    // NOTE: Bilinear texture blend
+                    const i_fx = 1.0 - fx;
+                    const i_fy = 1.0 - fy;
+
+                    const l0 = i_fy * i_fx;
+                    const l1 = i_fy * fx;
+                    const l2 = fy * i_fx;
+                    const l3 = fy * fx;
+
+                    var texel_r = l0 * texel_A_r + l1 * texel_B_r + l2 * texel_C_r + l3 * texel_D_r;
+                    var texel_g = l0 * texel_A_g + l1 * texel_B_g + l2 * texel_C_g + l3 * texel_D_g;
+                    var texel_b = l0 * texel_A_b + l1 * texel_B_b + l2 * texel_C_b + l3 * texel_D_b;
+                    var texel_a = l0 * texel_A_a + l1 * texel_B_a + l2 * texel_C_a + l3 * texel_D_a;
+
+                    // NOTE: Modulate by incoming color
+                    texel_r = texel_r * color.r();
+                    texel_g = texel_g * color.g();
+                    texel_b = texel_b * color.b();
+                    texel_a = texel_a * color.a();
+
+                    // NOTE: Clamp colors to valid range
+                    texel_r = math.clamp01(texel_r);
+                    texel_g = math.clamp01(texel_g);
+                    texel_b = math.clamp01(texel_b);
+
+                    // NOTE: Load destination
+                    var dest_r: f32 = @floatFromInt((pixel[0] >> 16) & 0xFF);
+                    var dest_g: f32 = @floatFromInt((pixel[0] >> 8) & 0xFF);
+                    var dest_b: f32 = @floatFromInt((pixel[0] >> 0) & 0xFF);
+                    var dest_a: f32 = @floatFromInt((pixel[0] >> 24) & 0xFF);
+
+                    // NOTE: Go from srgb to "linear" brightness space
+                    dest_r = math.square(inv_255 * dest_r);
+                    dest_g = math.square(inv_255 * dest_g);
+                    dest_b = math.square(inv_255 * dest_b);
+                    dest_a = inv_255 * dest_a;
+
+                    // NOTE: Destination blend
+                    const inv_texel_a = 1.0 - texel_a;
+                    var blended_r = inv_texel_a * dest_r + texel_r;
+                    var blended_g = inv_texel_a * dest_g + texel_g;
+                    var blended_b = inv_texel_a * dest_b + texel_b;
+                    var blended_a = inv_texel_a * dest_a + texel_a;
+
+                    // NOTE: Go from "linear" brightness space to srgb
+                    blended_r = one_255 * @sqrt(blended_r);
+                    blended_g = one_255 * @sqrt(blended_g);
+                    blended_b = one_255 * @sqrt(blended_b);
+                    blended_a = one_255 * blended_a;
+
+                    // NOTE: Repack
+                    pixel[0] = (lossyCast(u32, blended_a + 0.5) << 24) |
+                        (lossyCast(u32, blended_r + 0.5) << 16) |
+                        (lossyCast(u32, blended_g + 0.5) << 8) |
+                        (lossyCast(u32, blended_b + 0.5) << 0);
                 }
             } else {
                 pixel[0] = color32;

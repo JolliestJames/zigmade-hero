@@ -149,6 +149,7 @@ pub const internal = struct {
         draw_rectangle_slowly,
         test_pixel,
         fill_pixel,
+        draw_rectangle_hopefully_quickly,
     };
 
     pub const DebugCycleTimer = struct {
